@@ -2,7 +2,16 @@
 
 declare(strict_types=1);
 
-require dirname(__DIR__) . '/vendor/autoload.php';
+$root = dirname(__DIR__);
+
+// Composer packages must be installed before anything else can load.
+// Check this first so the user gets instructions instead of a PHP fatal error.
+if (!is_file($root . '/vendor/autoload.php')) {
+    renderMissingVendor();
+    exit;
+}
+
+require $root . '/vendor/autoload.php';
 
 use App\Support\Config;
 use App\Support\Db;
@@ -10,7 +19,6 @@ use App\Support\MigrationRunner;
 
 session_start();
 
-$root = dirname(__DIR__);
 $step = $_GET['step'] ?? 'requirements';
 $errors = [];
 $notice = null;
@@ -20,9 +28,50 @@ function h(string $s): string
     return htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 }
 
+/**
+ * Probes the real web server: a request for an /api path must reach index.php
+ * (JSON reply). Without mod_rewrite or AllowOverride, Apache answers with its
+ * HTML 404 page instead. Works on any Apache setup, unlike apache_get_modules().
+ */
+function probeRewrite(): array
+{
+    $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/public/install.php'), '/');
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    // /api/auth/me is a real JSON endpoint (401 when logged out). Unknown paths get the SPA HTML instead.
+    $url = $scheme . '://' . $host . $scriptDir . '/api/auth/me';
+
+    if (!function_exists('curl_init')) {
+        return ['ok' => false, 'detail' => 'ตรวจไม่ได้เพราะไม่มี curl'];
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 5,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_HEADER => true,
+    ]);
+    $raw = curl_exec($ch);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($raw === false) {
+        return ['ok' => false, 'detail' => 'เรียก ' . $url . ' ไม่ได้: ' . $err];
+    }
+    $headerEnd = strpos((string) $raw, "\r\n\r\n");
+    $headers = $headerEnd === false ? '' : substr((string) $raw, 0, $headerEnd);
+    $isJson = stripos($headers, 'Content-Type: application/json') !== false;
+    return [
+        'ok' => $isJson,
+        'detail' => $isJson
+            ? 'คำขอ /api ถูกส่งไปที่ index.php แล้ว'
+            : 'คำขอ /api ไม่ถูก rewrite (ได้หน้า HTML) — เปิด mod_rewrite และตั้ง AllowOverride All ให้โฟลเดอร์ htdocs',
+    ];
+}
+
 function checkRequirements(string $root): array
 {
-    $extensions = ['pdo_mysql', 'mbstring', 'json', 'openssl', 'fileinfo', 'session'];
+    $extensions = ['pdo_mysql', 'mbstring', 'json', 'openssl', 'fileinfo', 'session', 'curl'];
     $extChecks = [];
     foreach ($extensions as $ext) {
         $extChecks[] = ['label' => "PHP extension: $ext", 'ok' => extension_loaded($ext)];
@@ -33,6 +82,7 @@ function checkRequirements(string $root): array
         'storage/' => $root . '/storage',
         'storage/logs/' => $root . '/storage/logs',
         'storage/cache/' => $root . '/storage/cache',
+        'storage/uploads/' => $root . '/storage/uploads',
     ];
     $dirChecks = [];
     foreach ($writable as $label => $path) {
@@ -42,10 +92,25 @@ function checkRequirements(string $root): array
         $dirChecks[] = ['label' => "เขียนไฟล์ได้: $label", 'ok' => is_dir($path) && is_writable($path)];
     }
 
+    $packageChecks = [];
+    foreach ([
+        'Composer package: slim/slim' => 'Slim\\Factory\\AppFactory',
+        'Composer package: slim/psr7' => 'Slim\\Psr7\\Factory\\ResponseFactory',
+    ] as $label => $class) {
+        $packageChecks[] = ['label' => $label, 'ok' => class_exists($class)];
+    }
+
+    $rewrite = probeRewrite();
+    $rewriteChecks = [
+        ['label' => 'Apache mod_rewrite / .htaccess (' . $rewrite['detail'] . ')', 'ok' => $rewrite['ok']],
+    ];
+
     $phpOk = version_compare(PHP_VERSION, '8.1.0', '>=');
     $checks = array_merge(
         [['label' => 'PHP >= 8.1 (พบ ' . PHP_VERSION . ')', 'ok' => $phpOk]],
         $extChecks,
+        $packageChecks,
+        $rewriteChecks,
         $dirChecks
     );
 
@@ -384,6 +449,22 @@ if ($step === 'do-repair') {
 
 header('Location: ?step=requirements');
 exit;
+
+function renderMissingVendor(): void
+{
+    renderLayout('ยังไม่ได้ติดตั้ง Composer packages', function () {
+        ?>
+        <div class="card">
+            <h1>ยังไม่ได้ติดตั้งไลบรารี (Composer)</h1>
+            <p>ไม่พบโฟลเดอร์ <b>vendor/</b> ระบบต้องติดตั้งไลบรารีที่ใช้งาน (Slim Framework) ก่อน</p>
+            <p class="muted">เปิด Terminal ที่โฟลเดอร์โปรเจกต์ (rvc.coac) แล้วรันคำสั่งนี้ จากนั้นกลับมาหน้านี้แล้วรีเฟรช</p>
+            <pre style="background:#f8fafc;border:1px solid var(--border);border-radius:9px;padding:12px;overflow:auto;font-size:13.5px">composer install --no-dev --optimize-autoloader</pre>
+            <p class="muted" style="font-size:13px">ถ้ายังไม่มี Composer ให้ดาวน์โหลดได้จาก getcomposer.org แล้วติดตั้ง (หรือใช้ไฟล์ composer.phar ที่มีในโปรเจกต์: <code>php composer.phar install --no-dev --optimize-autoloader</code>)</p>
+            <div class="actions"><a class="btn" href="">ตรวจสอบอีกครั้ง</a></div>
+        </div>
+        <?php
+    });
+}
 
 function renderLayout(string $title, callable $body): void
 {
