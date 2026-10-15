@@ -96,6 +96,52 @@ class ReportService
         return $rows;
     }
 
+    /** Store-owned goods: sales, cost of goods sold and gross profit per product. */
+    public function storeSales(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT p.name AS product, SUM(si.qty) AS qty_sold, SUM(si.qty * si.unit_price) AS total_sales,
+                    SUM(si.cost_amount) AS total_cost,
+                    SUM(si.qty * si.unit_price) - SUM(si.cost_amount) AS gross_profit,
+                    p.qty_stock
+             FROM sale_items si
+             JOIN sales s ON s.id = si.sale_id
+             JOIN products p ON p.id = si.product_id
+             WHERE si.consignor_id IS NULL AND DATE(s.sale_datetime) BETWEEN ? AND ?
+             GROUP BY p.id, p.name, p.qty_stock
+             ORDER BY gross_profit DESC'
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    /** Current stock of store-owned goods valued at cost and at retail price. */
+    public function storeStock(): array
+    {
+        return $this->db->query(
+            'SELECT name AS product, barcode, qty_stock, cost_price, sale_price,
+                    ROUND(qty_stock * cost_price, 2) AS stock_cost_value,
+                    ROUND(qty_stock * sale_price, 2) AS stock_retail_value
+             FROM products WHERE consignor_id IS NULL ORDER BY name ASC'
+        )->fetchAll();
+    }
+
+    /** Purchase lines (stock and supplies) in a period with their cost. */
+    public function purchases(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, pd.doc_no, pd.supplier_name AS supplier,
+                    IF(pi.item_type = 'supply', 'ใช้ในร้าน', 'สินค้าขาย') AS type,
+                    pi.receipt_name AS item, pi.units AS qty, pi.piece_cost AS unit_cost, pi.line_total AS total_cost
+             FROM purchase_items pi
+             JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+             WHERE COALESCE(pd.receipt_date, DATE(pd.created_at)) BETWEEN ? AND ?
+             ORDER BY date ASC, pd.id ASC"
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
     /** Writes a UTF-8(BOM) CSV that Excel opens directly, for the "ส่งออก Excel" buttons. */
     public function toCsv(array $rows, array $headers): string
     {

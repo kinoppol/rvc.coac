@@ -27,6 +27,16 @@ export async function render(container, { navigate }) {
         <div class="val">${count(k.stock_units)} ชิ้น</div>
         <div class="sub">${count(k.stock_items)} รายการ · ผู้ฝาก ${count(k.stock_consignors)} ราย</div>
       </div>
+      <div class="kpi">
+        <div class="lbl">ขายสินค้าของร้านวันนี้</div>
+        <div class="val">฿ ${money(k.store_sales_today)}</div>
+        <div class="sub">${count(k.store_qty_today)} ชิ้น · กำไรขั้นต้น ฿ ${money(k.store_profit_today)}</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">สต๊อกสินค้าของร้าน (ต้นทุน)</div>
+        <div class="val">฿ ${money(k.store_stock_cost)}</div>
+        <div class="sub">${count(k.store_stock_units)} ชิ้น · ${count(k.store_stock_items)} รายการ · ราคาขาย ฿ ${money(k.store_stock_retail)}</div>
+      </div>
     </div>
 
     <div class="two-col">
@@ -39,6 +49,8 @@ export async function render(container, { navigate }) {
         <p class="muted" style="margin:0 0 14px;font-size:12.5px">กดปุ่มใหญ่เพื่อเริ่มงาน</p>
         <div class="shortcuts-grid">
           <button type="button" class="shortcut-btn" data-go="sales">💰 ขายสินค้า</button>
+          <button type="button" class="shortcut-btn" data-go="purchase">🧾 ซื้อสินค้าเข้าร้าน</button>
+          <button type="button" class="shortcut-btn" data-go="inventory">📦 สต๊อกสินค้าของร้าน</button>
           <button type="button" class="shortcut-btn" data-go="receive">📥 รับฝากสินค้าใหม่</button>
           <button type="button" class="shortcut-btn" data-go="ret">📤 คืนสินค้าให้ผู้ฝาก</button>
           <button type="button" class="shortcut-btn" data-go="count">📋 ตรวจนับสต๊อก</button>

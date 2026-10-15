@@ -249,15 +249,20 @@ class PurchaseService
                 if ($match) {
                     $productId = (int) $match['id'];
                     $salePrice = $l['sale_price'] ?? (float) $match['sale_price'];
+                    // Moving weighted-average cost: blend what is on the shelf with this lot.
+                    $before = $this->products->find($productId);
+                    $onHand = max((int) $before['qty_stock'], 0);
+                    $avgCost = $onHand + $l['units'] > 0
+                        ? round(($onHand * (float) $before['cost_price'] + $l['units'] * $l['piece_cost']) / ($onHand + $l['units']), 2)
+                        : $l['piece_cost'];
                     $this->products->addStock($productId, $l['units'], $userId, $ip);
-                    // Latest purchase cost becomes the product cost (used for margin on sale).
                     $old = $this->products->find($productId);
                     $upd = $this->db->prepare(
                         'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?),
                                 pack_barcode = COALESCE(?, pack_barcode), pack_size = COALESCE(?, pack_size), updated_at = NOW()
                          WHERE id = ?'
                     );
-                    $upd->execute([$l['piece_cost'], $salePrice, $pieceBarcode, $packBarcode, $packSize, $productId]);
+                    $upd->execute([$avgCost, $salePrice, $pieceBarcode, $packBarcode, $packSize, $productId]);
                     $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
                     $isNew = false;
                 } else {

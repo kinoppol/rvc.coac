@@ -14,7 +14,7 @@ class ReportsController
 {
     use JsonResponse;
 
-    private const TYPES = ['receive', 'return', 'sales', 'detail', 'fee'];
+    private const TYPES = ['receive', 'return', 'sales', 'detail', 'fee', 'store_sales', 'store_stock', 'purchases'];
 
     public function show(Request $request, Response $response, array $args): Response
     {
@@ -61,6 +61,9 @@ class ReportsController
             'sales' => $service->salesSummaryByConsignor($from, $to),
             'detail' => $consignorId ? $service->saleDetailForConsignor($consignorId, $from, $to) : [],
             'fee' => $service->feeRevenue($from, $to),
+            'store_sales' => $service->storeSales($from, $to),
+            'store_stock' => $service->storeStock(),
+            'purchases' => $service->purchases($from, $to),
         };
     }
 }

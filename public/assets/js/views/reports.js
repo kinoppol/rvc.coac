@@ -7,6 +7,9 @@ const TYPES = [
     { key: 'sales', label: 'สรุปยอดขายของฝากขาย' },
     { key: 'detail', label: 'รายละเอียดการขายรายผู้ฝาก' },
     { key: 'fee', label: 'รายได้ค่าธรรมเนียมของร้าน' },
+    { key: 'store_sales', label: 'ยอดขาย/กำไรสินค้าของร้าน' },
+    { key: 'store_stock', label: 'สต๊อกสินค้าของร้าน' },
+    { key: 'purchases', label: 'รายการซื้อเข้าร้าน' },
 ];
 const RANGES = [
     { key: 'today', label: 'วันนี้' }, { key: '7d', label: '7 วันล่าสุด' },
@@ -75,8 +78,8 @@ export async function render(container, { permissions }) {
 
     function formatCell(key, val) {
         if (val === null || val === undefined) return '';
-        if (/value|fee|revenue|received/.test(key) && !isNaN(val)) return money(val);
-        if (/qty|count/.test(key) && !isNaN(val)) return count(val);
+        if (/value|fee|revenue|received|sales|cost|profit|price/.test(key) && !isNaN(val)) return money(val);
+        if (/qty|count|stock$/.test(key) && !isNaN(val)) return count(val);
         return val;
     }
 

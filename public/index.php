@@ -9,6 +9,7 @@ use App\Controllers\AuditController;
 use App\Controllers\AuthController;
 use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
+use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
 use App\Controllers\PortalController;
 use App\Controllers\PurchaseController;
@@ -114,6 +115,9 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('reports.view'));
     $group->get('/reports/{type}/export', [ReportsController::class, 'export'])
         ->add(new RoleGuard('reports.export'));
+
+    $group->get('/inventory', [InventoryController::class, 'index'])
+        ->add(new RoleGuard('reports.view'));
 
     $group->get('/settings', [SettingsController::class, 'show'])
         ->add(new RoleGuard('settings.view'));

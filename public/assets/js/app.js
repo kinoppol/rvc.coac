@@ -9,7 +9,7 @@ const ROUTE_PERMS = {
     ret: 'return.create', count: 'stockcount.create', consignors: 'consignors.view',
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
-    ai: 'ai.manage', purchase: 'purchase.create', aiusage: 'ai.usage',
+    ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
 };
 
 const state = { user: null, permissions: [] };

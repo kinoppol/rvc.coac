@@ -43,8 +43,23 @@ class DashboardService
         $stockRow = $this->db->query(
             'SELECT COALESCE(SUM(qty_stock),0) AS units, COUNT(*) AS items,
                     COUNT(DISTINCT consignor_id) AS consignors
-             FROM products WHERE qty_stock > 0'
+             FROM products WHERE qty_stock > 0 AND consignor_id IS NOT NULL'
         )->fetch();
+
+        $store = $this->db->query(
+            'SELECT COALESCE(SUM(qty_stock),0) AS units, COUNT(*) AS items,
+                    COALESCE(SUM(qty_stock * cost_price),0) AS cost_value,
+                    COALESCE(SUM(qty_stock * sale_price),0) AS retail_value
+             FROM products WHERE qty_stock > 0 AND consignor_id IS NULL'
+        )->fetch();
+        $storeSales = $this->db->prepare(
+            'SELECT COALESCE(SUM(si.qty * si.unit_price),0) AS sales, COALESCE(SUM(si.cost_amount),0) AS cogs,
+                    COALESCE(SUM(si.qty),0) AS qty
+             FROM sale_items si JOIN sales s ON s.id = si.sale_id
+             WHERE si.consignor_id IS NULL AND DATE(s.sale_datetime) = ?'
+        );
+        $storeSales->execute([$today]);
+        $ss = $storeSales->fetch();
 
         return [
             'sales_today_value' => (float) $sales['value'],
@@ -56,6 +71,13 @@ class DashboardService
             'stock_units' => (int) $stockRow['units'],
             'stock_items' => (int) $stockRow['items'],
             'stock_consignors' => (int) $stockRow['consignors'],
+            'store_sales_today' => (float) $ss['sales'],
+            'store_profit_today' => round((float) $ss['sales'] - (float) $ss['cogs'], 2),
+            'store_qty_today' => (int) $ss['qty'],
+            'store_stock_units' => (int) $store['units'],
+            'store_stock_items' => (int) $store['items'],
+            'store_stock_cost' => round((float) $store['cost_value'], 2),
+            'store_stock_retail' => round((float) $store['retail_value'], 2),
         ];
     }
 
@@ -91,7 +113,7 @@ class DashboardService
         }
 
         $expiring = $this->db->query(
-            "SELECT COUNT(*) c FROM products WHERE qty_stock > 0 AND expiry_date IS NOT NULL
+            "SELECT COUNT(*) c FROM products WHERE qty_stock > 0 AND consignor_id IS NOT NULL AND expiry_date IS NOT NULL
              AND expiry_date <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)"
         )->fetchColumn();
         if ((int) $expiring > 0) {
@@ -116,7 +138,7 @@ class DashboardService
         }
 
         $staleStock = $this->db->query(
-            "SELECT COUNT(*) FROM products WHERE qty_stock > 0 AND created_at <= DATE_SUB(NOW(), INTERVAL 30 DAY)"
+            "SELECT COUNT(*) FROM products WHERE qty_stock > 0 AND consignor_id IS NOT NULL AND created_at <= DATE_SUB(NOW(), INTERVAL 30 DAY)"
         )->fetchColumn();
         if ((int) $staleStock > 0) {
             $alerts[] = [
@@ -125,6 +147,19 @@ class DashboardService
                 'action' => 'ไปที่รายงานสรุป',
                 'target' => 'reports',
                 'level' => 'info',
+            ];
+        }
+
+        $lowStore = $this->db->query(
+            'SELECT COUNT(*) FROM products WHERE consignor_id IS NULL AND qty_stock <= 3 AND qty_sold > 0'
+        )->fetchColumn();
+        if ((int) $lowStore > 0) {
+            $alerts[] = [
+                'title' => 'สินค้าของร้านใกล้หมดสต๊อก ' . $lowStore . ' รายการ',
+                'detail' => 'เหลือไม่เกิน 3 ชิ้น ควรสั่งซื้อเพิ่ม',
+                'action' => 'ไปที่สต๊อกสินค้าของร้าน',
+                'target' => 'inventory',
+                'level' => 'warn',
             ];
         }
 
