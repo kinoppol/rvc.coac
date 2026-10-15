@@ -1,0 +1,20 @@
+name: PHP Deploy Pipeline
+on:
+  push:
+    branches: [ "main" ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🚀 Remote SSH to Execution Commands
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /var/www/web #เปลี่ยน Path ตรงนี้ให้ถูกต้อง
+            git fetch origin
+            git reset --hard origin/main
+            # composer install --no-dev --optimize-autoloader (ถ้ามี)
