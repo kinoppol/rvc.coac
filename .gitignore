@@ -1,0 +1,12 @@
+/vendor/
+/composer.phar
+/config/config.php
+/storage/logs/*
+!/storage/logs/.gitkeep
+/storage/cache/*
+!/storage/cache/.gitkeep
+/storage/installed.lock
+.DS_Store
+Thumbs.db
+/storage/uploads/*
+!/storage/uploads/.gitkeep

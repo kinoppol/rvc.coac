@@ -1,0 +1,8 @@
+RewriteEngine On
+
+# Let real files (css/js/img/install.php) be served directly.
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^ - [L]
+
+# Everything else (the SPA shell and /api/*) goes through the front controller.
+RewriteRule ^ index.php [QSA,L]

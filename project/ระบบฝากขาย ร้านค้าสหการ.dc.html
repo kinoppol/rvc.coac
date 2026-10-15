@@ -1,0 +1,1549 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;padding:0}
+body{background:#f3f5fa;font-family:Sarabun,"Noto Sans Thai",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#1552d1;text-decoration:none}
+a:hover{color:#0e3da1;text-decoration:underline}
+input,select,textarea,button{font-family:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(120,132,158,.4);border-radius:8px}
+@media print{body{background:#fff}}
+</style>
+</helmet>
+
+<div style="display:flex;align-items:stretch;min-height:100vh;background:var(--bg,#f3f5fa);color:var(--text,#111827);font-size:15px;line-height:1.5">
+
+  <aside style="width:252px;flex:none;background:var(--sidebar,#0f2f6b);color:#fff;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:auto">
+    <div style="padding:20px 18px 16px;display:flex;gap:11px;align-items:center;border-bottom:1px solid rgba(255,255,255,.13)">
+      <div style="width:38px;height:38px;flex:none;border-radius:9px;background:#fff;color:#0f2f6b;display:grid;place-items:center;font-weight:700;font-size:15px">สห</div>
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:14.5px;letter-spacing:.1px">ร้านค้าสหการ</div>
+        <div style="font-size:11.5px;color:rgba(255,255,255,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">วอศ.ร้อยเอ็ด · ระบบฝากขาย</div>
+      </div>
+    </div>
+
+    <nav style="padding:14px 10px;display:flex;flex-direction:column;gap:2px">
+      <div style="font-size:10.5px;font-weight:600;letter-spacing:.8px;color:rgba(255,255,255,.45);padding:8px 10px 6px">งานประจำวัน</div>
+      <button type="button" onClick="{{ goDash }}" style="{{ navStyle.dash }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>
+        <span>แดชบอร์ด</span>
+      </button>
+      <button type="button" onClick="{{ goReceive }}" style="{{ navStyle.receive }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path><path d="M2 4h20v4H2z"></path><path d="M12 12v5"></path><path d="M9.5 14.5 12 17l2.5-2.5"></path></svg>
+        <span>รับฝากสินค้า</span>
+      </button>
+      <button type="button" onClick="{{ goReturn }}" style="{{ navStyle.ret }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path><path d="M2 4h20v4H2z"></path><path d="M12 17v-5"></path><path d="M9.5 14.5 12 12l2.5 2.5"></path></svg>
+        <span>คืนสินค้าผู้ฝาก</span>
+      </button>
+      <button type="button" onClick="{{ goCount }}" style="{{ navStyle.count }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h4"></path></svg>
+        <span>ตรวจนับสต๊อก</span>
+        <span style="{{ badgeStyle }}">{{ diffCount }}</span>
+      </button>
+
+      <div style="font-size:10.5px;font-weight:600;letter-spacing:.8px;color:rgba(255,255,255,.45);padding:14px 10px 6px">ผู้ฝากขาย</div>
+      <button type="button" onClick="{{ goConsignors }}" style="{{ navStyle.consignors }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path></svg>
+        <span>ทะเบียนผู้ฝากขาย</span>
+      </button>
+      <button type="button" onClick="{{ goPassbook }}" style="{{ navStyle.passbook }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"></path><path d="M8 3v18"></path></svg>
+        <span>สมุดบัญชีผู้ฝาก</span>
+      </button>
+      <button type="button" onClick="{{ goWithdraw }}" style="{{ navStyle.withdraw }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"></rect><path d="M2 10h20"></path><circle cx="17" cy="14.5" r="1.6"></circle></svg>
+        <span>เบิก / จ่ายเงิน</span>
+        <span style="{{ badgeStyle2 }}">{{ pendingCount }}</span>
+      </button>
+
+      <div style="font-size:10.5px;font-weight:600;letter-spacing:.8px;color:rgba(255,255,255,.45);padding:14px 10px 6px">รายงานและระบบ</div>
+      <button type="button" onClick="{{ goReports }}" style="{{ navStyle.reports }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg>
+        <span>รายงานสรุป</span>
+      </button>
+      <sc-if value="{{ canAdmin }}" hint-placeholder-val="{{ true }}">
+        <button type="button" onClick="{{ goSettings }}" style="{{ navStyle.settings }}">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.05A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.33l-.06.06A2 2 0 1 1 4.24 16.9l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.05A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.33-1.87l-.06-.06A2 2 0 1 1 7.04 4.24l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.05A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v0c0 .7.42 1.32 1.05 1.55H21a2 2 0 1 1 0 4h-.05c-.63.23-1.05.85-1.05 1.45z"></path></svg>
+          <span>ตั้งค่าระบบ</span>
+        </button>
+      </sc-if>
+    </nav>
+
+    <div style="margin-top:auto;padding:14px;border-top:1px solid rgba(255,255,255,.13)">
+      <div style="background:rgba(255,255,255,.08);border-radius:10px;padding:12px 13px">
+        <div style="font-size:11.5px;color:rgba(255,255,255,.6);margin-bottom:3px">ค่าฝากขายปัจจุบัน</div>
+        <div style="font-weight:700;font-size:17px">{{ feeLabel }}</div>
+        <div style="font-size:11.5px;color:rgba(255,255,255,.6);margin-top:6px">ค่าทำข้อมูล {{ listingFeeLabel }} / รายการ</div>
+      </div>
+    </div>
+  </aside>
+
+  <main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <header style="position:sticky;top:0;z-index:20;background:var(--surface,#ffffff);border-bottom:1px solid var(--border,#e2e7f0);padding:13px 26px;display:flex;align-items:center;gap:16px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:11.5px;color:var(--muted,#64748b);font-weight:500">{{ crumb }}</div>
+        <h1 style="margin:1px 0 0;font-size:20px;font-weight:700;letter-spacing:-.2px">{{ pageTitle }}</h1>
+      </div>
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="display:flex;align-items:center;gap:7px;background:var(--soft,#eef3fd);border:1px solid var(--border,#e2e7f0);border-radius:9px;padding:7px 11px;font-size:13px;color:var(--muted,#64748b)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M8 2v4M16 2v4M3 10h18"></path></svg>
+          <span>{{ today }}</span>
+        </div>
+        <button type="button" onClick="{{ cycleTheme }}" title="สลับโหมดสว่าง / มืด / ตามระบบ" style="display:flex;align-items:center;gap:7px;background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);color:var(--text,#111827);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:500;cursor:pointer" style-hover="border-color:#1552d1;color:#1552d1">
+          <span style="font-size:14px">{{ themeIcon }}</span><span>{{ themeLabel }}</span>
+        </button>
+        <div style="display:flex;align-items:center;gap:9px;padding-left:9px;border-left:1px solid var(--border,#e2e7f0)">
+          <div style="width:34px;height:34px;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:600">อร</div>
+          <div style="line-height:1.25">
+            <div style="font-size:13.5px;font-weight:600">อรทัย มณีวงศ์</div>
+            <div style="font-size:11.5px;color:var(--muted,#64748b)">{{ roleLabel }}</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div style="padding:22px 26px 60px;flex:1">
+
+      <sc-if value="{{ isDash }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:18px">
+          <sc-if value="{{ hints }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;gap:12px;align-items:flex-start;background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:12px;padding:13px 16px">
+              <div style="width:22px;height:22px;flex:none;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700;margin-top:1px">i</div>
+              <div style="font-size:13.5px;color:var(--text,#111827)">หน้านี้คือภาพรวมของวันนี้ ถ้ามีกล่องสีแดงหรือสีเหลืองด้านล่าง หมายถึงมีเรื่องที่ต้องจัดการ กดที่กล่องนั้นเพื่อไปทำงานต่อได้เลย</div>
+            </div>
+          </sc-if>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(216px,1fr));gap:14px">
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:17px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="font-size:12.5px;color:var(--muted,#64748b);font-weight:500">ยอดขายของฝากขายวันนี้</div>
+              <div style="font-size:27px;font-weight:700;letter-spacing:-.6px;margin:6px 0 2px;font-variant-numeric:tabular-nums">฿ 4,286.00</div>
+              <div style="font-size:12px;color:#0f8a4d;font-weight:500">▲ 12% จากเมื่อวาน · 214 ชิ้น</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:17px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="font-size:12.5px;color:var(--muted,#64748b);font-weight:500">ค่าฝากขายที่ร้านได้รับ (วันนี้)</div>
+              <div style="font-size:27px;font-weight:700;letter-spacing:-.6px;margin:6px 0 2px;font-variant-numeric:tabular-nums">฿ 486.50</div>
+              <div style="font-size:12px;color:var(--muted,#64748b)">ค่าฝาก 428.00 + เศษปัดขึ้น 58.50</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:17px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="font-size:12.5px;color:var(--muted,#64748b);font-weight:500">ยอดคงเหลือค้างจ่ายผู้ฝาก</div>
+              <div style="font-size:27px;font-weight:700;letter-spacing:-.6px;margin:6px 0 2px;font-variant-numeric:tabular-nums">฿ 7,600.25</div>
+              <div style="font-size:12px;color:var(--muted,#64748b)">ผู้ฝากที่มีเงินคงเหลือ 5 ราย</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:17px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="font-size:12.5px;color:var(--muted,#64748b);font-weight:500">สินค้าฝากขายในสต๊อก</div>
+              <div style="font-size:27px;font-weight:700;letter-spacing:-.6px;margin:6px 0 2px;font-variant-numeric:tabular-nums">1,842 ชิ้น</div>
+              <div style="font-size:12px;color:var(--muted,#64748b)">40 รายการ · ผู้ฝาก 6 ราย</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="padding:14px 18px;border-bottom:1px solid var(--border,#e2e7f0);display:flex;align-items:center;justify-content:space-between">
+                <h2 style="margin:0;font-size:15px;font-weight:600">เรื่องที่ต้องจัดการ</h2>
+                <span style="font-size:12px;color:var(--muted,#64748b)">อัปเดต 5 นาทีที่แล้ว</span>
+              </div>
+              <div style="display:flex;flex-direction:column">
+                <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="4">
+                  <button type="button" onClick="{{ a.onClick }}" style="display:flex;gap:13px;align-items:flex-start;text-align:left;width:100%;background:transparent;border:0;border-bottom:1px solid var(--border,#e2e7f0);padding:14px 18px;cursor:pointer;color:inherit" style-hover="background:var(--hover,#f6f8fd)">
+                    <span style="{{ a.dot }}"></span>
+                    <span style="flex:1;min-width:0">
+                      <span style="display:block;font-size:14px;font-weight:600">{{ a.title }}</span>
+                      <span style="display:block;font-size:12.5px;color:var(--muted,#64748b);margin-top:2px">{{ a.detail }}</span>
+                    </span>
+                    <span style="font-size:12px;color:var(--pri,#1552d1);font-weight:600;white-space:nowrap;margin-top:2px">{{ a.action }} →</span>
+                  </button>
+                </sc-for>
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h2 style="margin:0 0 4px;font-size:15px;font-weight:600">ทางลัดที่ใช้บ่อย</h2>
+              <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted,#64748b)">กดปุ่มใหญ่เพื่อเริ่มงาน</p>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
+                <button type="button" onClick="{{ goReceive }}" style="display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:15px 14px;border-radius:11px;border:1px solid var(--priBorder,#c7dafc);background:var(--soft,#eef3fd);color:var(--pri,#1552d1);cursor:pointer;font-size:14px;font-weight:600;min-height:88px" style-hover="background:var(--pri,#1552d1);color:#fff">
+                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path><path d="M2 4h20v4H2z"></path><path d="M12 12v5"></path><path d="M9.5 14.5 12 17l2.5-2.5"></path></svg>
+                  รับฝากสินค้าใหม่
+                </button>
+                <button type="button" onClick="{{ goPassbook }}" style="display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:15px 14px;border-radius:11px;border:1px solid var(--border,#e2e7f0);background:var(--surface2,#f8fafc);color:var(--text,#111827);cursor:pointer;font-size:14px;font-weight:600;min-height:88px" style-hover="border-color:#1552d1;color:#1552d1">
+                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"></path><path d="M8 3v18"></path></svg>
+                  ดูสมุดบัญชีผู้ฝาก
+                </button>
+                <button type="button" onClick="{{ goReturn }}" style="display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:15px 14px;border-radius:11px;border:1px solid var(--border,#e2e7f0);background:var(--surface2,#f8fafc);color:var(--text,#111827);cursor:pointer;font-size:14px;font-weight:600;min-height:88px" style-hover="border-color:#1552d1;color:#1552d1">
+                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"></path><path d="M2 4h20v4H2z"></path><path d="M12 17v-5"></path><path d="M9.5 14.5 12 12l2.5 2.5"></path></svg>
+                  คืนสินค้าให้ผู้ฝาก
+                </button>
+                <button type="button" onClick="{{ goCount }}" style="display:flex;flex-direction:column;gap:7px;align-items:flex-start;padding:15px 14px;border-radius:11px;border:1px solid var(--border,#e2e7f0);background:var(--surface2,#f8fafc);color:var(--text,#111827);cursor:pointer;font-size:14px;font-weight:600;min-height:88px" style-hover="border-color:#1552d1;color:#1552d1">
+                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h4"></path></svg>
+                  ตรวจนับสต๊อก
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="padding:14px 18px;border-bottom:1px solid var(--border,#e2e7f0)">
+                <h2 style="margin:0;font-size:15px;font-weight:600">การขายล่าสุด</h2>
+              </div>
+              <div style="overflow:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+                  <thead>
+                    <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                      <th style="padding:9px 18px;font-weight:600;font-size:12px;white-space:nowrap">เวลา</th>
+                      <th style="padding:9px 12px;font-weight:600;font-size:12px">สินค้า</th>
+                      <th style="padding:9px 12px;font-weight:600;font-size:12px">ผู้ฝาก</th>
+                      <th style="padding:9px 12px;font-weight:600;font-size:12px;text-align:right">จำนวน</th>
+                      <th style="padding:9px 18px;font-weight:600;font-size:12px;text-align:right">รวมเงิน</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ recentSales }}" as="s" hint-placeholder-count="6">
+                      <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                        <td style="padding:10px 18px;color:var(--muted,#64748b);white-space:nowrap;font-variant-numeric:tabular-nums">{{ s.time }}</td>
+                        <td style="padding:10px 12px;font-weight:500">{{ s.name }}</td>
+                        <td style="padding:10px 12px;color:var(--muted,#64748b)">{{ s.owner }}</td>
+                        <td style="padding:10px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ s.qty }}</td>
+                        <td style="padding:10px 18px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">{{ s.total }}</td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h2 style="margin:0 0 3px;font-size:15px;font-weight:600">สินค้าขายดี 7 วันล่าสุด</h2>
+              <p style="margin:0 0 15px;font-size:12.5px;color:var(--muted,#64748b)">ใช้แนะนำผู้ฝากขายว่าควรเติมสินค้าตัวไหน</p>
+              <div style="display:flex;flex-direction:column;gap:13px">
+                <sc-for list="{{ topSellers }}" as="p" hint-placeholder-count="5">
+                  <div>
+                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px">
+                      <span style="font-weight:500">{{ p.name }}</span>
+                      <span style="color:var(--muted,#64748b);font-variant-numeric:tabular-nums">{{ p.qty }} ชิ้น</span>
+                    </div>
+                    <div style="height:8px;border-radius:99px;background:var(--surface2,#eef1f6);overflow:hidden">
+                      <div style="{{ p.bar }}"></div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isConsignors }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:8px;background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:10px;padding:9px 13px;min-width:280px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--muted,#64748b)"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                <input value="{{ search }}" onInput="{{ onSearch }}" placeholder="ค้นหาชื่อ / รหัสผู้ฝาก / เบอร์โทร" style="border:0;outline:none;background:transparent;color:inherit;font-size:14px;width:100%">
+              </div>
+              <span style="font-size:13px;color:var(--muted,#64748b)">พบ {{ consignorCount }} ราย</span>
+            </div>
+            <button type="button" onClick="{{ toggleRegister }}" style="display:flex;align-items:center;gap:8px;background:var(--pri,#1552d1);color:#fff;border:0;border-radius:10px;padding:11px 17px;font-size:14px;font-weight:600;cursor:pointer" style-hover="background:#0e3da1">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+              สมัครผู้ฝากขายใหม่
+            </button>
+          </div>
+
+          <sc-if value="{{ showRegister }}" hint-placeholder-val="{{ false }}">
+            <section style="background:var(--surface,#fff);border:1px solid var(--priBorder,#c7dafc);border-radius:13px;overflow:hidden;box-shadow:0 6px 20px rgba(16,24,40,.07)">
+              <div style="padding:15px 20px;background:var(--soft,#eef3fd);border-bottom:1px solid var(--priBorder,#c7dafc)">
+                <h2 style="margin:0;font-size:16px;font-weight:700">ใบสมัครเป็นผู้ฝากขาย</h2>
+                <p style="margin:3px 0 0;font-size:12.5px;color:var(--muted,#64748b)">กรอกช่องที่มีเครื่องหมาย <span style="color:#c22b2b">*</span> ให้ครบ แล้วกดบันทึก ระบบจะออกรหัสผู้ฝากขายให้อัตโนมัติ</p>
+              </div>
+              <div style="padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px">
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ชื่อ-นามสกุล <span style="color:#c22b2b">*</span>
+                  <input placeholder="เช่น นางสาวกมลวรรณ ศรีสุข" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ประเภทผู้ฝาก <span style="color:#c22b2b">*</span>
+                  <select style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none">
+                    <option>นักเรียน / นักศึกษา</option>
+                    <option>ครู / บุคลากร</option>
+                    <option>ผู้ปกครอง</option>
+                    <option>ชุมชน / ร้านค้าภายนอก</option>
+                  </select>
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">แผนก / ชั้นปี
+                  <input placeholder="เช่น ปวช.2 การบัญชี" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">เบอร์โทรศัพท์ <span style="color:#c22b2b">*</span>
+                  <input placeholder="08X-XXX-XXXX" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">เลขบัตรประชาชน
+                  <input placeholder="X-XXXX-XXXXX-XX-X" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ช่องทางรับเงิน <span style="color:#c22b2b">*</span>
+                  <select style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none">
+                    <option>เงินสดที่เคาน์เตอร์</option>
+                    <option>พร้อมเพย์ (เบอร์โทร)</option>
+                    <option>โอนธนาคาร</option>
+                  </select>
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">เลขบัญชี / พร้อมเพย์
+                  <input placeholder="กรอกเมื่อเลือกรับเงินแบบโอน" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ครูที่ปรึกษา / ผู้รับรอง
+                  <input placeholder="กรณีผู้ฝากเป็นนักเรียน" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+              </div>
+              <div style="padding:14px 20px;border-top:1px solid var(--border,#e2e7f0);background:var(--surface2,#f8fafc);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <label style="display:flex;gap:8px;align-items:center;font-size:13px;flex:1;min-width:240px">
+                  <input type="checkbox" style="width:17px;height:17px;accent-color:#1552d1">
+                  ผู้ฝากรับทราบเงื่อนไขค่าฝากขายและค่าทำข้อมูลแล้ว
+                </label>
+                <button type="button" onClick="{{ toggleRegister }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:9px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer">ยกเลิก</button>
+                <button type="button" style="background:var(--pri,#1552d1);border:0;color:#fff;border-radius:9px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer" style-hover="background:#0e3da1">บันทึกและออกรหัสผู้ฝาก</button>
+              </div>
+            </section>
+          </sc-if>
+
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="overflow:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:840px">
+                <thead>
+                  <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                    <th style="padding:11px 18px;font-weight:600;font-size:12px">รหัส</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px">ชื่อผู้ฝากขาย</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px">ประเภท</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px;text-align:right">รายการ</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px;text-align:right">ขายสะสม</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px;text-align:right">เงินคงเหลือ</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px">สถานะ</th>
+                    <th style="padding:11px 18px;font-weight:600;font-size:12px"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ consignorRows }}" as="c" hint-placeholder-count="6">
+                    <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                      <td style="padding:12px 18px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted,#64748b)">{{ c.code }}</td>
+                      <td style="padding:12px 12px">
+                        <div style="font-weight:600">{{ c.name }}</div>
+                        <div style="font-size:12px;color:var(--muted,#64748b)">{{ c.phone }} · สมัคร {{ c.joined }}</div>
+                      </td>
+                      <td style="padding:12px 12px;color:var(--muted,#64748b)">{{ c.type }}</td>
+                      <td style="padding:12px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ c.items }}</td>
+                      <td style="padding:12px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ c.soldTotal }}</td>
+                      <td style="padding:12px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">{{ c.balance }}</td>
+                      <td style="padding:12px 12px"><span style="{{ c.statusStyle }}">{{ c.status }}</span></td>
+                      <td style="padding:12px 18px;text-align:right;white-space:nowrap">
+                        <button type="button" onClick="{{ c.openPassbook }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:var(--pri,#1552d1);border-radius:8px;padding:6px 11px;font-size:12.5px;font-weight:600;cursor:pointer" style-hover="background:var(--soft,#eef3fd)">สมุดบัญชี</button>
+                      </td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReceive }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:1fr 336px;gap:16px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <sc-if value="{{ hints }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;gap:12px;align-items:flex-start;background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:12px;padding:13px 16px">
+                <div style="width:22px;height:22px;flex:none;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700;margin-top:1px">i</div>
+                <div style="font-size:13.5px">ทำ 3 ขั้น: <b>1)</b> เลือกผู้ฝากขาย <b>2)</b> สแกนบาร์โค้ดหรือกรอกสินค้าทีละรายการแล้วกดเพิ่ม <b>3)</b> ตรวจยอดด้านขวาแล้วกดบันทึกและพิมพ์ใบรับฝาก</div>
+              </div>
+            </sc-if>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                <span style="width:24px;height:24px;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700">1</span>
+                <h2 style="margin:0;font-size:15.5px;font-weight:600">ผู้ฝากขาย</h2>
+              </div>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;flex:1;min-width:260px">เลือกผู้ฝากขาย
+                  <select value="{{ selectedId }}" onChange="{{ onSelectConsignor }}" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14.5px;font-weight:500;outline:none">
+                    <sc-for list="{{ consignorOptions }}" as="o" hint-placeholder-count="6">
+                      <option value="{{ o.id }}">{{ o.label }}</option>
+                    </sc-for>
+                  </select>
+                </label>
+                <div style="background:var(--surface2,#f8fafc);border:1px solid var(--border,#e2e7f0);border-radius:10px;padding:10px 14px;font-size:13px">
+                  <div style="color:var(--muted,#64748b);font-size:12px">รายการที่ฝากอยู่แล้ว</div>
+                  <div style="font-weight:700;font-size:15px">{{ sel.items }} รายการ</div>
+                </div>
+                <div style="background:var(--surface2,#f8fafc);border:1px solid var(--border,#e2e7f0);border-radius:10px;padding:10px 14px;font-size:13px">
+                  <div style="color:var(--muted,#64748b);font-size:12px">สิทธิ์ยกเว้นค่าทำข้อมูลคงเหลือ</div>
+                  <div style="font-weight:700;font-size:15px">{{ freeLeft }} รายการ</div>
+                </div>
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+                <span style="width:24px;height:24px;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700">2</span>
+                <h2 style="margin:0;font-size:15.5px;font-weight:600">เพิ่มรายการสินค้า</h2>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center;background:var(--surface2,#f8fafc);border:1px dashed var(--border,#cfd7e6);border-radius:10px;padding:11px 14px;margin:12px 0 16px">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" style="color:var(--pri,#1552d1);flex:none"><path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14"></path></svg>
+                <input value="{{ scan }}" onInput="{{ onScan }}" placeholder="สแกนบาร์โค้ดจากผู้ผลิต หรือพิมพ์รหัสแล้วกด Enter" style="flex:1;border:0;outline:none;background:transparent;color:inherit;font-size:14px">
+                <span style="font-size:12px;color:var(--muted,#64748b);white-space:nowrap">ไม่มีบาร์โค้ด? กรอกด้านล่างได้เลย</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:13px">
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;grid-column:span 2">ชื่อสินค้า
+                  <input value="{{ draft.name }}" onInput="{{ onDraftName }}" placeholder="เช่น ขนมทองม้วนสมุนไพร" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ราคาที่ผู้ฝากต้องการได้ (บาท)
+                  <input value="{{ draft.cost }}" onInput="{{ onDraftCost }}" type="number" step="0.25" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">จำนวนที่ฝาก (ชิ้น)
+                  <input value="{{ draft.qty }}" onInput="{{ onDraftQty }}" type="number" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">วันหมดอายุ (ถ้ามี)
+                  <input value="{{ draft.expiry }}" onInput="{{ onDraftExpiry }}" type="date" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+                </label>
+              </div>
+
+              <div style="margin-top:16px;background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:11px;padding:14px 16px">
+                <div style="font-size:12.5px;font-weight:700;color:var(--pri,#1552d1);margin-bottom:9px">ระบบคิดราคาขายให้อัตโนมัติ</div>
+                <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;font-variant-numeric:tabular-nums">
+                  <span>ราคาผู้ฝาก <b>{{ calc.cost }}</b></span>
+                  <span style="color:var(--muted,#64748b)">+</span>
+                  <span>ค่าฝากขาย <b>{{ calc.fee }}</b></span>
+                  <span style="color:var(--muted,#64748b)">=</span>
+                  <span>{{ calc.raw }}</span>
+                  <span style="color:var(--muted,#64748b)">ปัดขึ้นเป็นบาทถ้วน →</span>
+                  <span style="background:var(--pri,#1552d1);color:#fff;border-radius:8px;padding:5px 11px;font-weight:700;font-size:16px">{{ calc.price }}</span>
+                </div>
+                <div style="font-size:12.5px;color:var(--muted,#64748b);margin-top:8px">เศษปัดขึ้น {{ calc.round }} เข้าร้าน · ผู้ฝากได้รับ {{ calc.cost }} ต่อชิ้น (หักค่าฝากเมื่อขายได้แล้ว)</div>
+              </div>
+
+              <div style="display:flex;gap:10px;margin-top:15px;flex-wrap:wrap">
+                <button type="button" onClick="{{ addItem }}" style="display:flex;align-items:center;gap:8px;background:var(--pri,#1552d1);color:#fff;border:0;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer" style-hover="background:#0e3da1">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                  เพิ่มลงใบรับฝาก
+                </button>
+                <button type="button" onClick="{{ clearDraft }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:9px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer">ล้างช่องกรอก</button>
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="padding:15px 20px;border-bottom:1px solid var(--border,#e2e7f0);display:flex;align-items:center;gap:10px">
+                <span style="width:24px;height:24px;border-radius:50%;background:var(--pri,#1552d1);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700">3</span>
+                <h2 style="margin:0;font-size:15.5px;font-weight:600">รายการในใบรับฝาก ({{ cartCount }})</h2>
+              </div>
+              <div style="overflow:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:700px">
+                  <thead>
+                    <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                      <th style="padding:10px 18px;font-weight:600;font-size:12px">สินค้า</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ราคาผู้ฝาก</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ราคาขาย</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">จำนวน</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px">ค่าทำข้อมูล</th>
+                      <th style="padding:10px 18px;font-weight:600;font-size:12px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ cart }}" as="i" hint-placeholder-count="3">
+                      <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                        <td style="padding:12px 18px">
+                          <div style="font-weight:600">{{ i.name }}</div>
+                          <div style="font-size:12px;color:var(--muted,#64748b)">{{ i.meta }}</div>
+                        </td>
+                        <td style="padding:12px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ i.cost }}</td>
+                        <td style="padding:12px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">{{ i.price }}</td>
+                        <td style="padding:12px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ i.qty }}</td>
+                        <td style="padding:12px 12px"><span style="{{ i.feeStyle }}">{{ i.feeLabel }}</span></td>
+                        <td style="padding:12px 18px;text-align:right">
+                          <button type="button" onClick="{{ i.remove }}" title="ลบรายการ" style="background:transparent;border:1px solid var(--border,#d6dce8);color:#c22b2b;border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:600;cursor:pointer">ลบ</button>
+                        </td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+              <sc-if value="{{ cartEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:34px 20px;text-align:center;color:var(--muted,#64748b);font-size:13.5px">ยังไม่มีรายการ — กรอกสินค้าด้านบนแล้วกด “เพิ่มลงใบรับฝาก”</div>
+              </sc-if>
+            </section>
+          </div>
+
+          <aside style="position:sticky;top:88px;display:flex;flex-direction:column;gap:14px">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h2 style="margin:0 0 14px;font-size:15.5px;font-weight:600">สรุปใบรับฝาก</h2>
+              <div style="display:flex;flex-direction:column;gap:11px;font-size:13.5px">
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">ผู้ฝากขาย</span><span style="font-weight:600;text-align:right">{{ sel.name }}</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">จำนวนรายการ</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ cartCount }} รายการ</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">จำนวนสินค้า</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ cartQty }} ชิ้น</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">มูลค่าขายรวม</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ cartValue }}</span></div>
+                <div style="height:1px;background:var(--border,#e2e7f0)"></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">ค่าทำข้อมูล ({{ chargedListings }} รายการ)</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ listingTotal }}</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:12.5px;color:#0f8a4d"><span>ยกเว้นให้ {{ freeListings }} รายการแรก</span><span>- {{ waivedTotal }}</span></div>
+                <div style="background:var(--surface2,#f8fafc);border-radius:9px;padding:11px 12px;font-size:12.5px;color:var(--muted,#64748b);line-height:1.55">
+                  ค่าฝากขาย {{ feeLabel }} จะหักตอนสินค้าขายได้ ไม่เก็บล่วงหน้า และ<b style="color:var(--text,#111827)">คืนค่าทำข้อมูลให้</b> เมื่อรายการนั้นขายได้เกิน {{ waiveQty }} ชิ้น
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:9px;margin-top:16px">
+                <button type="button" style="background:var(--pri,#1552d1);color:#fff;border:0;border-radius:10px;padding:13px;font-size:14.5px;font-weight:700;cursor:pointer" style-hover="background:#0e3da1">บันทึกการรับฝาก</button>
+                <button type="button" onClick="{{ doPrint }}" style="display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer" style-hover="border-color:#1552d1;color:#1552d1">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4v-6h16v6h-2M8 14h8v7H8z"></path></svg>
+                  พิมพ์ใบรับฝาก
+                </button>
+              </div>
+            </section>
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h3 style="margin:0 0 9px;font-size:13.5px;font-weight:700">สินค้าที่ผู้ฝากรายนี้ฝากอยู่</h3>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ selProducts }}" as="p" hint-placeholder-count="4">
+                  <div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding-bottom:8px;border-bottom:1px solid var(--border,#eef1f6)">
+                    <span style="min-width:0">
+                      <span style="display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.name }}</span>
+                      <span style="display:block;font-size:11.5px;color:var(--muted,#64748b)">ขายได้ {{ p.sold }} ชิ้น</span>
+                    </span>
+                    <span style="white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right">
+                      <span style="display:block;font-weight:600">{{ p.price }}</span>
+                      <span style="display:block;font-size:11.5px;color:var(--muted,#64748b)">คงเหลือ {{ p.stock }}</span>
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPassbook }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04);display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;min-width:280px;flex:1">เลือกผู้ฝากขาย
+              <select value="{{ selectedId }}" onChange="{{ onSelectConsignor }}" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14.5px;font-weight:500;outline:none">
+                <sc-for list="{{ consignorOptions }}" as="o" hint-placeholder-count="6">
+                  <option value="{{ o.id }}">{{ o.label }}</option>
+                </sc-for>
+              </select>
+            </label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+              <div style="background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:11px;padding:12px 18px">
+                <div style="font-size:12px;color:var(--muted,#64748b)">ยอดคงเหลือที่เบิกได้</div>
+                <div style="font-size:24px;font-weight:700;color:var(--pri,#1552d1);font-variant-numeric:tabular-nums">{{ sel.balance }}</div>
+              </div>
+              <div style="text-align:center;border:1px solid var(--border,#e2e7f0);border-radius:11px;padding:9px 11px">
+                <div style="width:62px;height:62px;background:var(--text,#111827);border-radius:6px;display:grid;place-items:center;color:var(--surface,#fff);font-size:9px;font-weight:600;letter-spacing:.3px">QR</div>
+                <div style="font-size:10.5px;color:var(--muted,#64748b);margin-top:5px">สแกนดูยอดเอง</div>
+              </div>
+              <button type="button" onClick="{{ doPrint }}" style="display:flex;align-items:center;gap:8px;background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:10px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;align-self:stretch" style-hover="border-color:#1552d1;color:#1552d1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4v-6h16v6h-2M8 14h8v7H8z"></path></svg>
+                พิมพ์สมุดคู่ฝาก
+              </button>
+            </div>
+          </section>
+
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="padding:16px 20px;border-bottom:2px solid var(--pri,#1552d1);display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px">
+              <div>
+                <div style="font-size:12px;color:var(--muted,#64748b);letter-spacing:.4px;font-weight:600">สมุดคู่ฝากผู้ฝากขาย · ร้านค้าสหการ วิทยาลัยอาชีวศึกษาร้อยเอ็ด</div>
+                <h2 style="margin:4px 0 0;font-size:18px;font-weight:700">{{ sel.name }}</h2>
+                <div style="font-size:12.5px;color:var(--muted,#64748b);margin-top:2px">รหัส {{ sel.code }} · {{ sel.type }} · รับเงินทาง {{ sel.pay }}</div>
+              </div>
+              <div style="text-align:right;font-size:12.5px;color:var(--muted,#64748b)">
+                <div>ปรับปรุงล่าสุด {{ today }}</div>
+                <div>รายการเดินบัญชี {{ ledgerCount }} รายการ</div>
+              </div>
+            </div>
+            <div style="overflow:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px">
+                <thead>
+                  <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                    <th style="padding:11px 18px;font-weight:600;font-size:12px;white-space:nowrap">วันที่</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px">รายการ</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px;text-align:right">รับ (บาท)</th>
+                    <th style="padding:11px 12px;font-weight:600;font-size:12px;text-align:right">จ่าย (บาท)</th>
+                    <th style="padding:11px 18px;font-weight:600;font-size:12px;text-align:right">คงเหลือ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ ledger }}" as="l" hint-placeholder-count="8">
+                    <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                      <td style="padding:11px 18px;color:var(--muted,#64748b);white-space:nowrap;font-variant-numeric:tabular-nums">{{ l.date }}</td>
+                      <td style="padding:11px 12px">
+                        <div style="font-weight:500">{{ l.desc }}</div>
+                        <div style="font-size:11.5px;color:var(--muted,#64748b)">{{ l.ref }}</div>
+                      </td>
+                      <td style="padding:11px 12px;text-align:right;color:#0f8a4d;font-weight:600;font-variant-numeric:tabular-nums">{{ l.in }}</td>
+                      <td style="padding:11px 12px;text-align:right;color:#c22b2b;font-weight:600;font-variant-numeric:tabular-nums">{{ l.out }}</td>
+                      <td style="padding:11px 18px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">{{ l.bal }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+                <tfoot>
+                  <tr style="background:var(--surface2,#f8fafc);border-top:2px solid var(--border,#e2e7f0)">
+                    <td colspan="2" style="padding:13px 18px;font-weight:700">รวมทั้งสิ้น</td>
+                    <td style="padding:13px 12px;text-align:right;font-weight:700;color:#0f8a4d;font-variant-numeric:tabular-nums">{{ ledgerIn }}</td>
+                    <td style="padding:13px 12px;text-align:right;font-weight:700;color:#c22b2b;font-variant-numeric:tabular-nums">{{ ledgerOut }}</td>
+                    <td style="padding:13px 18px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">{{ sel.balance }}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReturn }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;max-width:420px">ผู้ฝากขายที่มาขอรับสินค้าคืน
+                <select value="{{ selectedId }}" onChange="{{ onSelectConsignor }}" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14.5px;font-weight:500;outline:none">
+                  <sc-for list="{{ consignorOptions }}" as="o" hint-placeholder-count="6">
+                    <option value="{{ o.id }}">{{ o.label }}</option>
+                  </sc-for>
+                </select>
+              </label>
+            </section>
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="padding:15px 20px;border-bottom:1px solid var(--border,#e2e7f0)">
+                <h2 style="margin:0;font-size:15.5px;font-weight:600">สินค้าคงเหลือในร้าน — ใส่จำนวนที่ต้องการคืน</h2>
+                <p style="margin:3px 0 0;font-size:12.5px;color:var(--muted,#64748b)">คืนได้ไม่เกินจำนวนคงเหลือ ระบบจะตัดสต๊อกและบันทึกใบคืนสินค้าให้</p>
+              </div>
+              <div style="overflow:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:720px">
+                  <thead>
+                    <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                      <th style="padding:10px 18px;font-weight:600;font-size:12px">สินค้า</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ราคาขาย</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ขายได้</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">คงเหลือ</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px">วันหมดอายุ</th>
+                      <th style="padding:10px 18px;font-weight:600;font-size:12px;text-align:right;width:150px">จำนวนที่คืน</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ returnRows }}" as="r" hint-placeholder-count="4">
+                      <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                        <td style="padding:11px 18px;font-weight:500">{{ r.name }}</td>
+                        <td style="padding:11px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ r.price }}</td>
+                        <td style="padding:11px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ r.sold }}</td>
+                        <td style="padding:11px 12px;text-align:right;font-weight:600;font-variant-numeric:tabular-nums">{{ r.stock }}</td>
+                        <td style="padding:11px 12px"><span style="{{ r.expStyle }}">{{ r.expiry }}</span></td>
+                        <td style="padding:9px 18px;text-align:right">
+                          <div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">
+                            <input value="{{ r.qty }}" onInput="{{ r.onQty }}" type="number" min="0" style="width:74px;border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:8px;padding:8px 10px;font-size:14px;text-align:right;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                            <button type="button" onClick="{{ r.onAll }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:var(--pri,#1552d1);border-radius:8px;padding:7px 9px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">ทั้งหมด</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+          <aside style="position:sticky;top:88px;background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <h2 style="margin:0 0 14px;font-size:15.5px;font-weight:600">สรุปใบคืนสินค้า</h2>
+            <div style="display:flex;flex-direction:column;gap:11px;font-size:13.5px">
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">ผู้ฝากขาย</span><span style="font-weight:600;text-align:right">{{ sel.name }}</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">จำนวนรายการที่คืน</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ retLines }}</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">จำนวนสินค้าที่คืน</span><span style="font-weight:700;font-size:16px;font-variant-numeric:tabular-nums">{{ retQty }} ชิ้น</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">มูลค่าตามราคาขาย</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ retValue }}</span></div>
+              <div style="background:var(--surface2,#f8fafc);border-radius:9px;padding:11px 12px;font-size:12.5px;color:var(--muted,#64748b);line-height:1.55">สินค้าที่คืนไม่มีการคิดค่าฝากขาย เพราะค่าฝากหักตอนขายได้เท่านั้น</div>
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ผู้รับสินค้าคืน
+                <input placeholder="ชื่อผู้มารับ / ผู้รับมอบอำนาจ" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:14px;font-weight:400;outline:none" style-focus="border-color:#1552d1">
+              </label>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-top:15px">
+              <button type="button" style="background:var(--pri,#1552d1);color:#fff;border:0;border-radius:10px;padding:13px;font-size:14.5px;font-weight:700;cursor:pointer" style-hover="background:#0e3da1">บันทึกการคืนสินค้า</button>
+              <button type="button" onClick="{{ doPrint }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer">พิมพ์ใบคืนสินค้า</button>
+            </div>
+          </aside>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isWithdraw }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <h2 style="margin:0 0 4px;font-size:16px;font-weight:700">ทำรายการเบิกเงิน</h2>
+            <p style="margin:0 0 16px;font-size:12.5px;color:var(--muted,#64748b)">เบิกได้ไม่เกินยอดคงเหลือในสมุดคู่ฝาก ทุกครั้งที่จ่ายเงินระบบจะบันทึกลงสมุดให้ทันที</p>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ผู้ฝากขาย
+              <select value="{{ selectedId }}" onChange="{{ onSelectConsignor }}" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14.5px;font-weight:500;outline:none">
+                <sc-for list="{{ consignorOptions }}" as="o" hint-placeholder-count="6">
+                  <option value="{{ o.id }}">{{ o.label }}</option>
+                </sc-for>
+              </select>
+            </label>
+            <div style="margin:16px 0;background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:11px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:13.5px;font-weight:600">ยอดที่เบิกได้สูงสุด</span>
+              <span style="font-size:23px;font-weight:700;color:var(--pri,#1552d1);font-variant-numeric:tabular-nums">{{ sel.balance }}</span>
+            </div>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">จำนวนเงินที่เบิก (บาท)
+              <input value="{{ wdAmount }}" onInput="{{ onWdAmount }}" type="number" step="0.25" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:13px 14px;font-size:20px;font-weight:700;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+            </label>
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+              <sc-for list="{{ wdQuick }}" as="q" hint-placeholder-count="4">
+                <button type="button" onClick="{{ q.onClick }}" style="background:var(--surface2,#f8fafc);border:1px solid var(--border,#d6dce8);color:inherit;border-radius:8px;padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer" style-hover="border-color:#1552d1;color:#1552d1">{{ q.label }}</button>
+              </sc-for>
+            </div>
+            <sc-if value="{{ wdOver }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:13px;display:flex;gap:10px;align-items:flex-start;background:#fdeeee;border:1px solid #f3c9c9;border-radius:10px;padding:12px 14px;color:#8f1f1f;font-size:13.5px">
+                <b style="flex:none">เบิกไม่ได้</b><span>จำนวนเงินที่กรอกเกินยอดคงเหลือ {{ sel.balance }} กรุณาแก้ไขจำนวนเงิน</span>
+              </div>
+            </sc-if>
+            <div style="margin-top:16px;font-size:13px;font-weight:600;margin-bottom:8px">ช่องทางจ่ายเงิน</div>
+            <div style="display:flex;gap:9px;flex-wrap:wrap">
+              <sc-for list="{{ payMethods }}" as="m" hint-placeholder-count="3">
+                <button type="button" onClick="{{ m.onClick }}" style="{{ m.style }}">{{ m.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-top:20px">
+              <button type="button" style="{{ wdBtnStyle }}">บันทึกการจ่ายเงินและออกใบสำคัญรับเงิน</button>
+              <button type="button" onClick="{{ goPassbook }}" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer">ดูสมุดคู่ฝากของผู้ฝากรายนี้</button>
+            </div>
+          </section>
+
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="padding:15px 20px;border-bottom:1px solid var(--border,#e2e7f0);display:flex;justify-content:space-between;align-items:center">
+              <h2 style="margin:0;font-size:15.5px;font-weight:600">คำขอเบิกเงินและการจ่ายล่าสุด</h2>
+              <span style="background:#fff4e0;color:#8a5a00;border-radius:99px;padding:4px 10px;font-size:12px;font-weight:600">รออนุมัติ {{ pendingCount }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column">
+              <sc-for list="{{ withdrawals }}" as="w" hint-placeholder-count="5">
+                <div style="padding:14px 20px;border-bottom:1px solid var(--border,#e2e7f0);display:flex;gap:12px;align-items:center">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-weight:600;font-size:14px">{{ w.name }}</div>
+                    <div style="font-size:12.5px;color:var(--muted,#64748b)">{{ w.meta }}</div>
+                  </div>
+                  <div style="text-align:right">
+                    <div style="font-weight:700;font-variant-numeric:tabular-nums">{{ w.amount }}</div>
+                    <div style="{{ w.statusStyle }}">{{ w.status }}</div>
+                  </div>
+                  <sc-if value="{{ w.pending }}" hint-placeholder-val="{{ false }}">
+                    <button type="button" style="background:var(--pri,#1552d1);color:#fff;border:0;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap">อนุมัติจ่าย</button>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isCount }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px">
+              <div style="font-size:12.5px;color:var(--muted,#64748b)">รอบตรวจนับ</div>
+              <div style="font-size:17px;font-weight:700;margin-top:4px">{{ today }} · เวรบ่าย</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px">
+              <div style="font-size:12.5px;color:var(--muted,#64748b)">รายการที่นับแล้ว</div>
+              <div style="font-size:17px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums">{{ countedCount }} / {{ countTotal }}</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid #f3c9c9;border-radius:13px;padding:16px 18px">
+              <div style="font-size:12.5px;color:var(--muted,#64748b)">พบผลต่าง</div>
+              <div style="font-size:17px;font-weight:700;margin-top:4px;color:#c22b2b;font-variant-numeric:tabular-nums">{{ diffCount }} รายการ</div>
+            </div>
+            <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:16px 18px">
+              <div style="font-size:12.5px;color:var(--muted,#64748b)">มูลค่าผลต่างสุทธิ</div>
+              <div style="font-size:17px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums">{{ diffValue }}</div>
+            </div>
+          </div>
+
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="padding:15px 20px;border-bottom:1px solid var(--border,#e2e7f0)">
+              <h2 style="margin:0;font-size:15.5px;font-weight:600">ใบตรวจนับสินค้าฝากขาย</h2>
+              <p style="margin:3px 0 0;font-size:12.5px;color:var(--muted,#64748b)">กรอกจำนวนที่นับได้จริง ระบบเทียบกับจำนวนในระบบและไฮไลต์รายการที่ไม่ตรงให้ทันที</p>
+            </div>
+            <div style="overflow:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:840px">
+                <thead>
+                  <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                    <th style="padding:10px 18px;font-weight:600;font-size:12px">สินค้า</th>
+                    <th style="padding:10px 12px;font-weight:600;font-size:12px">ผู้ฝาก</th>
+                    <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ในระบบ</th>
+                    <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right;width:130px">นับได้จริง</th>
+                    <th style="padding:10px 12px;font-weight:600;font-size:12px;text-align:right">ผลต่าง</th>
+                    <th style="padding:10px 18px;font-weight:600;font-size:12px">หมายเหตุ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ countRows }}" as="c" hint-placeholder-count="6">
+                    <tr style="{{ c.rowStyle }}">
+                      <td style="padding:11px 18px;font-weight:500">{{ c.name }}</td>
+                      <td style="padding:11px 12px;color:var(--muted,#64748b)">{{ c.owner }}</td>
+                      <td style="padding:11px 12px;text-align:right;font-variant-numeric:tabular-nums">{{ c.system }}</td>
+                      <td style="padding:9px 12px;text-align:right">
+                        <input value="{{ c.counted }}" onInput="{{ c.onInput }}" type="number" style="width:88px;border:1px solid var(--border,#d6dce8);background:var(--surface,#fff);color:inherit;border-radius:8px;padding:8px 10px;font-size:14px;text-align:right;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                      </td>
+                      <td style="padding:11px 12px;text-align:right"><span style="{{ c.diffStyle }}">{{ c.diff }}</span></td>
+                      <td style="padding:11px 18px;color:var(--muted,#64748b);font-size:12.5px">{{ c.note }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+            <div style="padding:16px 20px;background:var(--surface2,#f8fafc);border-top:1px solid var(--border,#e2e7f0);display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+              <div style="flex:1;min-width:240px;font-size:13px;color:var(--muted,#64748b)">เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</div>
+              <button type="button" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:9px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer">บันทึกร่างไว้ก่อน</button>
+              <button type="button" style="{{ countBtnStyle }}">ส่งรายงานผลต่างให้ผู้จัดการร้าน</button>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isReports }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="display:flex;flex-wrap:wrap;gap:9px;margin-bottom:16px">
+              <sc-for list="{{ reportTabs }}" as="r" hint-placeholder-count="5">
+                <button type="button" onClick="{{ r.onClick }}" style="{{ r.style }}">{{ r.label }}</button>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <sc-for list="{{ rangePresets }}" as="p" hint-placeholder-count="4">
+                  <button type="button" onClick="{{ p.onClick }}" style="{{ p.style }}">{{ p.label }}</button>
+                </sc-for>
+              </div>
+              <label style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600">ตั้งแต่วันที่
+                <input value="{{ dateFrom }}" onInput="{{ onDateFrom }}" type="date" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:9px 12px;font-size:14px;font-weight:400;outline:none">
+              </label>
+              <label style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600">ถึงวันที่
+                <input value="{{ dateTo }}" onInput="{{ onDateTo }}" type="date" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:9px 12px;font-size:14px;font-weight:400;outline:none">
+              </label>
+              <div style="flex:1"></div>
+              <button type="button" onClick="{{ doPrint }}" style="display:flex;align-items:center;gap:8px;background:var(--pri,#1552d1);color:#fff;border:0;border-radius:9px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer" style-hover="background:#0e3da1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6M6 18H4v-6h16v6h-2M8 14h8v7H8z"></path></svg>
+                พิมพ์รายงาน
+              </button>
+              <button type="button" style="background:transparent;border:1px solid var(--border,#d6dce8);color:inherit;border-radius:9px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer">ส่งออก Excel</button>
+            </div>
+          </section>
+
+          <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+            <div style="padding:18px 20px;border-bottom:1px solid var(--border,#e2e7f0);text-align:center">
+              <div style="font-size:12.5px;color:var(--muted,#64748b);font-weight:600">ร้านค้าสหการ วิทยาลัยอาชีวศึกษาร้อยเอ็ด</div>
+              <h2 style="margin:5px 0 2px;font-size:18px;font-weight:700">{{ reportTitle }}</h2>
+              <div style="font-size:12.5px;color:var(--muted,#64748b)">{{ reportRange }}</div>
+            </div>
+            <div style="overflow:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px">
+                <thead>
+                  <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                    <sc-for list="{{ reportCols }}" as="h" hint-placeholder-count="5">
+                      <th style="{{ h.style }}">{{ h.label }}</th>
+                    </sc-for>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ reportRows }}" as="row" hint-placeholder-count="6">
+                    <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                      <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="5">
+                        <td style="{{ cell.style }}">{{ cell.v }}</td>
+                      </sc-for>
+                    </tr>
+                  </sc-for>
+                </tbody>
+                <tfoot>
+                  <tr style="background:var(--surface2,#f8fafc);border-top:2px solid var(--border,#e2e7f0)">
+                    <sc-for list="{{ reportFoot }}" as="f" hint-placeholder-count="5">
+                      <td style="{{ f.style }}">{{ f.v }}</td>
+                    </sc-for>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            <div style="padding:16px 20px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:12.5px;color:var(--muted,#64748b);border-top:1px solid var(--border,#e2e7f0)">
+              <span>ผู้จัดทำรายงาน: อรทัย มณีวงศ์ ({{ roleLabel }})</span>
+              <span>ผู้ตรวจสอบ: ____________________ ผู้จัดการร้าน</span>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h2 style="margin:0 0 3px;font-size:16px;font-weight:700">ค่าฝากขายสินค้า</h2>
+              <p style="margin:0 0 16px;font-size:12.5px;color:var(--muted,#64748b)">เลือกวิธีคิดค่าฝาก แล้วกำหนดอัตรา ระบบจะใช้อัตรานี้กับสินค้าที่รับฝากใหม่ทันที</p>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+                <button type="button" onClick="{{ setFixed }}" style="{{ modeFixedStyle }}">
+                  <b style="display:block;font-size:14.5px">คิดเป็นบาทต่อชิ้น</b>
+                  <span style="display:block;font-size:12px;opacity:.75;margin-top:2px">เช่น 2 บาท/ชิ้น (แบบที่ใช้อยู่)</span>
+                </button>
+                <button type="button" onClick="{{ setPercent }}" style="{{ modePercentStyle }}">
+                  <b style="display:block;font-size:14.5px">คิดเป็นร้อยละของราคา</b>
+                  <span style="display:block;font-size:12px;opacity:.75;margin-top:2px">เช่น 10% ของราคาที่ผู้ฝากตั้ง</span>
+                </button>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">{{ rateLabel }}
+                  <input value="{{ rateValue }}" onInput="{{ onRate }}" type="number" step="0.25" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:17px;font-weight:700;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">การปัดเศษราคาขาย
+                  <select style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14px;font-weight:400;outline:none">
+                    <option>ปัดขึ้นเป็นบาทถ้วน (แนะนำ)</option>
+                    <option>ปัดขึ้นเป็น 0.25 บาท</option>
+                    <option>ไม่ปัด เก็บระดับสตางค์</option>
+                  </select>
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ส่วนต่างจากการปัดเศษเข้าใคร
+                  <select style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:14px;font-weight:400;outline:none">
+                    <option>เข้าร้านค้าสหการ</option>
+                    <option>เข้าผู้ฝากขาย</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:20px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h2 style="margin:0 0 3px;font-size:16px;font-weight:700">ค่าทำข้อมูลรายการสินค้า</h2>
+              <p style="margin:0 0 16px;font-size:12.5px;color:var(--muted,#64748b)">ค่าธรรมเนียมเมื่อผู้ฝากเพิ่มรายการสินค้าใหม่ พร้อมเงื่อนไขยกเว้น</p>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ค่าทำข้อมูล (บาท/รายการ)
+                  <input value="{{ listingFee }}" onInput="{{ onListingFee }}" type="number" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:17px;font-weight:700;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">ยกเว้นให้กี่รายการแรก
+                  <input value="{{ freeListings }}" onInput="{{ onFreeListings }}" type="number" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:17px;font-weight:700;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+                <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600">คืนค่าทำข้อมูลเมื่อขายได้เกิน (ชิ้น)
+                  <input value="{{ waiveQty }}" onInput="{{ onWaiveQty }}" type="number" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:11px 12px;font-size:17px;font-weight:700;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+                </label>
+              </div>
+              <div style="margin-top:15px;background:var(--soft,#eef3fd);border:1px solid var(--priBorder,#c7dafc);border-radius:10px;padding:13px 15px;font-size:13.5px;line-height:1.6">
+                <b>ตัวอย่างตามค่าที่ตั้งไว้:</b> ผู้ฝากเพิ่มรายการที่ 6 → เก็บค่าทำข้อมูล {{ listingFeeLabel }} · เมื่อรายการนั้นขายได้เกิน {{ waiveQty }} ชิ้น ระบบคืนเงินเข้าสมุดคู่ฝากอัตโนมัติ
+              </div>
+            </section>
+
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <div style="padding:16px 20px;border-bottom:1px solid var(--border,#e2e7f0)">
+                <h2 style="margin:0;font-size:16px;font-weight:700">สิทธิ์การใช้งานตามบทบาท</h2>
+              </div>
+              <div style="overflow:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:13.5px;min-width:620px">
+                  <thead>
+                    <tr style="background:var(--surface2,#f8fafc);color:var(--muted,#64748b);text-align:left">
+                      <th style="padding:10px 20px;font-weight:600;font-size:12px">บทบาท</th>
+                      <th style="padding:10px 12px;font-weight:600;font-size:12px">สิ่งที่ทำได้</th>
+                      <th style="padding:10px 20px;font-weight:600;font-size:12px;text-align:right">ผู้ใช้</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <sc-for list="{{ roleRows }}" as="r" hint-placeholder-count="5">
+                      <tr style="border-top:1px solid var(--border,#e2e7f0)">
+                        <td style="padding:11px 20px;font-weight:600">{{ r.role }}</td>
+                        <td style="padding:11px 12px;color:var(--muted,#64748b)">{{ r.can }}</td>
+                        <td style="padding:11px 20px;text-align:right;font-variant-numeric:tabular-nums">{{ r.n }}</td>
+                      </tr>
+                    </sc-for>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <aside style="position:sticky;top:88px;display:flex;flex-direction:column;gap:14px">
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h3 style="margin:0 0 12px;font-size:14.5px;font-weight:700">ทดลองคำนวณราคาขาย</h3>
+              <label style="display:flex;flex-direction:column;gap:6px;font-size:12.5px;font-weight:600">ราคาที่ผู้ฝากต้องการได้ (บาท)
+                <input value="{{ simCost }}" onInput="{{ onSimCost }}" type="number" step="0.25" style="border:1px solid var(--border,#d6dce8);background:var(--surface2,#fbfcfe);color:inherit;border-radius:9px;padding:10px 12px;font-size:15px;font-weight:600;outline:none;font-variant-numeric:tabular-nums" style-focus="border-color:#1552d1">
+              </label>
+              <div style="margin-top:13px;display:flex;flex-direction:column;gap:8px;font-size:13px">
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">ค่าฝากขาย</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ sim.fee }}</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">ราคาก่อนปัด</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ sim.raw }}</span></div>
+                <div style="display:flex;justify-content:space-between"><span style="color:var(--muted,#64748b)">เศษปัดขึ้นเข้าร้าน</span><span style="font-weight:600;font-variant-numeric:tabular-nums">{{ sim.round }}</span></div>
+                <div style="display:flex;justify-content:space-between;padding-top:9px;border-top:1px solid var(--border,#e2e7f0)"><span style="font-weight:700">ราคาติดป้ายขาย</span><span style="font-weight:700;font-size:18px;color:var(--pri,#1552d1);font-variant-numeric:tabular-nums">{{ sim.price }}</span></div>
+              </div>
+            </section>
+            <section style="background:var(--surface,#fff);border:1px solid var(--border,#e2e7f0);border-radius:13px;padding:18px;box-shadow:0 1px 2px rgba(16,24,40,.04)">
+              <h3 style="margin:0 0 10px;font-size:14.5px;font-weight:700">การเปลี่ยนแปลงค่าระบบ</h3>
+              <p style="margin:0 0 12px;font-size:12.5px;color:var(--muted,#64748b);line-height:1.6">ทุกครั้งที่แก้อัตราค่าธรรมเนียม ระบบเก็บประวัติว่าใครแก้ เมื่อไร จากค่าเดิมเป็นค่าใหม่ และไม่ย้อนกลับไปแก้สินค้าที่รับฝากไว้แล้ว</p>
+              <div style="display:flex;flex-direction:column;gap:10px;font-size:12.5px">
+                <sc-for list="{{ auditRows }}" as="a" hint-placeholder-count="3">
+                  <div style="padding-bottom:9px;border-bottom:1px solid var(--border,#eef1f6)">
+                    <div style="font-weight:600">{{ a.what }}</div>
+                    <div style="color:var(--muted,#64748b)">{{ a.who }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+            <button type="button" style="background:var(--pri,#1552d1);color:#fff;border:0;border-radius:10px;padding:13px;font-size:14.5px;font-weight:700;cursor:pointer" style-hover="background:#0e3da1">บันทึกการตั้งค่า</button>
+          </aside>
+        </div>
+      </sc-if>
+
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;role&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;admin&quot;,&quot;manager&quot;,&quot;cashier&quot;],&quot;default&quot;:&quot;admin&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;ผู้ใช้งาน&quot;},&quot;showHints&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;ผู้ใช้งาน&quot;}}">
+const B = "฿";
+const fmt = (n) => B + " " + Number(n).toLocaleString("th-TH", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmt0 = (n) => Number(n).toLocaleString("th-TH");
+
+const CONSIGNORS = [
+  {id:"C-001", name:"นางสาวกมลวรรณ ศรีสุข", type:"นักเรียน ปวช.2 การบัญชี", phone:"081-234-5678", joined:"12 พ.ค. 69", items:7, sold:1240, balance:1284.50, status:"ปกติ", pay:"พร้อมเพย์ 081-234-5678"},
+  {id:"C-002", name:"นายธนากร พลเยี่ยม", type:"ครู แผนกช่างยนต์", phone:"089-455-1120", joined:"20 พ.ค. 69", items:4, sold:860, balance:640.00, status:"ปกติ", pay:"เงินสดที่เคาน์เตอร์"},
+  {id:"C-003", name:"นางบุญเรือน สุวรรณไตร", type:"ชุมชน / ผู้ปกครอง", phone:"093-772-8841", joined:"3 มิ.ย. 69", items:12, sold:3410, balance:3120.75, status:"ปกติ", pay:"โอนธนาคาร ธ.ก.ส."},
+  {id:"C-004", name:"นายอภิสิทธิ์ วงศ์อามาตย์", type:"นักเรียน ปวส.1 การตลาด", phone:"082-119-6633", joined:"11 มิ.ย. 69", items:3, sold:190, balance:85.00, status:"ปกติ", pay:"เงินสดที่เคาน์เตอร์"},
+  {id:"C-005", name:"ร้านขนมป้าน้อย", type:"ชุมชน / ร้านค้าภายนอก", phone:"095-201-4477", joined:"2 ก.ค. 69", items:9, sold:2180, balance:2470.00, status:"ปกติ", pay:"พร้อมเพย์ 095-201-4477"},
+  {id:"C-006", name:"นางสาวปิยะฉัตร มูลตรีภักดี", type:"นักเรียน ปวช.3 คอมพิวเตอร์", phone:"098-664-2231", joined:"18 ส.ค. 69", items:2, sold:0, balance:0, status:"รอตรวจสอบเอกสาร", pay:"พร้อมเพย์ 098-664-2231"}
+];
+
+const PRODUCTS = {
+  "C-001": [
+    {name:"ขนมทองม้วนสมุนไพร 80 ก.", cost:23, price:25, stock:36, sold:142, expiry:"2569-09-30"},
+    {name:"น้ำพริกปลาร้าบอง กระปุกเล็ก", cost:38, price:40, stock:12, sold:88, expiry:"2569-09-05"},
+    {name:"คุกกี้สิงคโปร์ ถุงใหญ่", cost:43, price:45, stock:8, sold:61, expiry:"2569-11-12"},
+    {name:"น้ำสมุนไพรอัญชันมะนาว", cost:13, price:15, stock:24, sold:210, expiry:"2569-08-26"}
+  ],
+  "C-002": [
+    {name:"พวงกุญแจงานเชื่อมโลหะ", cost:48, price:50, stock:18, sold:32, expiry:""},
+    {name:"ที่วางโทรศัพท์งานกลึง", cost:78, price:80, stock:6, sold:14, expiry:""}
+  ],
+  "C-003": [
+    {name:"ข้าวเกรียบว่าวร้อยเอ็ด", cost:18, price:20, stock:52, sold:430, expiry:"2569-12-01"},
+    {name:"กล้วยฉาบเนยสด", cost:23, price:25, stock:31, sold:388, expiry:"2569-09-14"},
+    {name:"ผ้าขาวม้าทอมือ", cost:148, price:150, stock:9, sold:22, expiry:""}
+  ],
+  "C-004": [
+    {name:"สายคล้องบัตรงานปริ๊นต์", cost:33, price:35, stock:14, sold:41, expiry:""}
+  ],
+  "C-005": [
+    {name:"ขนมเปียกปูนกะทิสด", cost:13, price:15, stock:20, sold:512, expiry:"2569-08-23"},
+    {name:"ขนมชั้นใบเตย 6 ชิ้น", cost:23, price:25, stock:16, sold:340, expiry:"2569-08-22"}
+  ],
+  "C-006": [
+    {name:"สติกเกอร์ลายวิทยาลัย", cost:8, price:10, stock:40, sold:0, expiry:""}
+  ]
+};
+
+const LEDGERS = {
+  "C-001": [
+    {date:"1 ส.ค. 69", desc:"ยอดยกมา", ref:"ยกมาจากเดือนกรกฎาคม", in:0, out:0, bal:412.00},
+    {date:"5 ส.ค. 69", desc:"ขายสินค้า 4 รายการ 62 ชิ้น", ref:"SL-690805-014", in:1490.00, out:0, bal:1902.00},
+    {date:"5 ส.ค. 69", desc:"หักค่าฝากขาย 62 ชิ้น + เศษปัด", ref:"FEE-690805-014", in:0, out:139.50, bal:1762.50},
+    {date:"9 ส.ค. 69", desc:"ค่าทำข้อมูลรายการที่ 6-7", ref:"LF-690809-002", in:0, out:10.00, bal:1752.50},
+    {date:"12 ส.ค. 69", desc:"เบิกเงินสดที่เคาน์เตอร์", ref:"WD-690812-007 · อรทัย ม.", in:0, out:800.00, bal:952.50},
+    {date:"16 ส.ค. 69", desc:"ขายสินค้า 3 รายการ 28 ชิ้น", ref:"SL-690816-031", in:645.00, out:0, bal:1597.50},
+    {date:"16 ส.ค. 69", desc:"หักค่าฝากขาย 28 ชิ้น + เศษปัด", ref:"FEE-690816-031", in:0, out:68.00, bal:1529.50},
+    {date:"19 ส.ค. 69", desc:"คืนค่าทำข้อมูล (ขายได้เกิน 20 ชิ้น)", ref:"LFR-690819-001", in:5.00, out:0, bal:1534.50},
+    {date:"20 ส.ค. 69", desc:"เบิกเงินโอนพร้อมเพย์", ref:"WD-690820-011", in:0, out:250.00, bal:1284.50}
+  ]
+};
+const DEFAULT_LEDGER = (c) => [
+  {date:"1 ส.ค. 69", desc:"ยอดยกมา", ref:"ยกมาจากเดือนกรกฎาคม", in:0, out:0, bal:0},
+  {date:"8 ส.ค. 69", desc:"ขายสินค้าประจำสัปดาห์", ref:"SL-690808-006", in:c.balance * 0.72, out:0, bal:c.balance * 0.72},
+  {date:"8 ส.ค. 69", desc:"หักค่าฝากขาย + เศษปัด", ref:"FEE-690808-006", in:0, out:c.balance * 0.09, bal:c.balance * 0.63},
+  {date:"18 ส.ค. 69", desc:"ขายสินค้าประจำสัปดาห์", ref:"SL-690818-022", in:c.balance * 0.41, out:0, bal:c.balance * 1.04},
+  {date:"18 ส.ค. 69", desc:"หักค่าฝากขาย + เศษปัด", ref:"FEE-690818-022", in:0, out:c.balance * 0.04, bal:c.balance}
+];
+
+const COUNT_BASE = [
+  {name:"ขนมทองม้วนสมุนไพร 80 ก.", owner:"กมลวรรณ ศรีสุข", system:36, counted:36, price:25, note:""},
+  {name:"น้ำสมุนไพรอัญชันมะนาว", owner:"กมลวรรณ ศรีสุข", system:24, counted:22, price:15, note:"สงสัยแตกเสียหาย 2 ขวด"},
+  {name:"ข้าวเกรียบว่าวร้อยเอ็ด", owner:"บุญเรือน สุวรรณไตร", system:52, counted:52, price:20, note:""},
+  {name:"กล้วยฉาบเนยสด", owner:"บุญเรือน สุวรรณไตร", system:31, counted:33, price:25, note:"ผู้ฝากอาจเติมของเองไม่แจ้ง"},
+  {name:"ขนมเปียกปูนกะทิสด", owner:"ร้านขนมป้าน้อย", system:20, counted:20, price:15, note:""},
+  {name:"พวงกุญแจงานเชื่อมโลหะ", owner:"ธนากร พลเยี่ยม", system:18, counted:18, price:50, note:""}
+];
+
+const REPORTS = {
+  receive: {
+    title: "รายงานรายการรับของฝากขาย",
+    cols: ["วันที่", "เลขที่ใบรับฝาก", "ผู้ฝากขาย", "รายการ", "จำนวน (ชิ้น)", "มูลค่าขาย"],
+    rows: [
+      ["19 ส.ค. 69", "RC-690819-018", "นางบุญเรือน สุวรรณไตร", "3 รายการ", "180", "3,750.00"],
+      ["19 ส.ค. 69", "RC-690819-019", "ร้านขนมป้าน้อย", "2 รายการ", "60", "1,200.00"],
+      ["20 ส.ค. 69", "RC-690820-020", "นางสาวกมลวรรณ ศรีสุข", "4 รายการ", "96", "2,280.00"],
+      ["20 ส.ค. 69", "RC-690820-021", "นายธนากร พลเยี่ยม", "1 รายการ", "12", "600.00"],
+      ["21 ส.ค. 69", "RC-690821-022", "นางสาวปิยะฉัตร มูลตรีภักดี", "2 รายการ", "80", "800.00"]
+    ],
+    foot: ["รวม", "5 ใบ", "5 ราย", "12 รายการ", "428", "8,630.00"]
+  },
+  ret: {
+    title: "รายงานรายการคืนของฝากขาย",
+    cols: ["วันที่", "เลขที่ใบคืน", "ผู้ฝากขาย", "สาเหตุ", "จำนวน (ชิ้น)", "มูลค่าขาย"],
+    rows: [
+      ["17 ส.ค. 69", "RT-690817-006", "ร้านขนมป้าน้อย", "ใกล้หมดอายุ", "18", "270.00"],
+      ["18 ส.ค. 69", "RT-690818-007", "นายอภิสิทธิ์ วงศ์อามาตย์", "ผู้ฝากขอรับคืน", "9", "315.00"],
+      ["20 ส.ค. 69", "RT-690820-008", "นางสาวกมลวรรณ ศรีสุข", "ขายไม่หมดตามรอบ", "12", "300.00"]
+    ],
+    foot: ["รวม", "3 ใบ", "3 ราย", "—", "39", "885.00"]
+  },
+  sales: {
+    title: "รายงานสรุปยอดการขายของฝากขาย",
+    cols: ["ผู้ฝากขาย", "จำนวนรายการ", "ขายได้ (ชิ้น)", "ยอดขายรวม", "ค่าฝาก + เศษปัด", "ผู้ฝากได้รับ"],
+    rows: [
+      ["นางบุญเรือน สุวรรณไตร", "12", "418", "9,240.00", "962.00", "8,278.00"],
+      ["ร้านขนมป้าน้อย", "9", "356", "5,880.00", "784.50", "5,095.50"],
+      ["นางสาวกมลวรรณ ศรีสุข", "7", "212", "4,930.00", "487.00", "4,443.00"],
+      ["นายธนากร พลเยี่ยม", "4", "46", "2,540.00", "112.00", "2,428.00"],
+      ["นายอภิสิทธิ์ วงศ์อามาตย์", "3", "28", "980.00", "62.00", "918.00"]
+    ],
+    foot: ["รวม 5 ราย", "35", "1,060", "23,570.00", "2,407.50", "21,162.50"]
+  },
+  detail: {
+    title: "รายงานรายละเอียดการขายของฝากขาย (รายผู้ฝาก)",
+    cols: ["สินค้า", "ราคาขาย", "ขายได้ (ชิ้น)", "ยอดขาย", "ค่าฝาก", "คงเหลือในร้าน"],
+    rows: [
+      ["ขนมทองม้วนสมุนไพร 80 ก.", "25.00", "142", "3,550.00", "284.00", "36"],
+      ["น้ำสมุนไพรอัญชันมะนาว", "15.00", "210", "3,150.00", "420.00", "24"],
+      ["น้ำพริกปลาร้าบอง กระปุกเล็ก", "40.00", "88", "3,520.00", "176.00", "12"],
+      ["คุกกี้สิงคโปร์ ถุงใหญ่", "45.00", "61", "2,745.00", "122.00", "8"]
+    ],
+    foot: ["รวม 4 รายการ", "—", "501", "12,965.00", "1,002.00", "80"]
+  },
+  fee: {
+    title: "รายงานรายได้ค่าธรรมเนียมของร้าน",
+    cols: ["วันที่", "ค่าฝากขาย", "เศษปัดขึ้น", "ค่าทำข้อมูล", "คืนค่าทำข้อมูล", "รายได้สุทธิ"],
+    rows: [
+      ["17 ส.ค. 69", "402.00", "48.50", "15.00", "-5.00", "460.50"],
+      ["18 ส.ค. 69", "376.00", "44.00", "10.00", "0.00", "430.00"],
+      ["19 ส.ค. 69", "418.00", "51.50", "20.00", "-10.00", "479.50"],
+      ["20 ส.ค. 69", "444.00", "56.00", "5.00", "0.00", "505.00"],
+      ["21 ส.ค. 69", "428.00", "58.50", "10.00", "-5.00", "491.50"]
+    ],
+    foot: ["รวม 5 วัน", "2,068.00", "258.50", "60.00", "-20.00", "2,366.50"]
+  }
+};
+
+const DARK = {
+  "--bg":"#0c1220", "--surface":"#141c2d", "--surface2":"#1b2437", "--border":"#2a3550",
+  "--text":"#e8edf7", "--muted":"#96a3bd", "--pri":"#5d95ff", "--priBorder":"#2d4a7d",
+  "--soft":"#16233c", "--sidebar":"#0a1730", "--hover":"#1b2437"
+};
+const LIGHT = {
+  "--bg":"#f3f5fa", "--surface":"#ffffff", "--surface2":"#f8fafc", "--border":"#e2e7f0",
+  "--text":"#111827", "--muted":"#64748b", "--pri":"#1552d1", "--priBorder":"#c7dafc",
+  "--soft":"#eef3fd", "--sidebar":"#0f2f6b", "--hover":"#f6f8fd"
+};
+
+const PAGES = {
+  dash: ["หน้าแรก", "แดชบอร์ดภาพรวม"],
+  consignors: ["ผู้ฝากขาย", "ทะเบียนผู้ฝากขาย"],
+  receive: ["งานประจำวัน", "รับฝากสินค้าเข้าร้าน"],
+  ret: ["งานประจำวัน", "คืนสินค้าให้ผู้ฝากขาย"],
+  passbook: ["ผู้ฝากขาย", "สมุดบัญชีผู้ฝากขาย"],
+  withdraw: ["ผู้ฝากขาย", "เบิกเงิน / จ่ายเงินผู้ฝากขาย"],
+  count: ["งานประจำวัน", "ตรวจนับสต๊อกสินค้าฝากขาย"],
+  reports: ["รายงานและระบบ", "รายงานสรุป"],
+  settings: ["รายงานและระบบ", "ตั้งค่าระบบฝากขาย"]
+};
+
+class Component extends DCLogic {
+  state = {
+    theme: "auto",
+    sysDark: false,
+    screen: "dash",
+    selectedId: "C-001",
+    search: "",
+    showRegister: false,
+    scan: "",
+    draft: {name:"", cost:"", qty:"", expiry:""},
+    cart: [
+      {name:"ขนมดอกจอกงาดำ ถุง 100 ก.", cost:18, qty:40, expiry:"2569-10-15", free:false},
+      {name:"ชาสมุนไพรใบหม่อน 10 ซอง", cost:48, qty:15, expiry:"2570-02-01", free:false}
+    ],
+    counts: COUNT_BASE.map(r => r.counted),
+    returns: {},
+    wdAmount: "500",
+    wdMethod: "เงินสดที่เคาน์เตอร์",
+    report: "receive",
+    preset: "7 วันล่าสุด",
+    dateFrom: "2569-08-15",
+    dateTo: "2569-08-21",
+    feeMode: "fixed",
+    feeFixed: 2,
+    feePercent: 10,
+    listingFee: 5,
+    freeListings: 5,
+    waiveQty: 20,
+    simCost: "23"
+  };
+
+  componentDidMount() {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    this._mq = mq;
+    this._onMq = (e) => this.setState({sysDark: e.matches});
+    mq.addEventListener("change", this._onMq);
+    this.setState({sysDark: mq.matches}, () => this.applyTheme());
+    this.applyTheme();
+  }
+  componentDidUpdate() { this.applyTheme(); }
+  componentWillUnmount() { if (this._mq) this._mq.removeEventListener("change", this._onMq); }
+
+  isDark() {
+    const t = this.state.theme;
+    return t === "dark" || (t === "auto" && this.state.sysDark);
+  }
+  applyTheme() {
+    const dark = this.isDark();
+    const vars = dark ? DARK : LIGHT;
+    const root = document.documentElement;
+    Object.keys(vars).forEach(k => root.style.setProperty(k, vars[k]));
+    root.style.setProperty("color-scheme", dark ? "dark" : "light");
+    document.body.style.background = vars["--bg"];
+    document.body.style.color = vars["--text"];
+  }
+
+  feeFor(cost) {
+    return this.state.feeMode === "fixed"
+      ? Number(this.state.feeFixed) || 0
+      : (Number(cost) || 0) * (Number(this.state.feePercent) || 0) / 100;
+  }
+  priceFor(cost) {
+    const raw = (Number(cost) || 0) + this.feeFor(cost);
+    const price = Math.ceil(raw - 1e-9);
+    return {raw, price, round: price - raw, fee: this.feeFor(cost)};
+  }
+
+  navBtn(key) {
+    const on = this.state.screen === key;
+    return "display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:10px 11px;border:0;border-radius:9px;cursor:pointer;font-size:14px;font-weight:" +
+      (on ? "600" : "500") + ";font-family:inherit;background:" + (on ? "rgba(255,255,255,.16)" : "transparent") +
+      ";color:" + (on ? "#fff" : "rgba(255,255,255,.78)") + ";box-shadow:" + (on ? "inset 3px 0 0 #9dc0ff" : "none");
+  }
+  chip(on) {
+    return "border-radius:9px;padding:10px 15px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid " +
+      (on ? "var(--pri,#1552d1)" : "var(--border,#d6dce8)") + ";background:" + (on ? "var(--pri,#1552d1)" : "transparent") +
+      ";color:" + (on ? "#fff" : "var(--text,#111827)");
+  }
+  pill(bg, fg) {
+    return "display:inline-block;background:" + bg + ";color:" + fg + ";border-radius:99px;padding:3px 10px;font-size:12px;font-weight:600";
+  }
+  go(screen) { return () => this.setState({screen}); }
+
+  renderVals() {
+    const s = this.state;
+    const dark = this.isDark();
+    const sel = CONSIGNORS.find(c => c.id === s.selectedId) || CONSIGNORS[0];
+    const selProducts = PRODUCTS[sel.id] || [];
+    const feeLabel = s.feeMode === "fixed"
+      ? fmt0(s.feeFixed) + " บาท/ชิ้น"
+      : fmt0(s.feePercent) + "% ของราคาผู้ฝาก";
+
+    // receiving
+    const calc = this.priceFor(s.draft.cost === "" ? 0 : s.draft.cost);
+    const freeLeft = Math.max(0, Number(s.freeListings) - sel.items);
+    const cartQty = s.cart.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    const cartValue = s.cart.reduce((a, i) => a + this.priceFor(i.cost).price * (Number(i.qty) || 0), 0);
+    let freeBudget = freeLeft;
+    const cart = s.cart.map((i, idx) => {
+      const p = this.priceFor(i.cost);
+      const isFree = freeBudget > 0;
+      if (isFree) freeBudget -= 1;
+      return {
+        name: i.name,
+        meta: (i.expiry ? "หมดอายุ " + i.expiry + " · " : "") + "รายการที่ " + (sel.items + idx + 1),
+        cost: fmt(i.cost), price: fmt(p.price), qty: fmt0(i.qty),
+        feeLabel: isFree ? "ยกเว้น" : fmt(s.listingFee),
+        feeStyle: isFree ? this.pill(dark ? "#123324" : "#e7f6ec", dark ? "#7fe0a5" : "#0f8a4d") : this.pill(dark ? "#33280f" : "#fff4e0", dark ? "#f0c674" : "#8a5a00"),
+        remove: () => this.setState(st => ({cart: st.cart.filter((_, j) => j !== idx)}))
+      };
+    });
+    const chargedListings = Math.max(0, s.cart.length - freeLeft);
+    const waivedCount = Math.min(s.cart.length, freeLeft);
+
+    // returns
+    const returnRows = selProducts.map((p, idx) => {
+      const key = sel.id + ":" + idx;
+      const q = s.returns[key] === undefined ? "" : s.returns[key];
+      const near = p.expiry && p.expiry <= "2569-09-01";
+      return {
+        name: p.name, price: fmt(p.price), sold: fmt0(p.sold), stock: fmt0(p.stock),
+        expiry: p.expiry || "—",
+        expStyle: near ? this.pill(dark ? "#3a1f1f" : "#fdeeee", dark ? "#ff9c9c" : "#c22b2b") : "color:var(--muted,#64748b)",
+        qty: q,
+        onQty: (e) => {
+          const v = e.target.value;
+          this.setState(st => ({returns: Object.assign({}, st.returns, {[key]: v})}));
+        },
+        onAll: () => this.setState(st => ({returns: Object.assign({}, st.returns, {[key]: String(p.stock)})}))
+      };
+    });
+    let retQty = 0, retValue = 0, retLines = 0;
+    selProducts.forEach((p, idx) => {
+      const v = Number(s.returns[sel.id + ":" + idx]) || 0;
+      if (v > 0) { retLines += 1; retQty += v; retValue += v * p.price; }
+    });
+
+    // withdraw
+    const wd = Number(s.wdAmount) || 0;
+    const wdOver = wd > sel.balance;
+    const withdrawals = [
+      {name:"นางบุญเรือน สุวรรณไตร", meta:"21 ส.ค. 69 09:14 · โอนธนาคาร ธ.ก.ส.", amount: fmt(1500), status:"รออนุมัติ", pending:true},
+      {name:"นางสาวปิยะฉัตร มูลตรีภักดี", meta:"21 ส.ค. 69 08:40 · พร้อมเพย์", amount: fmt(300), status:"รออนุมัติ", pending:true},
+      {name:"นางสาวกมลวรรณ ศรีสุข", meta:"20 ส.ค. 69 15:22 · พร้อมเพย์", amount: fmt(250), status:"จ่ายแล้ว", pending:false},
+      {name:"ร้านขนมป้าน้อย", meta:"19 ส.ค. 69 16:05 · เงินสด", amount: fmt(2000), status:"จ่ายแล้ว", pending:false},
+      {name:"นายอภิสิทธิ์ วงศ์อามาตย์", meta:"18 ส.ค. 69 12:31 · เงินสด", amount: fmt(120), status:"ยกเลิกโดยผู้ฝาก", pending:false}
+    ].map(w => Object.assign({}, w, {
+      statusStyle: "font-size:11.5px;font-weight:600;margin-top:2px;color:" +
+        (w.status === "รออนุมัติ" ? (dark ? "#f0c674" : "#8a5a00") : w.status === "จ่ายแล้ว" ? (dark ? "#7fe0a5" : "#0f8a4d") : "var(--muted,#64748b)")
+    }));
+
+    // stock count
+    const countRows = COUNT_BASE.map((r, idx) => {
+      const counted = s.counts[idx];
+      const diff = (counted === "" ? 0 : Number(counted)) - r.system;
+      const bad = diff !== 0;
+      return {
+        name: r.name, owner: r.owner, system: fmt0(r.system), counted,
+        diff: diff === 0 ? "ตรง" : (diff > 0 ? "เกิน +" + diff : "ขาด " + diff),
+        diffStyle: diff === 0
+          ? this.pill(dark ? "#123324" : "#e7f6ec", dark ? "#7fe0a5" : "#0f8a4d")
+          : this.pill(dark ? "#3a1f1f" : "#fdeeee", dark ? "#ff9c9c" : "#c22b2b"),
+        rowStyle: "border-top:1px solid var(--border,#e2e7f0);background:" + (bad ? (dark ? "rgba(255,120,120,.07)" : "#fffafa") : "transparent"),
+        note: r.note || "—",
+        onInput: (e) => {
+          const v = e.target.value;
+          this.setState(st => { const c = st.counts.slice(); c[idx] = v; return {counts: c}; });
+        }
+      };
+    });
+    const diffs = countRows.filter(r => r.diff !== "ตรง");
+    const diffValue = COUNT_BASE.reduce((a, r, i) => a + ((Number(s.counts[i]) || 0) - r.system) * r.price, 0);
+
+    // ledger
+    const rawLedger = LEDGERS[sel.id] || DEFAULT_LEDGER(sel);
+    const ledger = rawLedger.map(l => ({
+      date: l.date, desc: l.desc, ref: l.ref,
+      in: l.in ? fmt(l.in) : "—", out: l.out ? fmt(l.out) : "—", bal: fmt(l.bal)
+    }));
+
+    // reports
+    const rep = REPORTS[s.report];
+    const cellStyle = (i, n) => "padding:11px " + (i === 0 ? "20px" : i === n - 1 ? "20px" : "12px") + ";text-align:" + (i >= 3 ? "right" : "left") + ";font-variant-numeric:tabular-nums" + (i === 0 ? ";font-weight:500" : "");
+    const reportCols = rep.cols.map((label, i) => ({
+      label,
+      style: "padding:11px " + (i === 0 ? "20px" : "12px") + ";font-weight:600;font-size:12px;text-align:" + (i >= 3 ? "right" : "left") + ";white-space:nowrap"
+    }));
+    const reportRows = rep.rows.map(cells => ({
+      cells: cells.map((v, i) => ({v, style: cellStyle(i, cells.length)}))
+    }));
+    const reportFoot = rep.foot.map((v, i) => ({
+      v, style: cellStyle(i, rep.foot.length) + ";font-weight:700;padding-top:13px;padding-bottom:13px"
+    }));
+
+    const sim = this.priceFor(s.simCost === "" ? 0 : s.simCost);
+
+    const topRaw = [
+      {name:"ขนมเปียกปูนกะทิสด", qty:186}, {name:"น้ำสมุนไพรอัญชันมะนาว", qty:154},
+      {name:"ข้าวเกรียบว่าวร้อยเอ็ด", qty:132}, {name:"กล้วยฉาบเนยสด", qty:98},
+      {name:"ขนมทองม้วนสมุนไพร", qty:64}
+    ];
+
+    return {
+      // theme + chrome
+      themeLabel: s.theme === "auto" ? "ตามระบบ" : s.theme === "dark" ? "โหมดมืด" : "โหมดสว่าง",
+      themeIcon: s.theme === "auto" ? "◐" : s.theme === "dark" ? "☾" : "☀",
+      cycleTheme: () => this.setState(st => ({theme: st.theme === "auto" ? "light" : st.theme === "light" ? "dark" : "auto"})),
+      today: "21 สิงหาคม 2569",
+      roleLabel: this.props.role === "cashier" ? "พนักงานขาย (นักเรียน)" : this.props.role === "manager" ? "ผู้จัดการร้าน" : "ผู้ดูแลระบบ",
+      canAdmin: (this.props.role ?? "admin") !== "cashier",
+      hints: this.props.showHints ?? true,
+      crumb: (PAGES[s.screen] || PAGES.dash)[0],
+      pageTitle: (PAGES[s.screen] || PAGES.dash)[1],
+      doPrint: () => window.print(),
+
+      navStyle: {
+        dash: this.navBtn("dash"), receive: this.navBtn("receive"), ret: this.navBtn("ret"),
+        count: this.navBtn("count"), consignors: this.navBtn("consignors"),
+        passbook: this.navBtn("passbook"), withdraw: this.navBtn("withdraw"),
+        reports: this.navBtn("reports"), settings: this.navBtn("settings")
+      },
+      badgeStyle: this.pill("#c22b2b", "#fff") + ";margin-left:auto",
+      badgeStyle2: this.pill("#e8a33d", "#3a2400") + ";margin-left:auto",
+      goDash: this.go("dash"), goReceive: this.go("receive"), goReturn: this.go("ret"),
+      goCount: this.go("count"), goConsignors: this.go("consignors"),
+      goPassbook: this.go("passbook"), goWithdraw: this.go("withdraw"),
+      goReports: this.go("reports"), goSettings: this.go("settings"),
+      isDash: s.screen === "dash", isConsignors: s.screen === "consignors",
+      isReceive: s.screen === "receive", isReturn: s.screen === "ret",
+      isPassbook: s.screen === "passbook", isWithdraw: s.screen === "withdraw",
+      isCount: s.screen === "count", isReports: s.screen === "reports",
+      isSettings: s.screen === "settings",
+
+      feeLabel, listingFeeLabel: fmt0(s.listingFee) + " บาท",
+      pendingCount: 2, diffCount: diffs.length,
+
+      // dashboard
+      alerts: [
+        {title:"ตรวจนับสต๊อกพบผลต่าง " + diffs.length + " รายการ", detail:"น้ำสมุนไพรอัญชันมะนาว ขาด 2 ขวด · กล้วยฉาบเนยสด เกิน 2 ถุง", action:"ดูใบตรวจนับ", onClick:this.go("count"), dot:"width:10px;height:10px;border-radius:50%;background:#c22b2b;margin-top:6px;flex:none"},
+        {title:"คำขอเบิกเงินรออนุมัติ 2 รายการ", detail:"บุญเรือน สุวรรณไตร " + fmt(1500) + " · ปิยะฉัตร มูลตรีภักดี " + fmt(300), action:"ไปอนุมัติ", onClick:this.go("withdraw"), dot:"width:10px;height:10px;border-radius:50%;background:#e8a33d;margin-top:6px;flex:none"},
+        {title:"สินค้าใกล้หมดอายุภายใน 7 วัน 3 รายการ", detail:"ขนมชั้นใบเตย (22 ส.ค.) · ขนมเปียกปูน (23 ส.ค.) · น้ำอัญชัน (26 ส.ค.)", action:"เตรียมคืนของ", onClick:this.go("ret"), dot:"width:10px;height:10px;border-radius:50%;background:#e8a33d;margin-top:6px;flex:none"},
+        {title:"ผู้สมัครใหม่รอตรวจสอบเอกสาร 1 ราย", detail:"ปิยะฉัตร มูลตรีภักดี · ยังไม่แนบสำเนาบัตรประชาชน", action:"ดูทะเบียน", onClick:this.go("consignors"), dot:"width:10px;height:10px;border-radius:50%;background:#1552d1;margin-top:6px;flex:none"},
+        {title:"สินค้าค้างสต๊อกเกิน 30 วัน 4 รายการ", detail:"ควรแนะนำผู้ฝากลดราคาหรือรับคืน", action:"ดูรายงาน", onClick:this.go("reports"), dot:"width:10px;height:10px;border-radius:50%;background:#94a3b8;margin-top:6px;flex:none"}
+      ],
+      recentSales: [
+        {time:"14:52", name:"ขนมเปียกปูนกะทิสด", owner:"ร้านขนมป้าน้อย", qty:"4", total: fmt(60)},
+        {time:"14:39", name:"น้ำสมุนไพรอัญชันมะนาว", owner:"กมลวรรณ ศรีสุข", qty:"6", total: fmt(90)},
+        {time:"14:21", name:"ข้าวเกรียบว่าวร้อยเอ็ด", owner:"บุญเรือน สุวรรณไตร", qty:"3", total: fmt(60)},
+        {time:"13:58", name:"กล้วยฉาบเนยสด", owner:"บุญเรือน สุวรรณไตร", qty:"2", total: fmt(50)},
+        {time:"13:40", name:"ขนมทองม้วนสมุนไพร 80 ก.", owner:"กมลวรรณ ศรีสุข", qty:"1", total: fmt(25)},
+        {time:"13:12", name:"พวงกุญแจงานเชื่อมโลหะ", owner:"ธนากร พลเยี่ยม", qty:"1", total: fmt(50)}
+      ],
+      topSellers: topRaw.map(p => ({
+        name: p.name, qty: fmt0(p.qty),
+        bar: "height:100%;border-radius:99px;background:var(--pri,#1552d1);width:" + Math.round(p.qty / topRaw[0].qty * 100) + "%"
+      })),
+
+      // consignors
+      search: s.search,
+      onSearch: (e) => this.setState({search: e.target.value}),
+      showRegister: s.showRegister,
+      toggleRegister: () => this.setState(st => ({showRegister: !st.showRegister})),
+      consignorRows: CONSIGNORS.filter(c => {
+        const q = s.search.trim();
+        return !q || (c.name + c.id + c.phone).indexOf(q) >= 0;
+      }).map(c => ({
+        code: c.id, name: c.name, phone: c.phone, joined: c.joined, type: c.type,
+        items: fmt0(c.items), soldTotal: fmt(c.sold), balance: fmt(c.balance), status: c.status,
+        statusStyle: c.status === "ปกติ"
+          ? this.pill(dark ? "#123324" : "#e7f6ec", dark ? "#7fe0a5" : "#0f8a4d")
+          : this.pill(dark ? "#33280f" : "#fff4e0", dark ? "#f0c674" : "#8a5a00"),
+        openPassbook: () => this.setState({selectedId: c.id, screen: "passbook"})
+      })),
+      consignorCount: CONSIGNORS.filter(c => {
+        const q = s.search.trim();
+        return !q || (c.name + c.id + c.phone).indexOf(q) >= 0;
+      }).length,
+
+      // shared selection
+      selectedId: s.selectedId,
+      onSelectConsignor: (e) => this.setState({selectedId: e.target.value}),
+      consignorOptions: CONSIGNORS.map(c => ({id: c.id, label: c.id + " · " + c.name})),
+      sel: {
+        name: sel.name, code: sel.id, type: sel.type, pay: sel.pay,
+        items: fmt0(sel.items), balance: fmt(sel.balance)
+      },
+      selProducts: selProducts.map(p => ({
+        name: p.name, price: fmt(p.price), stock: fmt0(p.stock), sold: fmt0(p.sold)
+      })),
+
+      // receiving
+      scan: s.scan,
+      onScan: (e) => this.setState({scan: e.target.value}),
+      draft: s.draft,
+      onDraftName: (e) => { const v = e.target.value; this.setState(st => ({draft: Object.assign({}, st.draft, {name: v})})); },
+      onDraftCost: (e) => { const v = e.target.value; this.setState(st => ({draft: Object.assign({}, st.draft, {cost: v})})); },
+      onDraftQty: (e) => { const v = e.target.value; this.setState(st => ({draft: Object.assign({}, st.draft, {qty: v})})); },
+      onDraftExpiry: (e) => { const v = e.target.value; this.setState(st => ({draft: Object.assign({}, st.draft, {expiry: v})})); },
+      clearDraft: () => this.setState({draft: {name:"", cost:"", qty:"", expiry:""}, scan: ""}),
+      addItem: () => {
+        const d = this.state.draft;
+        if (!d.name.trim() || !Number(d.cost) || !Number(d.qty)) return;
+        this.setState(st => ({
+          cart: st.cart.concat([{name: d.name.trim(), cost: Number(d.cost), qty: Number(d.qty), expiry: d.expiry}]),
+          draft: {name:"", cost:"", qty:"", expiry:""}, scan: ""
+        }));
+      },
+      calc: {cost: fmt(s.draft.cost || 0), fee: fmt(calc.fee), raw: fmt(calc.raw), price: fmt(calc.price), round: fmt(calc.round)},
+      freeLeft: fmt0(freeLeft),
+      cart, cartEmpty: s.cart.length === 0, cartCount: fmt0(s.cart.length),
+      cartQty: fmt0(cartQty), cartValue: fmt(cartValue),
+      chargedListings: fmt0(chargedListings), listingTotal: fmt(chargedListings * Number(s.listingFee)),
+      waivedTotal: fmt(waivedCount * Number(s.listingFee)),
+      freeListings: fmt0(s.freeListings), waiveQty: fmt0(s.waiveQty),
+
+      // passbook
+      ledger, ledgerCount: fmt0(ledger.length),
+      ledgerIn: fmt(rawLedger.reduce((a, l) => a + l.in, 0)),
+      ledgerOut: fmt(rawLedger.reduce((a, l) => a + l.out, 0)),
+
+      // returns
+      returnRows, retQty: fmt0(retQty), retValue: fmt(retValue), retLines: fmt0(retLines) + " รายการ",
+
+      // withdraw
+      wdAmount: s.wdAmount,
+      onWdAmount: (e) => this.setState({wdAmount: e.target.value}),
+      wdQuick: [100, 500, 1000].map(v => ({label: fmt0(v) + " บาท", onClick: () => this.setState({wdAmount: String(v)})}))
+        .concat([{label: "เบิกทั้งหมด", onClick: () => this.setState({wdAmount: String(sel.balance)})}]),
+      wdOver,
+      payMethods: ["เงินสดที่เคาน์เตอร์", "พร้อมเพย์", "โอนธนาคาร"].map(m => ({
+        label: m, style: this.chip(s.wdMethod === m), onClick: () => this.setState({wdMethod: m})
+      })),
+      wdBtnStyle: "border:0;border-radius:10px;padding:13px;font-size:14.5px;font-weight:700;font-family:inherit;color:#fff;background:" +
+        (wdOver || wd <= 0 ? "#9aa5bd" : "var(--pri,#1552d1)") + ";cursor:" + (wdOver || wd <= 0 ? "not-allowed" : "pointer"),
+      withdrawals,
+
+      // count
+      countRows, countTotal: fmt0(COUNT_BASE.length),
+      countedCount: fmt0(s.counts.filter(c => c !== "").length),
+      diffValue: (diffValue >= 0 ? "+" : "-") + fmt(Math.abs(diffValue)),
+      countBtnStyle: "border:0;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:700;font-family:inherit;color:#fff;background:" +
+        (diffs.length ? "#c22b2b" : "#9aa5bd") + ";cursor:" + (diffs.length ? "pointer" : "not-allowed"),
+
+      // reports
+      reportTabs: [
+        {key:"receive", label:"รายการรับของฝากขาย"},
+        {key:"ret", label:"รายการคืนของฝากขาย"},
+        {key:"sales", label:"สรุปยอดขายของฝากขาย"},
+        {key:"detail", label:"รายละเอียดการขายรายผู้ฝาก"},
+        {key:"fee", label:"รายได้ค่าธรรมเนียมของร้าน"}
+      ].map(r => ({label: r.label, style: this.chip(s.report === r.key), onClick: () => this.setState({report: r.key})})),
+      rangePresets: ["วันนี้", "7 วันล่าสุด", "เดือนนี้", "ภาคเรียนนี้"].map(p => ({
+        label: p,
+        style: "border-radius:8px;padding:9px 13px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid " +
+          (s.preset === p ? "var(--pri,#1552d1)" : "var(--border,#d6dce8)") + ";background:" +
+          (s.preset === p ? "var(--soft,#eef3fd)" : "transparent") + ";color:" + (s.preset === p ? "var(--pri,#1552d1)" : "var(--text,#111827)"),
+        onClick: () => this.setState({preset: p})
+      })),
+      dateFrom: s.dateFrom, dateTo: s.dateTo,
+      onDateFrom: (e) => this.setState({dateFrom: e.target.value, preset: "กำหนดเอง"}),
+      onDateTo: (e) => this.setState({dateTo: e.target.value, preset: "กำหนดเอง"}),
+      reportTitle: rep.title,
+      reportRange: "ช่วงวันที่ 15 – 21 สิงหาคม 2569 · " + s.preset,
+      reportCols, reportRows, reportFoot,
+
+      // settings
+      setFixed: () => this.setState({feeMode: "fixed"}),
+      setPercent: () => this.setState({feeMode: "percent"}),
+      modeFixedStyle: "flex:1;min-width:210px;text-align:left;border-radius:11px;padding:14px 16px;cursor:pointer;font-family:inherit;border:2px solid " +
+        (s.feeMode === "fixed" ? "var(--pri,#1552d1)" : "var(--border,#d6dce8)") + ";background:" +
+        (s.feeMode === "fixed" ? "var(--soft,#eef3fd)" : "transparent") + ";color:var(--text,#111827)",
+      modePercentStyle: "flex:1;min-width:210px;text-align:left;border-radius:11px;padding:14px 16px;cursor:pointer;font-family:inherit;border:2px solid " +
+        (s.feeMode === "percent" ? "var(--pri,#1552d1)" : "var(--border,#d6dce8)") + ";background:" +
+        (s.feeMode === "percent" ? "var(--soft,#eef3fd)" : "transparent") + ";color:var(--text,#111827)",
+      rateLabel: s.feeMode === "fixed" ? "ค่าฝากขาย (บาท/ชิ้น)" : "ค่าฝากขาย (% ของราคาผู้ฝาก)",
+      rateValue: s.feeMode === "fixed" ? s.feeFixed : s.feePercent,
+      onRate: (e) => {
+        const v = e.target.value;
+        this.setState(st => st.feeMode === "fixed" ? {feeFixed: v} : {feePercent: v});
+      },
+      listingFee: s.listingFee, freeListings: s.freeListings, waiveQty: s.waiveQty,
+      onListingFee: (e) => this.setState({listingFee: e.target.value}),
+      onFreeListings: (e) => this.setState({freeListings: e.target.value}),
+      onWaiveQty: (e) => this.setState({waiveQty: e.target.value}),
+      simCost: s.simCost,
+      onSimCost: (e) => this.setState({simCost: e.target.value}),
+      sim: {fee: fmt(sim.fee), raw: fmt(sim.raw), round: fmt(sim.round), price: fmt(sim.price)},
+      roleRows: [
+        {role:"ผู้ดูแลระบบ (Admin)", can:"ตั้งค่าธรรมเนียม สิทธิ์ผู้ใช้ แก้ไขย้อนหลังได้", n:"2 คน"},
+        {role:"ผู้จัดการร้าน", can:"อนุมัติเบิกเงิน อนุมัติผลต่างสต๊อก ดูรายงานทั้งหมด", n:"1 คน"},
+        {role:"ครูที่ปรึกษา", can:"ดูรายงานและสมุดคู่ฝ่ากของผู้ฝากในความดูแล", n:"6 คน"},
+        {role:"พนักงานขาย (นักเรียน)", can:"ขายสินค้า รับฝาก คืนของ ตรวจนับ (ไม่เห็นการตั้งค่า)", n:"14 คน"},
+        {role:"ผู้ฝากขาย", can:"ดูยอดขายและสมุดคู่ฝากของตัวเองผ่าน QR", n:"6 คน"}
+      ],
+      auditRows: [
+        {what:"แก้ค่าฝากขาย 1.50 → 2.00 บาท/ชิ้น", who:"อรทัย มณีวงศ์ · 1 ก.ค. 69 09:12"},
+        {what:"แก้ยกเว้นค่าทำข้อมูล 3 → 5 รายการแรก", who:"อรทัย มณีวงศ์ · 12 มิ.ย. 69 14:40"},
+        {what:"เปิดใช้เงื่อนไขคืนค่าทำข้อมูลเมื่อขายเกิน 20 ชิ้น", who:"สมชาย ภักดีวงศ์ · 3 มิ.ย. 69 10:05"}
+      ]
+    };
+  }
+}
+
+</script>
+</body>
+</html>

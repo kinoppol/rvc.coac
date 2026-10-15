@@ -1,0 +1,125 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services;
+
+use PDO;
+
+class ReportService
+{
+    public function __construct(private PDO $db)
+    {
+    }
+
+    public function receiveLog(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT rd.created_at AS date, rd.doc_no, c.name AS consignor, ri.qty, (ri.sale_price * ri.qty) AS value
+             FROM receive_documents rd
+             JOIN consignors c ON c.id = rd.consignor_id
+             JOIN receive_items ri ON ri.receive_document_id = rd.id
+             WHERE DATE(rd.created_at) BETWEEN ? AND ?
+             ORDER BY rd.created_at ASC'
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    public function returnLog(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT rd.created_at AS date, rd.doc_no, c.name AS consignor, ri.qty, (ri.sale_price * ri.qty) AS value
+             FROM return_documents rd
+             JOIN consignors c ON c.id = rd.consignor_id
+             JOIN return_items ri ON ri.return_document_id = rd.id
+             WHERE DATE(rd.created_at) BETWEEN ? AND ?
+             ORDER BY rd.created_at ASC'
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    public function salesSummaryByConsignor(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT COALESCE(c.name, 'สินค้าของร้าน') AS consignor, COUNT(DISTINCT si.product_id) AS item_count,
+                    SUM(si.qty) AS qty_sold, SUM(si.qty * si.unit_price) AS total_sales,
+                    SUM(si.fee_amount) AS total_fee, SUM(si.cost_amount) AS consignor_received
+             FROM sale_items si
+             JOIN sales s ON s.id = si.sale_id
+             LEFT JOIN consignors c ON c.id = si.consignor_id
+             WHERE DATE(s.sale_datetime) BETWEEN ? AND ?
+             GROUP BY c.id, c.name
+             ORDER BY total_sales DESC"
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    public function saleDetailForConsignor(int $consignorId, string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT p.name, p.sale_price, SUM(si.qty) AS qty_sold, SUM(si.qty * si.unit_price) AS total_sales,
+                    SUM(si.fee_amount) AS total_fee, p.qty_stock
+             FROM sale_items si
+             JOIN sales s ON s.id = si.sale_id
+             JOIN products p ON p.id = si.product_id
+             WHERE si.consignor_id = ? AND DATE(s.sale_datetime) BETWEEN ? AND ?
+             GROUP BY p.id, p.name, p.sale_price, p.qty_stock
+             ORDER BY total_sales DESC'
+        );
+        $stmt->execute([$consignorId, $from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    public function feeRevenue(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT entry_date AS date,
+                    SUM(CASE WHEN type='fee' THEN amount_in ELSE 0 END) AS consignment_fee,
+                    SUM(CASE WHEN type='listing_fee' THEN amount_in ELSE 0 END) AS listing_fee,
+                    SUM(CASE WHEN type='listing_fee_refund' THEN amount_out ELSE 0 END) AS listing_fee_refund
+             FROM ledger_entries
+             WHERE entry_date BETWEEN ? AND ? AND type IN ('fee','listing_fee','listing_fee_refund')
+             GROUP BY entry_date
+             ORDER BY entry_date ASC"
+        );
+        $stmt->execute([$from, $to]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$r) {
+            $r['net_revenue'] = round(
+                (float) $r['consignment_fee'] + (float) $r['listing_fee'] - (float) $r['listing_fee_refund'],
+                2
+            );
+        }
+        return $rows;
+    }
+
+    /** Writes a UTF-8(BOM) CSV that Excel opens directly, for the "ส่งออก Excel" buttons. */
+    public function toCsv(array $rows, array $headers): string
+    {
+        $fh = fopen('php://temp', 'r+');
+        fwrite($fh, "\xEF\xBB\xBF"); // BOM so Excel renders Thai text correctly
+        fputcsv($fh, $headers);
+        foreach ($rows as $row) {
+            fputcsv($fh, $row);
+        }
+        rewind($fh);
+        $csv = stream_get_contents($fh);
+        fclose($fh);
+        return $csv;
+    }
+
+    public static function resolveRange(string $preset, ?string $from, ?string $to): array
+    {
+        $today = new \DateTimeImmutable('today');
+        return match ($preset) {
+            '7d' => [$today->modify('-6 days')->format('Y-m-d'), $today->format('Y-m-d')],
+            'month' => [$today->modify('first day of this month')->format('Y-m-d'), $today->format('Y-m-d')],
+            'term' => [$today->modify('-4 months')->format('Y-m-d'), $today->format('Y-m-d')],
+            'custom' => [$from ?: $today->format('Y-m-d'), $to ?: $today->format('Y-m-d')],
+            default => [$today->format('Y-m-d'), $today->format('Y-m-d')], // today
+        };
+    }
+}

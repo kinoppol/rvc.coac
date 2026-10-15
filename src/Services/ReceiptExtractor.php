@@ -1,0 +1,162 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services;
+
+/**
+ * Reads a Thai short-form tax receipt (ใบเสร็จอย่างย่อ) from one or more
+ * photos with a vision model and returns structured purchase data.
+ * Long receipts are often photographed in several overlapping pieces, so
+ * the images are treated as consecutive parts of a single receipt.
+ */
+class ReceiptExtractor
+{
+    public const INSTRUCTIONS = <<<TXT
+    รูปที่แนบมาคือ "ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ" จากการซื้อสินค้าเข้าร้าน
+    ถ้ามีหลายรูป ให้ถือว่าเป็นใบเสร็จใบเดียวกันที่ถ่ายต่อกันจากบนลงล่างตามลำดับรูป ขอบรูปที่ต่อกันมักถ่ายซ้อนทับกัน
+    ให้ตัดรายการที่ซ้ำจากส่วนที่ซ้อนทับออก (รายการเดียวกัน ราคาเดียวกัน ที่อยู่ท้ายรูปก่อนและต้นรูปถัดไป) แต่ถ้าใบเสร็จพิมพ์สินค้าเดียวกันซ้ำหลายบรรทัดจริง ๆ ให้นับตามจริง
+    อ่านทุกบรรทัดสินค้าให้ครบ: ชื่อสินค้า จำนวน ราคาต่อหน่วย ราคารวมของบรรทัด และบาร์โค้ดถ้ามีพิมพ์ไว้
+    - รูปแบบ "2 @ 15.00" หรือ "2 x 15.00" หมายถึง จำนวน 2 ราคาหน่วยละ 15.00
+    - บรรทัดส่วนลดที่อยู่ใต้สินค้า ให้หักออกจากราคารวมของสินค้านั้น
+    - สินค้าที่ซื้อยกแพ็ค/ลัง/โหล แต่ร้านขายแยกชิ้น ให้ระบุ pack_size = จำนวนชิ้นย่อยใน 1 หน่วยที่ซื้อ
+      สังเกตจากชื่อ เช่น "X12", "x 12", "*6", "×24", "แพ็ค 6", "6 ซอง" (ถ้าไม่ใช่แพ็คให้ pack_size = 1)
+      qty และ unit_price ยังเป็นจำนวนแพ็คและราคาต่อแพ็คตามที่พิมพ์ในใบเสร็จ
+      barcode ของสินค้าแพ็คคือบาร์โค้ดของแพ็ค ให้ใส่ตามที่พิมพ์ (ระบบเก็บไว้อ้างอิง)
+    - item_type: "stock" = ซื้อมาขาย, "supply" = ซื้อมาใช้ในกิจการ ไม่ได้ขาย
+      เช่น ถุงหูหิ้ว ถุงร้อน/ถุงเย็น หลอด แก้ว/ฝาแก้วเปล่า ช้อนส้อมพลาสติก กล่องใส่อาหาร ทิชชู่ ถุงขยะ น้ำยาล้างจาน อุปกรณ์ทำความสะอาด เครื่องเขียน
+      ส่วน product_name คือชื่อสินค้าสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คออก เช่น "เมล็ดทานตะวัน 15 ก.X12" → "เมล็ดทานตะวัน 15 ก.")
+    - ปี พ.ศ. ให้แปลงเป็น ค.ศ. (ลบ 543) วันที่ใช้รูปแบบ YYYY-MM-DD
+    - ตัวเลขที่อ่านไม่ชัดให้ใส่ค่าที่น่าจะถูกที่สุด และบันทึกไว้ใน warnings
+    - ตรวจผลรวมราคาทุกบรรทัดเทียบกับยอดสุทธิที่พิมพ์ในใบเสร็จ ถ้าไม่ตรงให้แจ้งใน warnings
+    TXT;
+
+    private const FORMAT = <<<TXT
+    ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตามโครงสร้างนี้:
+    {"supplier_name":"ชื่อร้านที่ขาย","supplier_tax_id":"เลขประจำตัวผู้เสียภาษี หรือ null","receipt_no":"เลขที่ใบเสร็จ หรือ null","receipt_date":"YYYY-MM-DD หรือ null",
+     "items":[{"name":"ชื่อสินค้าตามใบเสร็จ","product_name":"ชื่อสำหรับขายแยกชิ้น","item_type":"stock","barcode":"หรือ null","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}],
+     "discount":0.00,"vat":0.00,"total":0.00,"warnings":["ข้อสังเกต"]}
+    TXT;
+
+    public function __construct(private AiClient $client, private string $model)
+    {
+    }
+
+    /** @param string[] $dataUrls images in reading order */
+    public function extract(array $dataUrls, string $hint = ''): array
+    {
+        $content = [[
+            'type' => 'text',
+            'text' => self::INSTRUCTIONS . "\nจำนวนรูป: " . count($dataUrls) . ($hint !== '' ? "\nหมายเหตุจากผู้ใช้: {$hint}" : '') . "\n\n" . self::FORMAT,
+        ]];
+        foreach ($dataUrls as $url) {
+            $content[] = ['type' => 'image_url', 'image_url' => ['url' => $url]];
+        }
+        $reply = $this->client->chat($this->model, [['role' => 'user', 'content' => $content]], [], ['temperature' => 0]);
+        $text = is_array($reply['content'] ?? null)
+            ? implode('', array_map(fn ($p) => $p['text'] ?? '', $reply['content']))
+            : (string) ($reply['content'] ?? '');
+
+        return self::normalize(self::parseJson($text));
+    }
+
+    public static function parseJson(string $text): array
+    {
+        if (preg_match('/```(?:json)?\s*(\{.*\})\s*```/s', $text, $m)) {
+            $text = $m[1];
+        } elseif (($start = strpos($text, '{')) !== false && ($end = strrpos($text, '}')) !== false) {
+            $text = substr($text, $start, $end - $start + 1);
+        }
+        $data = json_decode($text, true);
+        if (!is_array($data)) {
+            throw new \RuntimeException('AI อ่านใบเสร็จแล้วตอบกลับในรูปแบบที่ไม่ถูกต้อง ลองใหม่หรือเลือกโมเดลอื่น');
+        }
+        return $data;
+    }
+
+    /** Pack size written into a product name, e.g. "…15 ก.X12" → 12, "…56ก*6" → 6. */
+    public const PACK_PATTERN = '/\s*[xX×*]\s*(\d{1,3})\s*$/u';
+
+    /** @return array{0:string,1:int} [per-piece name, pack size] */
+    public static function splitPack(string $name): array
+    {
+        if (preg_match(self::PACK_PATTERN, $name, $m) && (int) $m[1] > 1) {
+            return [rtrim(preg_replace(self::PACK_PATTERN, '', $name), ' -/'), (int) $m[1]];
+        }
+        return [$name, 1];
+    }
+
+    /** Cleans types/values so the purchase form can use them directly. */
+    public static function normalize(array $d): array
+    {
+        $num = fn ($v) => is_numeric($v) ? (float) $v : (float) preg_replace('/[^\d.\-]/', '', (string) $v);
+        $str = fn ($v) => ($v === null || strtolower(trim((string) $v)) === 'null') ? '' : trim((string) $v);
+
+        $items = [];
+        foreach ((array) ($d['items'] ?? []) as $it) {
+            if (!is_array($it) || $str($it['name'] ?? '') === '') {
+                continue;
+            }
+            $qty = max(1, (int) round($num($it['qty'] ?? 1)));
+            $lineTotal = round($num($it['line_total'] ?? 0), 2);
+            $unit = round($num($it['unit_price'] ?? 0), 2);
+            if ($unit <= 0 && $lineTotal > 0) {
+                $unit = round($lineTotal / $qty, 2);
+            }
+            if ($lineTotal <= 0) {
+                $lineTotal = round($unit * $qty, 2);
+            }
+            $name = $str($it['name']);
+            [$guessName, $guessPack] = self::splitPack($name);
+            $pack = (int) round($num($it['pack_size'] ?? 0));
+            $pack = $pack >= 1 ? min($pack, 1000) : $guessPack;
+            $productName = $str($it['product_name'] ?? '');
+            if ($productName === '') {
+                $productName = $pack > 1 ? $guessName : $name;
+            }
+            $type = $str($it['item_type'] ?? '');
+            $item = [
+                'name' => $name,
+                'product_name' => $productName,
+                'item_type' => in_array($type, ['stock', 'supply'], true) ? $type : null,
+                'barcode' => preg_replace('/\D/', '', $str($it['barcode'] ?? '')) ?: '',
+                'qty' => $qty,
+                'pack_size' => $pack,
+                'unit_cost' => $unit,
+                'line_total' => $lineTotal,
+            ];
+            if (!empty($it['sale_price']) && $num($it['sale_price']) > 0) {
+                $item['sale_price'] = round($num($it['sale_price']), 2);
+            }
+            $items[] = $item;
+        }
+
+        $date = $str($d['receipt_date'] ?? '');
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m) && (int) $m[1] > 2400) {
+            $date = ((int) $m[1] - 543) . "-{$m[2]}-{$m[3]}"; // model left it in พ.ศ.
+        } elseif (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            $date = '';
+        }
+
+        $warnings = array_values(array_filter(array_map($str, (array) ($d['warnings'] ?? []))));
+        $sum = round(array_sum(array_column($items, 'line_total')), 2);
+        $discount = round(abs($num($d['discount'] ?? 0)), 2);
+        $total = round($num($d['total'] ?? 0), 2);
+        if ($total > 0 && abs(($sum - $discount) - $total) > 0.009) {
+            $warnings[] = sprintf('ผลรวมรายการ ฿%s (หักส่วนลดแล้ว ฿%s) ไม่ตรงกับยอดสุทธิในใบเสร็จ ฿%s กรุณาตรวจสอบ',
+                number_format($sum, 2), number_format($sum - $discount, 2), number_format($total, 2));
+        }
+
+        return [
+            'supplier_name' => $str($d['supplier_name'] ?? ''),
+            'supplier_tax_id' => preg_replace('/\D/', '', $str($d['supplier_tax_id'] ?? '')) ?: '',
+            'receipt_no' => $str($d['receipt_no'] ?? ''),
+            'receipt_date' => $date,
+            'items' => $items,
+            'discount' => $discount,
+            'vat' => round($num($d['vat'] ?? 0), 2),
+            'total' => $total,
+            'warnings' => array_values(array_unique($warnings)),
+        ];
+    }
+}

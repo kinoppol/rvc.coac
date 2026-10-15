@@ -1,0 +1,19 @@
+{
+    "name": "rvc/coac",
+    "description": "ระบบฝากขาย ร้านค้าสหการ - Consignment sales accounting system",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "slim/slim": "^4.12",
+        "slim/psr7": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/",
+            "Migrations\\": "migrations/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}
