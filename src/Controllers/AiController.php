@@ -99,9 +99,11 @@ class AiController
         $toolbox = new AiToolbox($db, $user, $request->getServerParams()['REMOTE_ADDR'] ?? null);
         $toolbox->setPhotos($latestPhotos);
         $tools = $model['supports_tools'] ? $toolbox->schemas() : [];
-        $client = new AiClient($provider['base_url'], $repo->apiKey($provider), $repo->extraHeaders($provider), $needVision ? 240 : 90);
-        if ($needVision) {
-            set_time_limit(300); // reading several receipt photos can take a while
+        // Receipt photos or an attached receipt file: the model writes every line into a draft, which takes a while.
+        $longTask = $needVision || (end($history)['role'] === 'user' && !empty(end($history)['documents']));
+        $client = new AiClient($provider['base_url'], $repo->apiKey($provider), $repo->extraHeaders($provider), $longTask ? 240 : 90);
+        if ($longTask) {
+            set_time_limit(300);
         }
         $imageCache = [];
 
@@ -170,12 +172,15 @@ class AiController
                 }
             }
         } catch (\RuntimeException $e) {
-            $this->logUsage($db, $usage, array_slice($history, $firstNew), $e->getMessage());
+            $message = self::friendlyError($e);
+            $this->logUsage($db, $usage, array_slice($history, $firstNew), $message);
+            // Not 5xx: Cloudflare/the web server replace 5xx bodies with their own page,
+            // and the user would only see "เกิดข้อผิดพลาด (502)" instead of this message.
             return $this->json($response, [
-                'error' => $e->getMessage(),
+                'error' => $message,
                 'messages' => $history,
                 'client_actions' => $toolbox->takeClientActions(),
-            ], 502);
+            ], 422);
         }
 
         $this->logUsage($db, $usage, array_slice($history, $firstNew), null);
@@ -186,6 +191,15 @@ class AiController
             'pending_actions' => $pending,
             'client_actions' => $toolbox->takeClientActions(),
         ]);
+    }
+
+    /** A missing table means the code was deployed before its migration was run. */
+    private static function friendlyError(\RuntimeException $e): string
+    {
+        if ($e instanceof \PDOException && ($e->errorInfo[0] ?? $e->getCode()) === '42S02') {
+            return 'ฐานข้อมูลยังไม่ได้อัปเดตตามโปรแกรมเวอร์ชันใหม่ — ผู้ดูแลระบบต้องรัน Migration ที่ค้างอยู่ (เมนู ระบบ > Migrations) ก่อน';
+        }
+        return $e->getMessage();
     }
 
     /** Records one chat request with the category decided from what the user sent. */
@@ -537,7 +551,7 @@ class AiController
         try {
             $models = (new AiClient($baseUrl, $apiKey, $headers, 30))->listModels();
         } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 502);
+            return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, [
             'ok' => true,

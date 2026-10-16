@@ -82,7 +82,7 @@ class OaAdminController
                 'type_not_allowed' => 'แอปนี้ไม่ได้รับอนุญาตให้ดึงผู้ใช้ประเภท ' . OaConfig::get('sync_type'),
                 default => 'ซิงค์ไม่สำเร็จ: ' . $e->getMessage(),
             };
-            return $this->error($response, $msg, 502);
+            return $this->error($response, $msg, 422);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 409);
         }

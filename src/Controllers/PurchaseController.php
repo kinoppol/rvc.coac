@@ -124,7 +124,7 @@ class PurchaseController
                 ->extract(array_map([$attachments, 'dataUrl'], $images), $hint);
         } catch (\RuntimeException $e) {
             $usageService->log($usage + ['status' => 'error', 'error_message' => $e->getMessage(), 'duration_ms' => (int) ((microtime(true) - $started) * 1000)]);
-            return $this->error($response, $e->getMessage(), 502);
+            return $this->error($response, $e->getMessage(), 422);
         }
         $usageService->log($usage + [
             'response_chars' => mb_strlen(json_encode($draft, JSON_UNESCAPED_UNICODE)),

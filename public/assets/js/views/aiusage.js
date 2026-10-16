@@ -144,7 +144,8 @@ export async function render(container) {
                 <td class="muted" style="font-size:12px;word-break:break-all">${escapeHtml(r.model_name || '')}<div>${escapeHtml(r.provider_name || '')}</div></td>
                 <td class="num">${money(r.cost)}</td>
                 <td>${r.status === 'ok' ? '<span class="pill ok">สำเร็จ</span>' : `<span class="pill bad" title="${escapeHtml(r.error_message || '')}">ผิดพลาด</span>`}
-                  <div class="muted" style="font-size:11px">${(Number(r.duration_ms) / 1000).toFixed(1)} วิ</div></td>
+                  <div class="muted" style="font-size:11px">${(Number(r.duration_ms) / 1000).toFixed(1)} วิ</div>
+                  ${r.status !== 'ok' && r.error_message ? `<div style="font-size:11px;color:var(--bad);max-width:220px;word-break:break-word">${escapeHtml(r.error_message)}</div>` : ''}</td>
               </tr>`).join('') || '<tr><td colspan="7" class="empty">ไม่พบรายการ</td></tr>'}</tbody>
           </table></div>
           ${pages > 1 ? `<div class="actions-row" style="padding:12px 18px;justify-content:flex-end">
