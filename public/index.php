@@ -11,6 +11,7 @@ use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
 use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
+use App\Controllers\OaAdminController;
 use App\Controllers\PortalController;
 use App\Controllers\PurchaseController;
 use App\Controllers\ReceiveController;
@@ -18,6 +19,7 @@ use App\Controllers\ReportsController;
 use App\Controllers\ReturnController;
 use App\Controllers\SalesController;
 use App\Controllers\SettingsController;
+use App\Controllers\SsoController;
 use App\Controllers\StockCountController;
 use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
@@ -51,6 +53,12 @@ $app = AppFactory::create();
 $app->addBodyParsingMiddleware();
 
 $basePath = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+// /auth/* (RVC-ONE sign-in) also arrives here rewritten from the project root
+// by /.htaccess, because the registered redirect_uri has no /public in it.
+$requestPath = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if (str_ends_with($basePath, '/public') && !str_starts_with($requestPath . '/', $basePath . '/')) {
+    $basePath = substr($basePath, 0, -strlen('/public'));
+}
 if ($basePath !== '' && $basePath !== '/') {
     $app->setBasePath($basePath);
 }
@@ -66,6 +74,11 @@ $app->addErrorMiddleware(false, true, true)
 // ---- Public routes ----
 $app->post('/api/auth/login', [AuthController::class, 'login']);
 $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
+
+// ---- Sign-in through RVC-ONE (SSO) ----
+$app->get('/auth/login', [SsoController::class, 'start']);
+$app->post('/auth/callback', [SsoController::class, 'callback']);
+$app->get('/auth/callback', [SsoController::class, 'cancelled']);
 
 // ---- Authenticated API ----
 $app->group('/api', function ($group) {
@@ -127,6 +140,17 @@ $app->group('/api', function ($group) {
     $group->get('/users', [UsersController::class, 'index'])
         ->add(new RoleGuard('settings.edit'));
     $group->post('/users', [UsersController::class, 'store'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->post('/users/from-oa', [UsersController::class, 'storeFromOa'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->put('/users/{id:[0-9]+}', [UsersController::class, 'update'])
+        ->add(new RoleGuard('settings.edit'));
+
+    $group->get('/oa/status', [OaAdminController::class, 'status'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->get('/oa/users', [OaAdminController::class, 'search'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->post('/oa/sync', [OaAdminController::class, 'sync'])
         ->add(new RoleGuard('settings.edit'));
 
     $group->get('/admin/migrations', [MigrationsController::class, 'index'])

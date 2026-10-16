@@ -24,7 +24,7 @@ class AuthMiddleware implements MiddlewareInterface
 
         $userRepo = new UserRepo(Db::connection());
         $user = $userRepo->find((int) $_SESSION['user_id']);
-        if (!$user || !$user['active']) {
+        if (!$user || !UserRepo::canSignIn($user)) {
             $response = (new ResponseFactory())->createResponse(401);
             $response->getBody()->write(json_encode(['error' => 'บัญชีผู้ใช้ไม่พร้อมใช้งาน']));
             return $response->withHeader('Content-Type', 'application/json');

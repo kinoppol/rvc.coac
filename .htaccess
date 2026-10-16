@@ -1,0 +1,5 @@
+RewriteEngine On
+
+# RVC-ONE sign-in: the redirect_uri registered at RVC-ONE is <project>/auth/callback
+# (no /public), so hand /auth/* to the app's front controller.
+RewriteRule ^auth/(login|callback)/?$ public/index.php [QSA,L]

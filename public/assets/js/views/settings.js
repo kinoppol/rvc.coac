@@ -1,10 +1,13 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
+import { renderUsersPanel } from './settings-users.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
 
-export async function render(container, { permissions }) {
+export async function render(page, { user, permissions }) {
     const canEdit = permissions.includes('settings.edit');
+    page.innerHTML = '<div></div><div style="margin-top:16px"></div>';
+    const container = page.firstElementChild;
     let saved = null;
     let error = null;
 
@@ -112,4 +115,7 @@ export async function render(container, { permissions }) {
     }
 
     await load();
+    if (canEdit) {
+        await renderUsersPanel(page.lastElementChild, { user });
+    }
 }

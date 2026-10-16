@@ -27,7 +27,7 @@ class AuthController
         $userRepo = new UserRepo(Db::connection());
         $user = $userRepo->findByUsername($username);
 
-        if (!$user || !$user['active'] || !password_verify($password, $user['password_hash'])) {
+        if (!$user || !UserRepo::canSignIn($user) || !password_verify($password, $user['password_hash'])) {
             return $this->error($response, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', 401);
         }
 

@@ -80,6 +80,8 @@ function renderLogin(message) {
           <label class="field">รหัสผ่าน <input name="password" type="password" required></label>
           <button type="submit" class="btn">เข้าสู่ระบบ</button>
         </form>
+        <div class="muted" style="text-align:center;font-size:12.5px;margin:14px 0">หรือ</div>
+        <a class="btn secondary" href="auth/login" style="display:block;text-align:center;text-decoration:none">ลงชื่อเข้าใช้ผ่านระบบ RVC-ONE</a>
       </div>
     </div>`;
 

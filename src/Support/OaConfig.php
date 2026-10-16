@@ -1,0 +1,43 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Support;
+
+/**
+ * Connection settings for RVC-ONE (SSO login + user-sync API), all in one place.
+ *
+ * Values come from the "oa" block of config/config.php; anything missing falls
+ * back to the values registered for this app at RVC-ONE. The client secret is
+ * read from the OA_CLIENT_SECRET environment variable first, then from
+ * config/config.php (which is git-ignored) — it never lives in the repo.
+ */
+class OaConfig
+{
+    private const DEFAULTS = [
+        'authorize_url' => 'http://workspace.rvc.ac.th/oa/index.php',
+        'verify_url' => 'http://workspace.rvc.ac.th/oa/api/verify_token.php',
+        'users_url' => 'http://workspace.rvc.ac.th/oa/api/users.php',
+        'client_id' => 'cl_8edfa15f2a',
+        'client_secret' => '',
+        'redirect_uri' => 'https://coac.rvc.ac.th/web/auth/callback',
+        // Which RVC-ONE users to mirror: staff | student | all | '' (= everything the app is allowed)
+        'sync_type' => 'staff',
+        // When an RVC-ONE user with no linked account signs in: create one
+        // (with default_role) or refuse until an admin grants access.
+        'auto_provision' => false,
+        'default_role' => 'cashier',
+        'timeout' => 10,
+    ];
+
+    public static function get(string $key): mixed
+    {
+        if ($key === 'client_secret') {
+            $env = getenv('OA_CLIENT_SECRET');
+            if ($env !== false && $env !== '') {
+                return $env;
+            }
+        }
+        return Config::get('oa.' . $key, self::DEFAULTS[$key] ?? null);
+    }
+}

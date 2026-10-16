@@ -229,7 +229,9 @@ if ($step === 'db') {
                 'timezone' => 'Asia/Bangkok',
                 'key' => bin2hex(random_bytes(32)),
             ];
-            Config::write(['db' => $db, 'app' => $appCfg]);
+            // Keep other blocks (e.g. "oa" for RVC-ONE) when re-running the installer.
+            $otherCfg = is_file(Config::configPath()) ? (array) (require Config::configPath()) : [];
+            Config::write(['db' => $db, 'app' => $appCfg] + $otherCfg);
 
             header('Location: ?step=migrate' . ($repairMode ? '&repair=1' : ''));
             exit;
