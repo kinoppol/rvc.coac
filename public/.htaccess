@@ -6,3 +6,12 @@ RewriteRule ^ - [L]
 
 # Everything else (the SPA shell and /api/*) goes through the front controller.
 RewriteRule ^ index.php [QSA,L]
+
+# JS/CSS change on every deploy and views are imported without a version tag:
+# make browsers and Cloudflare revalidate (cheap 304 via ETag) instead of
+# serving a stale copy for hours.
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|css|html)$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>
