@@ -23,9 +23,14 @@ export async function render(container, { navigate }) {
         <div class="sub">ผู้ฝากที่มีเงินคงเหลือ ${count(k.outstanding_consignor_count)} ราย</div>
       </div>
       <div class="kpi">
-        <div class="lbl">สินค้าฝากขายในสต๊อก</div>
+        <div class="lbl">สินค้าในสต๊อก</div>
         <div class="val">${count(k.stock_units)} ชิ้น</div>
         <div class="sub">${count(k.stock_items)} รายการ · ผู้ฝาก ${count(k.stock_consignors)} ราย</div>
+      </div>
+      <div class="kpi">
+        <div class="lbl">ต้นทุนซื้อสินค้าทั้งหมด</div>
+        <div class="val">฿ ${money(k.purchase_total_cost)}</div>
+        <div class="sub">สินค้าขาย ฿ ${money(k.purchase_total_cost - k.purchase_supply_cost)} · วัสดุใช้ในร้าน ฿ ${money(k.purchase_supply_cost)}</div>
       </div>
       <div class="kpi">
         <div class="lbl">ขายสินค้าของร้านวันนี้</div>

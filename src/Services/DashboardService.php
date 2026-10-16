@@ -46,6 +46,12 @@ class DashboardService
              FROM products WHERE qty_stock > 0 AND consignor_id IS NOT NULL'
         )->fetch();
 
+        $bought = $this->db->query(
+            "SELECT COALESCE(SUM(line_total),0) AS total,
+                    COALESCE(SUM(CASE WHEN item_type='supply' THEN line_total END),0) AS supply
+             FROM purchase_items"
+        )->fetch();
+
         $store = $this->db->query(
             'SELECT COALESCE(SUM(qty_stock),0) AS units, COUNT(*) AS items,
                     COALESCE(SUM(qty_stock * cost_price),0) AS cost_value,
@@ -71,6 +77,8 @@ class DashboardService
             'stock_units' => (int) $stockRow['units'],
             'stock_items' => (int) $stockRow['items'],
             'stock_consignors' => (int) $stockRow['consignors'],
+            'purchase_total_cost' => round((float) $bought['total'], 2),
+            'purchase_supply_cost' => round((float) $bought['supply'], 2),
             'store_sales_today' => (float) $ss['sales'],
             'store_profit_today' => round((float) $ss['sales'] - (float) $ss['cogs'], 2),
             'store_qty_today' => (int) $ss['qty'],
