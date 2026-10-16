@@ -11,71 +11,43 @@ const METHOD_HINT = {
 const TYPE_LABEL = { staff: 'ครู/บุคลากร', student: 'นักเรียน' };
 
 function roleSelect(name, value) {
-    return `<select data-${name}>${Object.entries(ROLE_LABEL).map(([k, v]) =>
+    return `<select class="pc-select" data-${name}>${Object.entries(ROLE_LABEL).map(([k, v]) =>
         `<option value="${k}" ${k === value ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select>`;
 }
 
-/** Users + RVC-ONE access card on the settings page (admins only). */
+function messageBox(message) {
+    return message ? `<div class="${message.ok ? 'pill ok' : 'error-box'}" style="align-self:flex-start">${escapeHtml(message.text)}</div>` : '';
+}
+
+/** Runs an action, then reloads the panel with a success or error message. */
+function makeAct(setMessage, reload) {
+    return async (fn, okText) => {
+        try {
+            await fn();
+            setMessage(okText ? { ok: true, text: okText } : null);
+        } catch (err) {
+            setMessage({ ok: false, text: err.message });
+        }
+        await reload();
+    };
+}
+
+/** "ผู้ใช้งาน" tab: local accounts + granting access to RVC-ONE users (admins only). */
 export async function renderUsersPanel(el, { user: me }) {
     let message = null;
     let searchQ = '';
     let results = [];
+    const act = makeAct((m) => { message = m; }, load);
 
     async function load() {
-        const [users, oa, m] = await Promise.all([api.get('/users'), api.get('/oa/status'), api.get('/auth/methods')]);
-        draw(users.data, oa, m.login_methods);
+        draw((await api.get('/users')).data);
     }
 
-    function syncLine(oa) {
-        const last = oa.runs[0];
-        if (!last) return 'ยังไม่เคยซิงค์';
-        const when = fmtDateTime(last.finished_at || last.started_at);
-        if (last.status === 'failed') return `<span class="pill bad">ล้มเหลว</span> ${when} — ${escapeHtml(last.error || '')}`;
-        if (last.status === 'running') return `<span class="pill warn">กำลังซิงค์</span> เริ่ม ${when}`;
-        return `<span class="pill ok">สำเร็จ</span> ${when} (${last.mode === 'full' ? 'ทั้งหมด' : 'เฉพาะที่เปลี่ยน'}: ใหม่ ${last.added}, อัปเดต ${last.updated}, ถูกระงับ ${last.suspended})`;
-    }
-
-    function secretForm(oa) {
-        const fixed = oa.secret_source === 'env' || oa.secret_source === 'config';
-        const state = oa.secret_source === 'none' ? '<span class="pill bad">ยังไม่ตั้งค่า</span>'
-            : fixed ? `<span class="pill ok">ตั้งค่าไว้ใน ${oa.secret_source === 'env' ? 'env OA_CLIENT_SECRET' : 'config/config.php'}</span>`
-            : '<span class="pill ok">ตั้งค่าแล้ว</span>';
-        return `
-            <form id="oa-secret" style="display:flex;flex-direction:column;gap:6px">
-              <b>การเชื่อมต่อ RVC-ONE</b>
-              <div>Client ID: <code>${escapeHtml(oa.client_id || '')}</code> · Client Secret: ${state}</div>
-              ${fixed ? `<div class="muted" style="font-size:12px">ค่านี้ถูกกำหนดไว้ฝั่งเซิร์ฟเวอร์ จึงแก้จากหน้านี้ไม่ได้ — ต้องแก้ที่ ${oa.secret_source === 'env' ? 'env OA_CLIENT_SECRET' : 'config/config.php → oa.client_secret'}</div>` : `
-              <div class="actions-row">
-                <input name="client_secret" type="password" autocomplete="off" style="max-width:320px"
-                  placeholder="${oa.secret_source === 'db' ? 'วาง Secret ใหม่เพื่อเปลี่ยน' : 'วาง Client Secret จาก RVC-ONE'}">
-                <button class="btn sm" type="submit">บันทึก</button>
-                ${oa.secret_source === 'db' ? '<button class="btn sm secondary" type="button" data-clear-secret>ลบ Secret</button>' : ''}
-              </div>
-              <div class="muted" style="font-size:12px">เก็บแบบเข้ารหัสในฐานข้อมูล และจะไม่แสดงค่าอีก · ถ้ากด «สร้าง Secret ใหม่» ใน RVC-ONE ต้องนำค่าใหม่มาใส่ที่นี่ด้วย</div>`}
-            </form>`;
-    }
-
-    function draw(users, oa, methods) {
+    function draw(users) {
         el.innerHTML = `
         <section class="card">
-          <div class="card-head"><h2>ผู้ใช้งานระบบ และ RVC-ONE</h2></div>
-          <div class="card-pad" style="display:flex;flex-direction:column;gap:12px;font-size:13px">
-            ${message ? `<div class="${message.ok ? 'pill ok' : 'error-box'}" style="align-self:flex-start">${escapeHtml(message.text)}</div>` : ''}
-            ${oa.secret_configured ? '' : `<div class="error-box">ยังไม่ได้ตั้งค่า Client Secret ของ RVC-ONE จึงยังซิงค์รายชื่อไม่ได้ — คัดลอกจากหน้าแก้ไขแอปใน RVC-ONE (แท็บ «การเชื่อมต่อ SSO») มาใส่ในช่องด้านล่าง · การเข้าสู่ระบบผ่าน RVC-ONE ใช้งานได้ตามปกติ</div>`}
-            ${secretForm(oa)}
-            <div style="display:flex;flex-direction:column;gap:6px">
-              <b>วิธีเข้าสู่ระบบที่อนุญาต</b>
-              <div class="actions-row">${Object.entries(METHOD_LABEL).map(([k, v]) =>
-                  `<button type="button" class="tab-btn ${k === methods ? 'active' : ''}" data-method="${k}">${escapeHtml(v)}</button>`).join('')}</div>
-              <div class="muted" style="font-size:12px">${escapeHtml(METHOD_HINT[methods] || '')}</div>
-            </div>
-            <div>รายชื่อจาก RVC-ONE: <b>${oa.directory_count}</b> คน · ซิงค์ล่าสุด: ${syncLine(oa)}</div>
-            <div class="actions-row">
-              <button class="btn sm" data-sync="0">ซิงค์รายชื่อตอนนี้</button>
-              <button class="btn sm secondary" data-sync="1">ซิงค์ทั้งหมดใหม่</button>
-            </div>
-            <div class="muted" style="font-size:12px">URL เริ่ม SSO ของแอป (กรอกที่หน้าแก้ไขแอปใน RVC-ONE): <code>${escapeHtml(oa.sso_start_url)}</code></div>
-          </div>
+          <div class="card-head"><h2>ผู้ใช้งานระบบ</h2></div>
+          ${message ? `<div class="card-pad" style="display:flex;padding-bottom:0">${messageBox(message)}</div>` : ''}
           <div class="table-wrap"><table>
             <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>RVC-ONE</th><th>บทบาท</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th></tr></thead>
             <tbody>
@@ -98,8 +70,10 @@ export async function renderUsersPanel(el, { user: me }) {
               }).join('')}
             </tbody>
           </table></div>
+        </section>
+        <section class="card" style="margin-top:16px">
+          <div class="card-head"><h2>เพิ่มสิทธิ์ให้ผู้ใช้จาก RVC-ONE</h2></div>
           <div class="card-pad" style="display:flex;flex-direction:column;gap:10px">
-            <h3 style="margin:0;font-size:14px">เพิ่มสิทธิ์ให้ผู้ใช้จาก RVC-ONE</h3>
             <form id="oa-search" class="search-box" style="max-width:420px">
               <input name="q" placeholder="ค้นหาชื่อ แผนก อีเมล หรือ RVC-ONE ID" value="${escapeHtml(searchQ)}">
               <button class="btn sm" type="submit">ค้นหา</button>
@@ -111,44 +85,13 @@ export async function renderUsersPanel(el, { user: me }) {
                   <td>${r.local_user_id ? `<span class="pill ok">มีสิทธิ์แล้ว (${escapeHtml(ROLE_LABEL[r.local_role] || r.local_role)})</span>`
                       : `${roleSelect('grant-role', 'cashier')} <button class="btn sm" data-grant>ให้สิทธิ์</button>`}</td>
                 </tr>`).join('')}
-            </tbody></table></div>` : (searchQ ? '<div class="empty">ไม่พบผู้ใช้ — ลองซิงค์รายชื่อก่อน</div>' : '')}
+            </tbody></table></div>` : (searchQ ? '<div class="empty">ไม่พบผู้ใช้ — ลองซิงค์รายชื่อในแท็บ RVC-ONE ก่อน</div>' : '')}
           </div>
         </section>`;
         bind();
     }
 
-    async function act(fn, okText) {
-        try {
-            await fn();
-            message = okText ? { ok: true, text: okText } : null;
-        } catch (err) {
-            message = { ok: false, text: err.message };
-        }
-        await load();
-    }
-
     function bind() {
-        el.querySelectorAll('[data-method]').forEach((btn) => btn.addEventListener('click', () => {
-            const v = btn.dataset.method;
-            if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
-            act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
-        }));
-        el.querySelector('#oa-secret').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const v = (new FormData(e.target).get('client_secret') || '').trim();
-            if (!v) return;
-            act(() => api.put('/oa/secret', { client_secret: v }), 'บันทึก Client Secret แล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อทดสอบ');
-        });
-        el.querySelector('[data-clear-secret]')?.addEventListener('click', () => {
-            if (confirm('ลบ Client Secret? จะซิงค์รายชื่อจาก RVC-ONE ไม่ได้จนกว่าจะใส่ใหม่')) {
-                act(() => api.put('/oa/secret', { client_secret: '', clear: true }), 'ลบ Client Secret แล้ว');
-            }
-        });
-        el.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => {
-            btn.disabled = true;
-            btn.textContent = 'กำลังซิงค์...';
-            act(() => api.post('/oa/sync', { full: btn.dataset.sync === '1' }), 'ซิงค์รายชื่อเรียบร้อย');
-        }));
         el.querySelectorAll('tr[data-id]').forEach((tr) => {
             const id = tr.dataset.id;
             tr.querySelector('[data-role]')?.addEventListener('change', (e) =>
@@ -181,6 +124,102 @@ export async function renderUsersPanel(el, { user: me }) {
                 await api.post('/users/from-oa', { oa_user_id: Number(tr.dataset.oa), role });
                 results = (await api.get(`/oa/users?q=${encodeURIComponent(searchQ)}`)).data;
             }, 'เพิ่มสิทธิ์แล้ว ผู้ใช้เข้าสู่ระบบผ่าน RVC-ONE ได้ทันที');
+        }));
+    }
+
+    await load();
+}
+
+/** "RVC-ONE" tab: client secret, allowed login methods and user-directory sync (admins only). */
+export async function renderOaPanel(el) {
+    let message = null;
+    const act = makeAct((m) => { message = m; }, load);
+
+    async function load() {
+        const [oa, m] = await Promise.all([api.get('/oa/status'), api.get('/auth/methods')]);
+        draw(oa, m.login_methods);
+    }
+
+    function syncLine(oa) {
+        const last = oa.runs[0];
+        if (!last) return 'ยังไม่เคยซิงค์';
+        const when = fmtDateTime(last.finished_at || last.started_at);
+        if (last.status === 'failed') return `<span class="pill bad">ล้มเหลว</span> ${when} — ${escapeHtml(last.error || '')}`;
+        if (last.status === 'running') return `<span class="pill warn">กำลังซิงค์</span> เริ่ม ${when}`;
+        return `<span class="pill ok">สำเร็จ</span> ${when} (${last.mode === 'full' ? 'ทั้งหมด' : 'เฉพาะที่เปลี่ยน'}: ใหม่ ${last.added}, อัปเดต ${last.updated}, ถูกระงับ ${last.suspended})`;
+    }
+
+    function secretForm(oa) {
+        const fixed = oa.secret_source === 'env' || oa.secret_source === 'config';
+        const where = oa.secret_source === 'env' ? 'env OA_CLIENT_SECRET' : 'config/config.php → oa.client_secret';
+        const state = oa.secret_source === 'none' ? '<span class="pill bad">ยังไม่ตั้งค่า</span>'
+            : fixed ? `<span class="pill ok">ตั้งค่าไว้ใน ${escapeHtml(where)}</span>`
+            : '<span class="pill ok">ตั้งค่าแล้ว</span>';
+        return `
+            <form id="oa-secret" style="display:flex;flex-direction:column;gap:6px">
+              <div>Client ID: <code>${escapeHtml(oa.client_id || '')}</code> · Client Secret: ${state}</div>
+              ${fixed ? `<div class="muted" style="font-size:12px">ค่านี้ถูกกำหนดไว้ฝั่งเซิร์ฟเวอร์ จึงแก้จากหน้านี้ไม่ได้ — ต้องแก้ที่ ${escapeHtml(where)}</div>` : `
+              <div class="actions-row">
+                <input class="pc-select" name="client_secret" type="password" autocomplete="off" style="width:320px"
+                  placeholder="${oa.secret_source === 'db' ? 'วาง Secret ใหม่เพื่อเปลี่ยน' : 'วาง Client Secret จาก RVC-ONE'}">
+                <button class="btn sm" type="submit">บันทึก</button>
+                ${oa.secret_source === 'db' ? '<button class="btn sm secondary" type="button" data-clear-secret>ลบ Secret</button>' : ''}
+              </div>
+              <div class="muted" style="font-size:12px">เก็บแบบเข้ารหัสในฐานข้อมูล และจะไม่แสดงค่าอีก · ถ้ากด «สร้าง Secret ใหม่» ใน RVC-ONE ต้องนำค่าใหม่มาใส่ที่นี่ด้วย</div>`}
+            </form>`;
+    }
+
+    function draw(oa, methods) {
+        el.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:16px">
+          ${message || !oa.secret_configured ? `<div style="display:flex;flex-direction:column;gap:8px">
+            ${messageBox(message)}
+            ${oa.secret_configured ? '' : `<div class="error-box">ยังไม่ได้ตั้งค่า Client Secret ของ RVC-ONE จึงยังซิงค์รายชื่อไม่ได้ — คัดลอกจากหน้าแก้ไขแอปใน RVC-ONE (แท็บ «การเชื่อมต่อ SSO») มาใส่ด้านล่าง · การเข้าสู่ระบบผ่าน RVC-ONE ใช้งานได้ตามปกติ</div>`}
+          </div>` : ''}
+          <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+            <h2>การเชื่อมต่อ RVC-ONE</h2>
+            ${secretForm(oa)}
+            <div class="muted" style="font-size:12px">URL เริ่ม SSO ของแอป (กรอกที่หน้าแก้ไขแอปใน RVC-ONE): <code>${escapeHtml(oa.sso_start_url)}</code></div>
+          </section>
+          <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+            <h2>วิธีเข้าสู่ระบบที่อนุญาต</h2>
+            <div class="actions-row">${Object.entries(METHOD_LABEL).map(([k, v]) =>
+                `<button type="button" class="tab-btn ${k === methods ? 'active' : ''}" data-method="${k}">${escapeHtml(v)}</button>`).join('')}</div>
+            <div class="muted" style="font-size:12px">${escapeHtml(METHOD_HINT[methods] || '')}</div>
+          </section>
+          <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+            <h2>ซิงค์รายชื่อผู้ใช้</h2>
+            <div>รายชื่อจาก RVC-ONE: <b>${oa.directory_count}</b> คน · ซิงค์ล่าสุด: ${syncLine(oa)}</div>
+            <div class="actions-row">
+              <button class="btn sm" data-sync="0">ซิงค์รายชื่อตอนนี้</button>
+              <button class="btn sm secondary" data-sync="1">ซิงค์ทั้งหมดใหม่</button>
+            </div>
+          </section>
+        </div>`;
+        bind();
+    }
+
+    function bind() {
+        el.querySelector('#oa-secret').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const v = (new FormData(e.target).get('client_secret') || '').trim();
+            if (!v) return;
+            act(() => api.put('/oa/secret', { client_secret: v }), 'บันทึก Client Secret แล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อทดสอบ');
+        });
+        el.querySelector('[data-clear-secret]')?.addEventListener('click', () => {
+            if (confirm('ลบ Client Secret? จะซิงค์รายชื่อจาก RVC-ONE ไม่ได้จนกว่าจะใส่ใหม่')) {
+                act(() => api.put('/oa/secret', { client_secret: '', clear: true }), 'ลบ Client Secret แล้ว');
+            }
+        });
+        el.querySelectorAll('[data-method]').forEach((btn) => btn.addEventListener('click', () => {
+            const v = btn.dataset.method;
+            if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
+            act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
+        }));
+        el.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => {
+            btn.disabled = true;
+            btn.textContent = 'กำลังซิงค์...';
+            act(() => api.post('/oa/sync', { full: btn.dataset.sync === '1' }), 'ซิงค์รายชื่อเรียบร้อย');
         }));
     }
 

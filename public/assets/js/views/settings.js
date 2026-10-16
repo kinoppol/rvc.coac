@@ -1,28 +1,91 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
-import { renderUsersPanel } from './settings-users.js';
+import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
 
-export async function render(page, { user, permissions }) {
+const TABS = [
+    { key: 'fees', label: 'ค่าฝากขาย' },
+    { key: 'users', label: 'ผู้ใช้งาน', edit: true },
+    { key: 'rvcone', label: 'RVC-ONE', edit: true },
+    { key: 'roles', label: 'สิทธิ์ตามบทบาท' },
+    { key: 'history', label: 'ประวัติการเปลี่ยนแปลง' },
+];
+
+export async function render(page, { user, permissions, params = {} }) {
     const canEdit = permissions.includes('settings.edit');
-    page.innerHTML = '<div></div><div style="margin-top:16px"></div>';
-    const container = page.firstElementChild;
+    const tabs = TABS.filter((t) => !t.edit || canEdit);
+    let tab = tabs.some((t) => t.key === params.tab) ? params.tab : 'fees';
+    page.innerHTML = `<div class="tabs" style="margin-bottom:16px">${tabs.map((t) =>
+        `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}</div><div></div>`;
+    const container = page.lastElementChild;
     let saved = null;
     let error = null;
+    let data = null;
+    let pane = null;
+
+    async function show(key) {
+        tab = key;
+        page.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
+        // Keep the tab in the URL without triggering the router's hashchange reload.
+        history.replaceState(null, '', key === 'fees' ? '#/settings' : `#/settings?tab=${key}`);
+        saved = null;
+        error = null;
+        // A fresh pane per visit, so a slow load from a tab left behind lands in a detached node.
+        pane = document.createElement('div');
+        pane.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+        container.replaceChildren(pane);
+        if (key === 'users') return renderUsersPanel(pane, { user });
+        if (key === 'rvcone') return renderOaPanel(pane);
+        await load();
+    }
+    page.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => show(b.dataset.tab)));
 
     async function load() {
+        const target = pane;
         const res = await api.get('/settings');
-        draw(res);
+        if (target !== pane) return;
+        data = res;
+        draw(data);
     }
 
     function draw({ settings: s, role_permissions, audit_log }) {
         const byRole = {};
         role_permissions.forEach((rp) => { (byRole[rp.role] ||= []).push(rp.permission_key); });
 
-        container.innerHTML = `
-        <div class="two-col">
-          <div style="display:flex;flex-direction:column;gap:16px">
+        if (tab === 'roles') {
+            pane.innerHTML = `
+            <section class="card">
+              <div class="card-head"><h2>สิทธิ์การใช้งานตามบทบาท</h2></div>
+              <div class="table-wrap"><table>
+                <thead><tr><th>บทบาท</th><th>สิ่งที่ทำได้</th></tr></thead>
+                <tbody>
+                  ${Object.entries(byRole).map(([role, perms]) => `
+                    <tr><td style="white-space:nowrap;font-weight:600">${escapeHtml(ROLE_LABEL[role] || role)}</td>
+                        <td class="muted" style="font-size:12.5px">${perms.map(escapeHtml).join(', ')}</td></tr>
+                  `).join('')}
+                </tbody>
+              </table></div>
+            </section>`;
+            return;
+        }
+        if (tab === 'history') {
+            pane.innerHTML = `
+          <section class="card card-pad">
+            <h2 style="margin-bottom:12px">การเปลี่ยนแปลงค่าระบบ</h2>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              ${audit_log.map((a) => `
+                <div style="border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12.5px">
+                  <div><b>${escapeHtml(a.setting_key)}</b>: ${escapeHtml(a.old_value ?? '-')} → ${escapeHtml(a.new_value ?? '-')}</div>
+                  <div class="muted">${escapeHtml(a.user_name || '')} · ${fmtDateTime(a.changed_at)}</div>
+                </div>
+              `).join('') || `<div class="empty">ยังไม่มีการเปลี่ยนแปลง</div>`}
+            </div>
+          </section>`;
+            return;
+        }
+        pane.innerHTML = `
+          <div style="max-width:920px">
             <form id="settings-form">
               <fieldset ${canEdit ? '' : 'disabled'} style="border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:16px">
                 <section class="card card-pad">
@@ -63,40 +126,14 @@ export async function render(page, { user, permissions }) {
                 ${canEdit ? `<div>${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
               </fieldset>
             </form>
-
-            <section class="card">
-              <div class="card-head"><h2>สิทธิ์การใช้งานตามบทบาท</h2></div>
-              <div class="table-wrap"><table>
-                <thead><tr><th>บทบาท</th><th>สิ่งที่ทำได้</th></tr></thead>
-                <tbody>
-                  ${Object.entries(byRole).map(([role, perms]) => `
-                    <tr><td style="white-space:nowrap;font-weight:600">${escapeHtml(ROLE_LABEL[role] || role)}</td>
-                        <td class="muted" style="font-size:12.5px">${perms.map(escapeHtml).join(', ')}</td></tr>
-                  `).join('')}
-                </tbody>
-              </table></div>
-            </section>
-          </div>
-
-          <section class="card card-pad">
-            <h2 style="margin-bottom:12px">การเปลี่ยนแปลงค่าระบบ</h2>
-            <div style="display:flex;flex-direction:column;gap:10px">
-              ${audit_log.map((a) => `
-                <div style="border-bottom:1px solid var(--border);padding-bottom:8px;font-size:12.5px">
-                  <div><b>${escapeHtml(a.setting_key)}</b>: ${escapeHtml(a.old_value ?? '-')} → ${escapeHtml(a.new_value ?? '-')}</div>
-                  <div class="muted">${escapeHtml(a.user_name || '')} · ${fmtDateTime(a.changed_at)}</div>
-                </div>
-              `).join('') || `<div class="empty">ยังไม่มีการเปลี่ยนแปลง</div>`}
-            </div>
-          </section>
-        </div>`;
+          </div>`;
 
         if (canEdit) {
-            container.querySelectorAll('[data-set]').forEach((btn) => btn.addEventListener('click', () => {
+            pane.querySelectorAll('[data-set]').forEach((btn) => btn.addEventListener('click', () => {
                 s[btn.dataset.set] = btn.dataset.val;
-                draw({ settings: s, role_permissions, audit_log });
+                draw(data);
             }));
-            container.querySelector('#settings-form').addEventListener('submit', async (e) => {
+            pane.querySelector('#settings-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const fd = new FormData(e.target);
                 const body = Object.fromEntries(fd.entries());
@@ -108,14 +145,11 @@ export async function render(page, { user, permissions }) {
                     await load();
                 } catch (err) {
                     error = err.message;
-                    draw({ settings: s, role_permissions, audit_log });
+                    draw(data);
                 }
             });
         }
     }
 
-    await load();
-    if (canEdit) {
-        await renderUsersPanel(page.lastElementChild, { user });
-    }
+    await show(tab);
 }
