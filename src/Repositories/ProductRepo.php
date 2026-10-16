@@ -29,6 +29,103 @@ class ProductRepo
         return $row ?: null;
     }
 
+    /** Store product a pack barcode belongs to, with that pack's size. */
+    public function findByPackBarcode(string $barcode): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT p.*, b.pack_size AS pack_size FROM product_pack_barcodes b JOIN products p ON p.id = b.product_id
+             WHERE b.barcode = ? AND p.consignor_id IS NULL LIMIT 1'
+        );
+        $stmt->execute([$barcode]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** @return array<int,array{barcode:string,pack_size:int}> */
+    public function packBarcodes(int $productId): array
+    {
+        $stmt = $this->db->prepare('SELECT barcode, pack_size FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
+        $stmt->execute([$productId]);
+        return array_map(fn ($r) => ['barcode' => $r['barcode'], 'pack_size' => (int) $r['pack_size']], $stmt->fetchAll());
+    }
+
+    /** Links a pack barcode to a product (moving it if it pointed elsewhere). */
+    public function savePackBarcode(int $productId, string $barcode, int $packSize): void
+    {
+        $this->db->prepare(
+            'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, created_at, last_seen_at)
+             VALUES (?, ?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE product_id = VALUES(product_id), pack_size = VALUES(pack_size), last_seen_at = NOW()'
+        )->execute([$productId, $barcode, $packSize]);
+    }
+
+    /**
+     * Sets a store product's piece barcode and its full list of pack barcodes.
+     * A barcode may identify only one thing: the piece of one product, or one pack.
+     *
+     * @param array<int,array{barcode:string,pack_size:int}> $packs
+     */
+    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old || $old['consignor_id'] !== null) {
+            throw new \RuntimeException('ไม่พบสินค้าของร้าน');
+        }
+        $barcode = trim((string) $barcode) ?: null;
+        $clean = [];
+        foreach ($packs as $p) {
+            $code = trim((string) ($p['barcode'] ?? ''));
+            $size = (int) ($p['pack_size'] ?? 0);
+            if ($code === '') {
+                continue;
+            }
+            if ($size < 2 || $size > 1000) {
+                throw new \RuntimeException("บาร์โค้ดแพ็ค {$code}: จำนวนชิ้นต่อแพ็คต้องอยู่ระหว่าง 2–1000");
+            }
+            if ($code === $barcode || isset($clean[$code])) {
+                throw new \RuntimeException("บาร์โค้ด {$code} ซ้ำกัน");
+            }
+            $clean[$code] = $size;
+        }
+        $check = function (string $sql, array $params): ?string {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            $name = $stmt->fetchColumn();
+            return $name === false ? null : (string) $name;
+        };
+        foreach (array_filter([$barcode, ...array_keys($clean)]) as $code) {
+            $owner = $check('SELECT name FROM products WHERE barcode = ? AND id <> ? LIMIT 1', [$code, $productId])
+                ?? $check('SELECT p.name FROM product_pack_barcodes b JOIN products p ON p.id = b.product_id WHERE b.barcode = ? AND b.product_id <> ? LIMIT 1', [$code, $productId]);
+            if ($owner !== null) {
+                throw new \RuntimeException("บาร์โค้ด {$code} ใช้กับสินค้า \"{$owner}\" อยู่แล้ว");
+            }
+        }
+
+        $oldPacks = $this->packBarcodes($productId);
+        $this->db->prepare('UPDATE products SET barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$barcode, $productId]);
+        // Numeric barcodes become int array keys; compare as strings.
+        $keep = array_map('strval', array_keys($clean));
+        $del = $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode = ?');
+        foreach ($oldPacks as $p) {
+            if (!in_array($p['barcode'], $keep, true)) {
+                $del->execute([$productId, $p['barcode']]);
+            }
+        }
+        $upsert = $this->db->prepare(
+            'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, created_at) VALUES (?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE pack_size = VALUES(pack_size)'
+        );
+        foreach ($clean as $code => $size) {
+            $upsert->execute([$productId, (string) $code, $size]);
+        }
+        $this->audit->log(
+            'products', $productId, 'update',
+            ['barcode' => $old['barcode'], 'pack_barcodes' => $oldPacks],
+            ['barcode' => $barcode, 'pack_barcodes' => $this->packBarcodes($productId)],
+            $userId, $ip
+        );
+    }
+
     public function forConsignor(int $consignorId): array
     {
         $stmt = $this->db->prepare('SELECT * FROM products WHERE consignor_id = ? ORDER BY name ASC');

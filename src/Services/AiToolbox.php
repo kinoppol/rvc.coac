@@ -451,10 +451,13 @@ class AiToolbox
     private function searchProducts(array $args): array
     {
         $q = '%' . trim((string) ($args['query'] ?? '')) . '%';
-        $sql = "SELECT p.id, p.name, p.barcode, p.pack_barcode, p.pack_size, p.sale_price, p.qty_stock, p.qty_sold, p.expiry_date,
+        $sql = "SELECT p.id, p.name, p.barcode,
+                       (SELECT GROUP_CONCAT(CONCAT(b.barcode, ' (แพ็ค ', b.pack_size, ')') ORDER BY b.pack_size SEPARATOR ', ')
+                          FROM product_pack_barcodes b WHERE b.product_id = p.id) AS pack_barcodes,
+                       p.sale_price, p.qty_stock, p.qty_sold, p.expiry_date,
                        c.id AS consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
                 FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id
-                WHERE (p.name LIKE ? OR p.barcode LIKE ? OR p.pack_barcode LIKE ?)";
+                WHERE (p.name LIKE ? OR p.barcode LIKE ? OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode LIKE ?))";
         if (!empty($args['in_stock_only'])) {
             $sql .= ' AND p.qty_stock > 0';
         }

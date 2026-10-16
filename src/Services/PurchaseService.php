@@ -42,7 +42,8 @@ class PurchaseService
 
     /**
      * Finds the store-owned product a receipt line refers to: explicit id, then
-     * barcode (product's own or one seen on an earlier purchase of it), then
+     * barcode (piece barcode, a known pack barcode, or one seen on an earlier
+     * purchase of it), then
      * per-piece product name, then the same receipt wording as before.
      */
     public function matchProduct(?int $productId, ?string $barcode, string $productName, string $receiptName = ''): ?array
@@ -58,7 +59,7 @@ class PurchaseService
         $barcode = trim((string) $barcode);
         if ($barcode !== '') {
             $row = $first('SELECT * FROM products WHERE barcode = ? AND consignor_id IS NULL ORDER BY id DESC LIMIT 1', [$barcode])
-                ?? $first('SELECT * FROM products WHERE pack_barcode = ? AND consignor_id IS NULL ORDER BY id DESC LIMIT 1', [$barcode])
+                ?? $this->products->findByPackBarcode($barcode)
                 ?? $first(
                     'SELECT p.* FROM purchase_items pi JOIN products p ON p.id = pi.product_id
                      WHERE pi.barcode = ? AND p.consignor_id IS NULL ORDER BY pi.id DESC LIMIT 1',
@@ -106,7 +107,12 @@ class PurchaseService
     {
         $receiptName = trim((string) ($item['name'] ?? ''));
         [$guessName, $guessPack] = ReceiptExtractor::splitPack($receiptName);
+        $barcode = trim((string) ($item['barcode'] ?? ''));
         $pack = isset($item['pack_size']) && (int) $item['pack_size'] > 1 ? min((int) $item['pack_size'], 1000) : $guessPack;
+        // A known pack barcode tells how many pieces are in it, even when the receipt does not.
+        if ($pack <= 1 && $barcode !== '' && ($known = $this->products->findByPackBarcode($barcode))) {
+            $pack = (int) $known['pack_size'];
+        }
         $productName = trim((string) ($item['product_name'] ?? ''));
         if ($productName === '') {
             $productName = $pack > 1 ? $guessName : $receiptName;
@@ -128,7 +134,7 @@ class PurchaseService
             'item_type' => in_array($type, ['stock', 'supply'], true) ? $type : null,
             'receipt_name' => $receiptName !== '' ? $receiptName : $productName,
             'product_name' => $productName,
-            'barcode' => trim((string) ($item['barcode'] ?? '')) ?: null,
+            'barcode' => $barcode !== '' ? $barcode : null,
             'product_id' => isset($item['product_id']) ? (int) $item['product_id'] : null,
             'qty' => $qty,
             'pack_size' => $pack,
@@ -241,10 +247,9 @@ class PurchaseService
                     continue;
                 }
                 // A pack's barcode is not the barcode of the single piece sold at the POS;
-                // it is kept separately (pack_barcode) for reference and matching.
+                // each pack size has its own, kept in product_pack_barcodes.
                 $pieceBarcode = $l['pack_size'] === 1 ? $l['barcode'] : null;
                 $packBarcode = $l['pack_size'] > 1 ? $l['barcode'] : null;
-                $packSize = $l['pack_size'] > 1 ? $l['pack_size'] : null;
                 $match = $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']);
                 if ($match) {
                     $productId = (int) $match['id'];
@@ -258,11 +263,10 @@ class PurchaseService
                     $this->products->addStock($productId, $l['units'], $userId, $ip);
                     $old = $this->products->find($productId);
                     $upd = $this->db->prepare(
-                        'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?),
-                                pack_barcode = COALESCE(?, pack_barcode), pack_size = COALESCE(?, pack_size), updated_at = NOW()
+                        'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?), updated_at = NOW()
                          WHERE id = ?'
                     );
-                    $upd->execute([$avgCost, $salePrice, $pieceBarcode, $packBarcode, $packSize, $productId]);
+                    $upd->execute([$avgCost, $salePrice, $pieceBarcode, $productId]);
                     $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
                     $isNew = false;
                 } else {
@@ -280,11 +284,10 @@ class PurchaseService
                         'listing_fee_status' => 'waived',
                         'listing_fee_amount' => 0,
                     ], $userId, $ip);
-                    if ($packBarcode !== null || $packSize !== null) {
-                        $this->db->prepare('UPDATE products SET pack_barcode = ?, pack_size = ? WHERE id = ?')
-                            ->execute([$packBarcode, $packSize, $productId]);
-                    }
                     $isNew = true;
+                }
+                if ($packBarcode !== null) {
+                    $this->products->savePackBarcode($productId, $packBarcode, $l['pack_size']);
                 }
                 $insItem->execute([
                     $docId, $productId, 'stock', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
@@ -334,7 +337,7 @@ class PurchaseService
             return null;
         }
         $items = $this->db->prepare(
-            'SELECT pi.*, p.name AS product_name, p.qty_stock, p.pack_barcode FROM purchase_items pi LEFT JOIN products p ON p.id = pi.product_id
+            'SELECT pi.*, p.name AS product_name, p.qty_stock FROM purchase_items pi LEFT JOIN products p ON p.id = pi.product_id
              WHERE pi.purchase_document_id = ? ORDER BY pi.id ASC'
         );
         $items->execute([$id]);

@@ -42,9 +42,12 @@ export async function render(container) {
         const before = it.item_type;
         if (!it.typeTouched && p.item_type) it.item_type = p.item_type;
         it.match = p.match;
+        // A known pack barcode fills in how many pieces the pack holds.
+        const packFilled = p.pack_size > 1 && Number(it.pack_size) <= 1;
+        if (packFilled) it.pack_size = p.pack_size;
         it.suggested = p.match ? p.match.sale_price : p.suggested_price;
         if (!it.priceTouched) it.sale_price = it.suggested || 0;
-        return before !== it.item_type;
+        return before !== it.item_type || packFilled;
     }
 
     try {

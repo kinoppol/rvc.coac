@@ -19,7 +19,7 @@ class InventoryService
 
     public function products(string $search = ''): array
     {
-        $sql = "SELECT p.id, p.name, p.barcode, p.pack_barcode, p.pack_size,
+        $sql = "SELECT p.id, p.name, p.barcode,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price,
                        ROUND(p.qty_stock * p.cost_price, 2) AS stock_cost_value,
@@ -36,14 +36,26 @@ class InventoryService
                 WHERE p.consignor_id IS NULL";
         $params = [];
         if ($search !== '') {
-            $sql .= ' AND (p.name LIKE ? OR p.barcode = ? OR p.pack_barcode = ?)';
+            $sql .= ' AND (p.name LIKE ? OR p.barcode = ? OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))';
             $params = ['%' . $search . '%', $search, $search];
         }
         $sql .= ' ORDER BY p.name ASC';
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         $rows = $stmt->fetchAll();
+
+        $packs = [];
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $this->db->prepare("SELECT product_id, barcode, pack_size FROM product_pack_barcodes WHERE product_id IN ($in) ORDER BY pack_size ASC, id ASC");
+            $stmt->execute($ids);
+            foreach ($stmt->fetchAll() as $b) {
+                $packs[(int) $b['product_id']][] = ['barcode' => $b['barcode'], 'pack_size' => (int) $b['pack_size']];
+            }
+        }
         foreach ($rows as &$r) {
+            $r['pack_barcodes'] = $packs[(int) $r['id']] ?? [];
             $price = (float) $r['sale_price'];
             $r['margin_percent'] = $price > 0 ? round(($price - (float) $r['cost_price']) / $price * 100, 1) : 0.0;
             $r['profit_total'] = round((float) $r['sales_total'] - (float) $r['cogs_total'], 2);
