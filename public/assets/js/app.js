@@ -68,24 +68,60 @@ async function refreshBadges() {
     updateBadges(badges);
 }
 
+// both | password | sso — set by the admin; unknown (API down) = offer both.
+let loginMethods = 'both';
+// In SSO-only mode the password form is the admin fallback, hidden behind a link.
+let adminFormOpen = new URLSearchParams(location.search).get('login') === 'password';
+
+async function showLogin(message) {
+    try {
+        loginMethods = (await api.get('/auth/methods')).login_methods || 'both';
+    } catch (e) { /* keep last known */ }
+    renderLogin(message);
+}
+
 function renderLogin(message) {
+    const ssoBtn = (primary) => `<a class="btn ${primary ? '' : 'secondary'}" href="auth/login" style="display:block;text-align:center;text-decoration:none">ลงชื่อเข้าใช้ผ่านระบบ RVC-ONE</a>`;
+    const form = (note) => `
+        ${note ? `<p class="muted" style="font-size:12.5px;margin:0 0 10px">${note}</p>` : ''}
+        <form id="login-form" style="display:flex;flex-direction:column;gap:14px">
+          <label class="field">ชื่อผู้ใช้ <input name="username" required autofocus></label>
+          <label class="field">รหัสผ่าน <input name="password" type="password" required></label>
+          <button type="submit" class="btn">เข้าสู่ระบบ</button>
+        </form>`;
+
+    let body;
+    if (loginMethods === 'password') {
+        body = form();
+    } else if (loginMethods === 'sso') {
+        body = adminFormOpen
+            ? `${form('สำหรับผู้ดูแลระบบ กรณีเข้าสู่ระบบผ่าน RVC-ONE ไม่ได้')}
+               <div style="text-align:center;margin-top:14px"><a href="#" id="admin-login-toggle" class="muted" style="font-size:12.5px">← กลับไปเข้าสู่ระบบผ่าน RVC-ONE</a></div>`
+            : `${ssoBtn(true)}
+               <div style="text-align:center;margin-top:16px"><a href="#" id="admin-login-toggle" class="muted" style="font-size:12.5px">ผู้ดูแลระบบ: ลงชื่อเข้าใช้ด้วยรหัสผ่าน</a></div>`;
+    } else {
+        body = `${form()}
+        <div class="muted" style="text-align:center;font-size:12.5px;margin:14px 0">หรือ</div>
+        ${ssoBtn(false)}`;
+    }
+
     root.innerHTML = `
     <div class="auth-wrap">
       <div class="auth-card">
         <h1>เข้าสู่ระบบ</h1>
         <p class="sub">ระบบฝากขาย ร้านค้าสหการ</p>
         ${message ? `<div class="error-box" style="margin-bottom:14px">${escapeHtml(message)}</div>` : ''}
-        <form id="login-form" style="display:flex;flex-direction:column;gap:14px">
-          <label class="field">ชื่อผู้ใช้ <input name="username" required autofocus></label>
-          <label class="field">รหัสผ่าน <input name="password" type="password" required></label>
-          <button type="submit" class="btn">เข้าสู่ระบบ</button>
-        </form>
-        <div class="muted" style="text-align:center;font-size:12.5px;margin:14px 0">หรือ</div>
-        <a class="btn secondary" href="auth/login" style="display:block;text-align:center;text-decoration:none">ลงชื่อเข้าใช้ผ่านระบบ RVC-ONE</a>
+        ${body}
       </div>
     </div>`;
 
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
+    document.getElementById('admin-login-toggle')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        adminFormOpen = !adminFormOpen;
+        renderLogin();
+    });
+
+    document.getElementById('login-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const form = new FormData(e.target);
         try {
@@ -114,7 +150,7 @@ function onAuthenticated(data) {
         try { await api.post('/auth/logout'); } catch (e) { /* ignore */ }
         location.hash = '';
         unmountAssistant();
-        renderLogin();
+        showLogin();
     });
     document.getElementById('side-nav').addEventListener('click', (e) => {
         const btn = e.target.closest('.nav-btn');
@@ -136,6 +172,6 @@ window.addEventListener('app:unauthorized', () => { unmountAssistant(); renderLo
         const data = await api.get('/auth/me');
         onAuthenticated(data);
     } catch (e) {
-        renderLogin();
+        showLogin();
     }
 })();

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\UserRepo;
+use App\Services\SettingsService;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -31,6 +32,12 @@ class AuthController
             return $this->error($response, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', 401);
         }
 
+        $mode = (new SettingsService(Db::connection()))->loginMethods();
+        // SSO-only still lets admins in with a password, in case RVC-ONE is down.
+        if ($mode === 'sso' && $user['role'] !== 'admin') {
+            return $this->error($response, 'ระบบเปิดให้เข้าสู่ระบบผ่าน RVC-ONE เท่านั้น (รหัสผ่านใช้ได้เฉพาะผู้ดูแลระบบ)', 403);
+        }
+
         session_regenerate_id(true);
         $_SESSION['user_id'] = (int) $user['id'];
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -40,6 +47,12 @@ class AuthController
             'permissions' => $this->permissionsFor($userRepo, $user['role']),
             'csrf_token' => $_SESSION['csrf_token'],
         ]);
+    }
+
+    /** Public: which sign-in options the login page should offer. */
+    public function methods(Request $request, Response $response): Response
+    {
+        return $this->json($response, ['login_methods' => (new SettingsService(Db::connection()))->loginMethods()]);
     }
 
     public function logout(Request $request, Response $response): Response

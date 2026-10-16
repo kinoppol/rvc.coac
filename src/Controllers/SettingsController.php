@@ -30,6 +30,9 @@ class SettingsController
     public function update(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();
+        if (isset($body['login_methods']) && !in_array($body['login_methods'], SettingsService::LOGIN_METHODS, true)) {
+            return $this->error($response, 'วิธีการเข้าสู่ระบบไม่ถูกต้อง', 422);
+        }
         $user = $request->getAttribute('user');
         $db = Db::connection();
         $settings = new SettingsService($db);

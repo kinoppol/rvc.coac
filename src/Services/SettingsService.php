@@ -23,7 +23,17 @@ class SettingsService
         'ai_cost_receipt' => '5',
         'ai_markdown_min_chars' => '1000',
         'ai_markdown_min_table_rows' => '10',
+        'login_methods' => 'both',
     ];
+
+    /** both = password + RVC-ONE; sso = RVC-ONE only (admins keep a password fallback). */
+    public const LOGIN_METHODS = ['both', 'password', 'sso'];
+
+    public function loginMethods(): string
+    {
+        $v = $this->get('login_methods');
+        return in_array($v, self::LOGIN_METHODS, true) ? $v : 'both';
+    }
 
     public function __construct(private PDO $db)
     {

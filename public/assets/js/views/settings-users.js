@@ -2,6 +2,12 @@ import { api } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
+const METHOD_LABEL = { both: 'รหัสผ่าน และ RVC-ONE', sso: 'เฉพาะ RVC-ONE', password: 'เฉพาะรหัสผ่าน' };
+const METHOD_HINT = {
+    both: 'ผู้ใช้เลือกได้ว่าจะเข้าด้วยชื่อผู้ใช้/รหัสผ่าน หรือผ่าน RVC-ONE',
+    sso: 'ผู้ใช้ทั่วไปเข้าได้ผ่าน RVC-ONE เท่านั้น — ผู้ดูแลระบบยังใช้รหัสผ่านได้จากลิงก์ «ผู้ดูแลระบบ: ลงชื่อเข้าใช้ด้วยรหัสผ่าน» ในหน้าเข้าสู่ระบบ (สำหรับกรณี RVC-ONE ล่ม)',
+    password: 'ปิดการเข้าสู่ระบบผ่าน RVC-ONE ทุกคนต้องใช้ชื่อผู้ใช้และรหัสผ่าน',
+};
 const TYPE_LABEL = { staff: 'ครู/บุคลากร', student: 'นักเรียน' };
 
 function roleSelect(name, value) {
@@ -16,8 +22,8 @@ export async function renderUsersPanel(el, { user: me }) {
     let results = [];
 
     async function load() {
-        const [users, oa] = await Promise.all([api.get('/users'), api.get('/oa/status')]);
-        draw(users.data, oa);
+        const [users, oa, m] = await Promise.all([api.get('/users'), api.get('/oa/status'), api.get('/auth/methods')]);
+        draw(users.data, oa, m.login_methods);
     }
 
     function syncLine(oa) {
@@ -29,13 +35,19 @@ export async function renderUsersPanel(el, { user: me }) {
         return `<span class="pill ok">สำเร็จ</span> ${when} (${last.mode === 'full' ? 'ทั้งหมด' : 'เฉพาะที่เปลี่ยน'}: ใหม่ ${last.added}, อัปเดต ${last.updated}, ถูกระงับ ${last.suspended})`;
     }
 
-    function draw(users, oa) {
+    function draw(users, oa, methods) {
         el.innerHTML = `
         <section class="card">
           <div class="card-head"><h2>ผู้ใช้งานระบบ และ RVC-ONE</h2></div>
           <div class="card-pad" style="display:flex;flex-direction:column;gap:12px;font-size:13px">
             ${message ? `<div class="${message.ok ? 'pill ok' : 'error-box'}" style="align-self:flex-start">${escapeHtml(message.text)}</div>` : ''}
             ${oa.secret_configured ? '' : `<div class="error-box">ยังไม่ได้ตั้งค่า client_secret ของ RVC-ONE (env OA_CLIENT_SECRET หรือ config/config.php → oa.client_secret) จึงยังซิงค์รายชื่อไม่ได้ — การเข้าสู่ระบบผ่าน RVC-ONE ใช้งานได้ตามปกติ</div>`}
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <b>วิธีเข้าสู่ระบบที่อนุญาต</b>
+              <div class="actions-row">${Object.entries(METHOD_LABEL).map(([k, v]) =>
+                  `<button type="button" class="tab-btn ${k === methods ? 'active' : ''}" data-method="${k}">${escapeHtml(v)}</button>`).join('')}</div>
+              <div class="muted" style="font-size:12px">${escapeHtml(METHOD_HINT[methods] || '')}</div>
+            </div>
             <div>รายชื่อจาก RVC-ONE: <b>${oa.directory_count}</b> คน · ซิงค์ล่าสุด: ${syncLine(oa)}</div>
             <div class="actions-row">
               <button class="btn sm" data-sync="0">ซิงค์รายชื่อตอนนี้</button>
@@ -95,6 +107,11 @@ export async function renderUsersPanel(el, { user: me }) {
     }
 
     function bind() {
+        el.querySelectorAll('[data-method]').forEach((btn) => btn.addEventListener('click', () => {
+            const v = btn.dataset.method;
+            if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
+            act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
+        }));
         el.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => {
             btn.disabled = true;
             btn.textContent = 'กำลังซิงค์...';

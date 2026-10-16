@@ -73,6 +73,7 @@ $app->addErrorMiddleware(false, true, true)
 
 // ---- Public routes ----
 $app->post('/api/auth/login', [AuthController::class, 'login']);
+$app->get('/api/auth/methods', [AuthController::class, 'methods']);
 $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
 
 // ---- Sign-in through RVC-ONE (SSO) ----

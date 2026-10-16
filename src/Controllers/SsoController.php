@@ -8,6 +8,7 @@ use App\Repositories\OaUserRepo;
 use App\Repositories\UserRepo;
 use App\Services\OaApiException;
 use App\Services\OaClient;
+use App\Services\SettingsService;
 use App\Support\Db;
 use App\Support\OaConfig;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -31,6 +32,9 @@ class SsoController
 
     public function start(Request $request, Response $response): Response
     {
+        if ($this->ssoDisabled()) {
+            return $this->disabledPage($response);
+        }
         $state = bin2hex(random_bytes(16));
         $_SESSION['oa_sso_state'] = $state;
         $this->setStateCookie($state, time() + self::STATE_TTL);
@@ -65,6 +69,10 @@ class SsoController
         $stored = $request->getCookieParams()[self::STATE_COOKIE] ?? $_SESSION['oa_sso_state'] ?? null;
         $stored = is_string($stored) && $stored !== '' ? $stored : null;
         $this->clearState(); // one-time use, whatever happens next
+
+        if ($this->ssoDisabled()) {
+            return $this->disabledPage($response);
+        }
 
         // CSRF: a state we issued must come back unchanged. No stored state and
         // an empty posted state = login started from the RVC-ONE Workspace tile.
@@ -128,6 +136,17 @@ class SsoController
         return $response->withHeader('Location', $this->appUrl())->withHeader('Cache-Control', 'no-store')->withStatus(303);
     }
 
+    private function ssoDisabled(): bool
+    {
+        return (new SettingsService(Db::connection()))->loginMethods() === 'password';
+    }
+
+    private function disabledPage(Response $response): Response
+    {
+        return $this->page($response, 403, 'ปิดการเข้าสู่ระบบผ่าน RVC-ONE',
+            'ผู้ดูแลระบบตั้งค่าให้เข้าสู่ระบบด้วยชื่อผู้ใช้และรหัสผ่านเท่านั้น', false);
+    }
+
     /** The SPA lives next to index.php (…/public/), whichever URL reached us. */
     private function appUrl(): string
     {
@@ -153,10 +172,13 @@ class SsoController
         $this->setStateCookie('', time() - 3600);
     }
 
-    private function page(Response $response, int $status, string $title, string $message): Response
+    private function page(Response $response, int $status, string $title, string $message, bool $retry = true): Response
     {
         $h = fn (string $s) => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
         $app = $h($this->appUrl());
+        $retryLink = $retry
+            ? "<a class=\"btn\" style=\"text-align:center;text-decoration:none\" href=\"{$app}auth/login\">ลงชื่อเข้าใช้ผ่านระบบ RVC-ONE อีกครั้ง</a>"
+            : '';
         $title = $h($title);
         $message = $h($message);
         $html = <<<HTML
@@ -175,7 +197,7 @@ class SsoController
               <p class="sub">ระบบฝากขาย ร้านค้าสหการ</p>
               <p style="margin:0 0 20px;line-height:1.6">{$message}</p>
               <div style="display:flex;flex-direction:column;gap:10px">
-                <a class="btn" style="text-align:center;text-decoration:none" href="{$app}auth/login">ลงชื่อเข้าใช้ผ่านระบบ RVC-ONE อีกครั้ง</a>
+                {$retryLink}
                 <a class="btn secondary" style="text-align:center;text-decoration:none" href="{$app}">กลับหน้าเข้าสู่ระบบ</a>
               </div>
             </div></div>
