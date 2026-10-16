@@ -193,7 +193,7 @@ class AiToolbox
                                 'type' => 'object',
                                 'properties' => [
                                     'name' => ['type' => 'string'],
-                                    'barcode' => ['type' => 'string'],
+                                    'barcode' => ['type' => 'string', 'description' => 'บาร์โค้ดที่พิมพ์ในใบเสร็จ ถ้าไม่มีให้ใช้คอลัมน์ "รหัสสินค้า" ของร้านค้า (เช่น 104651) แทน ห้ามใช้ลำดับ จำนวน หรือรหัส ภ.พ./VAT'],
                                     'product_name' => ['type' => 'string', 'description' => 'ชื่อสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คออก)'],
                                     'item_type' => ['type' => 'string', 'enum' => ['stock', 'supply'], 'description' => 'stock = ซื้อมาขาย, supply = ซื้อมาใช้ในกิจการ (เช่น ถุงหูหิ้ว หลอด) บันทึกเป็นต้นทุน ไม่เข้าสต๊อก ไม่มีราคาขาย'],
                                     'qty' => ['type' => 'integer', 'description' => 'จำนวนตามใบเสร็จ (เช่น จำนวนแพ็ค)'],

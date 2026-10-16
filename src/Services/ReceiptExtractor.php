@@ -23,6 +23,7 @@ class ReceiptExtractor
       สังเกตจากชื่อ เช่น "X12", "x 12", "*6", "×24", "แพ็ค 6", "6 ซอง" (ถ้าไม่ใช่แพ็คให้ pack_size = 1)
       qty และ unit_price ยังเป็นจำนวนแพ็คและราคาต่อแพ็คตามที่พิมพ์ในใบเสร็จ
       barcode ของสินค้าแพ็คคือบาร์โค้ดของแพ็ค ให้ใส่ตามที่พิมพ์ (ระบบเก็บไว้อ้างอิง)
+      ถ้าใบเสร็จไม่มีบาร์โค้ด ให้ใช้ "รหัสสินค้า" ของร้านค้าแทน (ห้ามใช้ลำดับ จำนวน หรือรหัส ภ.พ./VAT)
     - item_type: "stock" = ซื้อมาขาย, "supply" = ซื้อมาใช้ในกิจการ ไม่ได้ขาย
       เช่น ถุงหูหิ้ว ถุงร้อน/ถุงเย็น หลอด แก้ว/ฝาแก้วเปล่า ช้อนส้อมพลาสติก กล่องใส่อาหาร ทิชชู่ ถุงขยะ น้ำยาล้างจาน อุปกรณ์ทำความสะอาด เครื่องเขียน
       ส่วน product_name คือชื่อสินค้าสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คออก เช่น "เมล็ดทานตะวัน 15 ก.X12" → "เมล็ดทานตะวัน 15 ก.")
@@ -120,7 +121,8 @@ class ReceiptExtractor
                 'name' => $name,
                 'product_name' => $productName,
                 'item_type' => in_array($type, ['stock', 'supply'], true) ? $type : null,
-                'barcode' => preg_replace('/\D/', '', $str($it['barcode'] ?? '')) ?: '',
+                // Under 4 digits is a line no./qty/VAT code, never a barcode or SKU.
+                'barcode' => (fn ($b) => strlen($b) >= 4 ? $b : '')(preg_replace('/\D/', '', $str($it['barcode'] ?? ''))),
                 'qty' => $qty,
                 'pack_size' => $pack,
                 'unit_cost' => $unit,
