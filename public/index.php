@@ -149,6 +149,8 @@ $app->group('/api', function ($group) {
 
     $group->get('/oa/status', [OaAdminController::class, 'status'])
         ->add(new RoleGuard('settings.edit'));
+    $group->put('/oa/secret', [OaAdminController::class, 'saveSecret'])
+        ->add(new RoleGuard('settings.edit'));
     $group->get('/oa/users', [OaAdminController::class, 'search'])
         ->add(new RoleGuard('settings.edit'));
     $group->post('/oa/sync', [OaAdminController::class, 'sync'])

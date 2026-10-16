@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Crypto;
 use PDO;
 
 class SettingsService
@@ -35,6 +36,9 @@ class SettingsService
         return in_array($v, self::LOGIN_METHODS, true) ? $v : 'both';
     }
 
+    /** RVC-ONE client_secret, stored encrypted; never returned by all() or the settings API. */
+    private const OA_SECRET_KEY = 'oa_client_secret_enc';
+
     public function __construct(private PDO $db)
     {
     }
@@ -44,6 +48,9 @@ class SettingsService
         $rows = $this->db->query('SELECT setting_key, setting_value FROM settings')->fetchAll();
         $out = self::DEFAULTS;
         foreach ($rows as $r) {
+            if ($r['setting_key'] === self::OA_SECRET_KEY) {
+                continue;
+            }
             $out[$r['setting_key']] = $r['setting_value'];
         }
         return $out;
@@ -82,6 +89,32 @@ class SettingsService
             $upsert->execute([$key, $new]);
             $audit->execute([$key, $old, $new, $userId]);
         }
+    }
+
+    public function oaClientSecret(): string
+    {
+        $stmt = $this->db->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute([self::OA_SECRET_KEY]);
+        $enc = $stmt->fetchColumn();
+        return $enc === false ? '' : Crypto::decrypt((string) $enc);
+    }
+
+    /** Saves (or, with '', removes) the RVC-ONE client_secret; the audit log records only that it changed. */
+    public function setOaClientSecret(string $secret, ?int $userId): void
+    {
+        $had = $this->oaClientSecret() !== '';
+        if ($secret === '') {
+            $this->db->prepare('DELETE FROM settings WHERE setting_key = ?')->execute([self::OA_SECRET_KEY]);
+        } else {
+            $this->db->prepare(
+                'INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)
+                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)'
+            )->execute([self::OA_SECRET_KEY, Crypto::encrypt($secret)]);
+        }
+        $this->db->prepare(
+            'INSERT INTO settings_audit_log (setting_key, old_value, new_value, changed_by, changed_at)
+             VALUES (?, ?, ?, ?, NOW())'
+        )->execute(['oa_client_secret', $had ? '(ตั้งค่าไว้)' : '', $secret === '' ? '' : '(ตั้งค่าใหม่)', $userId]);
     }
 
     public function auditLog(int $limit = 20): array

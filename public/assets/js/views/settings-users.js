@@ -35,13 +35,34 @@ export async function renderUsersPanel(el, { user: me }) {
         return `<span class="pill ok">สำเร็จ</span> ${when} (${last.mode === 'full' ? 'ทั้งหมด' : 'เฉพาะที่เปลี่ยน'}: ใหม่ ${last.added}, อัปเดต ${last.updated}, ถูกระงับ ${last.suspended})`;
     }
 
+    function secretForm(oa) {
+        const fixed = oa.secret_source === 'env' || oa.secret_source === 'config';
+        const state = oa.secret_source === 'none' ? '<span class="pill bad">ยังไม่ตั้งค่า</span>'
+            : fixed ? `<span class="pill ok">ตั้งค่าไว้ใน ${oa.secret_source === 'env' ? 'env OA_CLIENT_SECRET' : 'config/config.php'}</span>`
+            : '<span class="pill ok">ตั้งค่าแล้ว</span>';
+        return `
+            <form id="oa-secret" style="display:flex;flex-direction:column;gap:6px">
+              <b>การเชื่อมต่อ RVC-ONE</b>
+              <div>Client ID: <code>${escapeHtml(oa.client_id || '')}</code> · Client Secret: ${state}</div>
+              ${fixed ? `<div class="muted" style="font-size:12px">ค่านี้ถูกกำหนดไว้ฝั่งเซิร์ฟเวอร์ จึงแก้จากหน้านี้ไม่ได้ — ต้องแก้ที่ ${oa.secret_source === 'env' ? 'env OA_CLIENT_SECRET' : 'config/config.php → oa.client_secret'}</div>` : `
+              <div class="actions-row">
+                <input name="client_secret" type="password" autocomplete="off" style="max-width:320px"
+                  placeholder="${oa.secret_source === 'db' ? 'วาง Secret ใหม่เพื่อเปลี่ยน' : 'วาง Client Secret จาก RVC-ONE'}">
+                <button class="btn sm" type="submit">บันทึก</button>
+                ${oa.secret_source === 'db' ? '<button class="btn sm secondary" type="button" data-clear-secret>ลบ Secret</button>' : ''}
+              </div>
+              <div class="muted" style="font-size:12px">เก็บแบบเข้ารหัสในฐานข้อมูล และจะไม่แสดงค่าอีก · ถ้ากด «สร้าง Secret ใหม่» ใน RVC-ONE ต้องนำค่าใหม่มาใส่ที่นี่ด้วย</div>`}
+            </form>`;
+    }
+
     function draw(users, oa, methods) {
         el.innerHTML = `
         <section class="card">
           <div class="card-head"><h2>ผู้ใช้งานระบบ และ RVC-ONE</h2></div>
           <div class="card-pad" style="display:flex;flex-direction:column;gap:12px;font-size:13px">
             ${message ? `<div class="${message.ok ? 'pill ok' : 'error-box'}" style="align-self:flex-start">${escapeHtml(message.text)}</div>` : ''}
-            ${oa.secret_configured ? '' : `<div class="error-box">ยังไม่ได้ตั้งค่า client_secret ของ RVC-ONE (env OA_CLIENT_SECRET หรือ config/config.php → oa.client_secret) จึงยังซิงค์รายชื่อไม่ได้ — การเข้าสู่ระบบผ่าน RVC-ONE ใช้งานได้ตามปกติ</div>`}
+            ${oa.secret_configured ? '' : `<div class="error-box">ยังไม่ได้ตั้งค่า Client Secret ของ RVC-ONE จึงยังซิงค์รายชื่อไม่ได้ — คัดลอกจากหน้าแก้ไขแอปใน RVC-ONE (แท็บ «การเชื่อมต่อ SSO») มาใส่ในช่องด้านล่าง · การเข้าสู่ระบบผ่าน RVC-ONE ใช้งานได้ตามปกติ</div>`}
+            ${secretForm(oa)}
             <div style="display:flex;flex-direction:column;gap:6px">
               <b>วิธีเข้าสู่ระบบที่อนุญาต</b>
               <div class="actions-row">${Object.entries(METHOD_LABEL).map(([k, v]) =>
@@ -112,6 +133,17 @@ export async function renderUsersPanel(el, { user: me }) {
             if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
             act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
         }));
+        el.querySelector('#oa-secret').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const v = (new FormData(e.target).get('client_secret') || '').trim();
+            if (!v) return;
+            act(() => api.put('/oa/secret', { client_secret: v }), 'บันทึก Client Secret แล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อทดสอบ');
+        });
+        el.querySelector('[data-clear-secret]')?.addEventListener('click', () => {
+            if (confirm('ลบ Client Secret? จะซิงค์รายชื่อจาก RVC-ONE ไม่ได้จนกว่าจะใส่ใหม่')) {
+                act(() => api.put('/oa/secret', { client_secret: '', clear: true }), 'ลบ Client Secret แล้ว');
+            }
+        });
         el.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => {
             btn.disabled = true;
             btn.textContent = 'กำลังซิงค์...';

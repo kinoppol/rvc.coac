@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Repositories\OaUserRepo;
 use App\Services\OaApiException;
 use App\Services\OaUserSync;
+use App\Services\SettingsService;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use App\Support\OaConfig;
@@ -29,10 +30,32 @@ class OaAdminController
             'runs' => $sync->recentRuns(10),
             'sync_type' => OaConfig::get('sync_type'),
             'secret_configured' => (string) OaConfig::get('client_secret') !== '',
+            'secret_source' => OaConfig::secretSource(),
+            'client_id' => OaConfig::get('client_id'),
             'auto_provision' => (bool) OaConfig::get('auto_provision'),
             // The "URL เริ่ม SSO ของแอป" to register at RVC-ONE: same folder as the callback.
             'sso_start_url' => preg_replace('#/callback$#', '/login', $redirect),
         ]);
+    }
+
+    /** Saves the client_secret copied from RVC-ONE (blank + clear = remove it). */
+    public function saveSecret(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $secret = trim((string) ($body['client_secret'] ?? ''));
+        if ($secret === '' && empty($body['clear'])) {
+            return $this->error($response, 'กรุณากรอก Client Secret', 422);
+        }
+        if (strlen($secret) > 255 || preg_match('/\s/', $secret)) {
+            return $this->error($response, 'Client Secret ไม่ถูกต้อง', 422);
+        }
+        try {
+            (new SettingsService(Db::connection()))
+                ->setOaClientSecret($secret, (int) $request->getAttribute('user')['id']);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 500);
+        }
+        return $this->json($response, ['ok' => true, 'secret_source' => OaConfig::secretSource()]);
     }
 
     public function search(Request $request, Response $response): Response
