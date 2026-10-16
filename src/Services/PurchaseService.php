@@ -106,7 +106,7 @@ class PurchaseService
     {
         $receiptName = trim((string) ($item['name'] ?? ''));
         [$guessName, $guessPack] = ReceiptExtractor::splitPack($receiptName);
-        $pack = isset($item['pack_size']) && (int) $item['pack_size'] >= 1 ? min((int) $item['pack_size'], 1000) : $guessPack;
+        $pack = isset($item['pack_size']) && (int) $item['pack_size'] > 1 ? min((int) $item['pack_size'], 1000) : $guessPack;
         $productName = trim((string) ($item['product_name'] ?? ''));
         if ($productName === '') {
             $productName = $pack > 1 ? $guessName : $receiptName;

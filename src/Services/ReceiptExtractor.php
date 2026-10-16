@@ -75,7 +75,7 @@ class ReceiptExtractor
     }
 
     /** Pack size written into a product name, e.g. "…15 ก.X12" → 12, "…56ก*6" → 6. */
-    public const PACK_PATTERN = '/\s*[xX×*]\s*(\d{1,3})\s*$/u';
+    public const PACK_PATTERN = '/\s*(?|[xX×*]\s*(\d{1,3})|(\d{1,3})\s*(?:กล่อง|ขวด|ซอง|กระป๋อง|ชิ้น|ถุง|ห่อ))\s*$/u';
 
     /** @return array{0:string,1:int} [per-piece name, pack size] */
     public static function splitPack(string $name): array
@@ -109,7 +109,8 @@ class ReceiptExtractor
             $name = $str($it['name']);
             [$guessName, $guessPack] = self::splitPack($name);
             $pack = (int) round($num($it['pack_size'] ?? 0));
-            $pack = $pack >= 1 ? min($pack, 1000) : $guessPack;
+            // A model often answers pack_size = 1 even when the name says "x 36"; trust the name then.
+            $pack = $pack > 1 ? min($pack, 1000) : $guessPack;
             $productName = $str($it['product_name'] ?? '');
             if ($productName === '') {
                 $productName = $pack > 1 ? $guessName : $name;
