@@ -90,6 +90,11 @@ class SsoController
             $verified = (new OaClient())->verifyToken($tokenId, $tokenKey);
         } catch (OaApiException $e) {
             error_log('[oa-sso] verify_token failed: ' . $e->getMessage());
+            if ($e->apiError === 'invalid_client') {
+                return $this->page($response, 401, 'ไม่สามารถเข้าสู่ระบบได้',
+                    'RVC-ONE ไม่ยอมรับการเชื่อมต่อของแอปนี้ (client_id / client_secret ไม่ถูกต้อง) '
+                    . 'กรุณาแจ้งผู้ดูแลระบบให้ตรวจ Client Secret ในหน้าตั้งค่า → RVC-ONE');
+            }
             return $this->page($response, 401, 'ไม่สามารถเข้าสู่ระบบได้',
                 'ติดต่อระบบ RVC-ONE ไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่');
         }

@@ -21,15 +21,28 @@ class OaClient
      */
     public function verifyToken(string $tokenId, string $tokenKey): ?array
     {
-        [$status, $data] = $this->send('POST', (string) OaConfig::get('verify_url'), [
-            CURLOPT_POSTFIELDS => http_build_query(['token_id' => $tokenId, 'token_key' => $tokenKey]),
+        $clientId = (string) OaConfig::get('client_id');
+        $secret = (string) OaConfig::get('client_secret');
+        $opts = [
+            CURLOPT_POSTFIELDS => http_build_query(['token_id' => $tokenId, 'token_key' => $tokenKey, 'client_id' => $clientId]),
             CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded', 'Accept: application/json'],
-        ]);
+        ];
+        // RVC-ONE checks the calling app with client_id + client_secret (HTTP Basic).
+        if ($secret !== '') {
+            $opts[CURLOPT_HTTPAUTH] = CURLAUTH_BASIC;
+            $opts[CURLOPT_USERPWD] = $clientId . ':' . $secret;
+        }
+        [$status, $data] = $this->send('POST', (string) OaConfig::get('verify_url'), $opts);
 
         if ($status === 200 && ($data['valid'] ?? false) === true && is_array($data['user'] ?? null)) {
             return ['user' => $data['user'], 'org' => is_array($data['org'] ?? null) ? $data['org'] : null];
         }
+        $code = is_string($data['error'] ?? null) ? $data['error'] : 'http_' . $status;
+        if ($code === 'invalid_client') {
+            throw new OaApiException('verify_token: ' . $code . ' (HTTP ' . $status . ')', $status, 'invalid_client');
+        }
         if (in_array($status, [400, 401, 403], true) || ($data['valid'] ?? null) === false) {
+            error_log('[oa-sso] verify_token rejected: ' . $code . ' (HTTP ' . $status . ')');
             return null;
         }
         throw new OaApiException('verify_token ตอบกลับไม่ถูกต้อง (HTTP ' . $status . ')', $status);
