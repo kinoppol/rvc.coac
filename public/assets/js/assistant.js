@@ -79,6 +79,7 @@ export async function mountAssistant({ user, navigate }) {
 export function unmountAssistant() {
     if (!ctx) return;
     stopListening();
+    stopWaiting();
     ctx.el.remove();
     ctx = null;
 }
@@ -252,7 +253,10 @@ function render() {
               <div class="ai-suggest">${SUGGESTIONS.map((q) => `<button type="button" data-suggest="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>
             </div>`}
           ${pendingHtml()}
-          ${s.loading ? '<div class="ai-msg bot"><div class="ai-bubble ai-typing"><span></span><span></span><span></span></div></div>' : ''}
+          ${s.loading ? `<div class="ai-msg bot"><div class="ai-bubble ai-thinking">
+            <div class="ai-typing"><span></span><span></span><span></span></div>
+            <span class="ai-status" id="ai-status">${escapeHtml(statusText())}</span>
+            <span class="ai-elapsed" id="ai-elapsed">${elapsedText()}</span></div></div>` : ''}
           ${s.error ? `<div class="error-box" style="font-size:12.5px">${escapeHtml(s.error)}</div>` : ''}
         </div>
         ${s.notice ? `<div class="ai-notice">${escapeHtml(s.notice)}</div>` : ''}
@@ -381,6 +385,68 @@ function bind() {
             startListening();
         }
     });
+}
+
+// ---------------- Waiting indicator ----------------
+
+// Rotating "what's happening" lines while the server works. Reading a receipt
+// (photos or an attached file) takes much longer, so it gets its own script.
+const STATUS_LINES = {
+    general: ['กำลังคิด...', 'กำลังค้นข้อมูลในระบบ...', 'กำลังเรียบเรียงคำตอบ...'],
+    receipt: [
+        'กำลังอ่านใบเสร็จ...', 'กำลังแยกรายการสินค้า...', 'กำลังตรวจจำนวนและราคา...',
+        'กำลังจับคู่กับสินค้าในสต๊อก...', 'กำลังคำนวณต้นทุนต่อชิ้น...', 'กำลังเตรียมร่างใบซื้อ...',
+        'ใกล้เสร็จแล้ว...', 'อีกนิดเดียว รายการเยอะหน่อย...',
+    ],
+};
+const STATUS_EVERY_MS = 3500;
+
+function waitKind() {
+    const last = ctx.state.messages[ctx.state.messages.length - 1];
+    return last?.role === 'user' && (last.attachments?.length || last.documents?.length) ? 'receipt' : 'general';
+}
+
+function statusText() {
+    const w = ctx.state.wait;
+    if (!w) return '';
+    const lines = STATUS_LINES[w.kind];
+    const step = Math.floor((Date.now() - w.started) / STATUS_EVERY_MS);
+    // Walk through the lines once, then keep alternating between the last two.
+    return lines[step < lines.length ? step : lines.length - 2 + ((step - lines.length) % 2)];
+}
+
+function elapsedText() {
+    const w = ctx.state.wait;
+    const sec = w ? Math.floor((Date.now() - w.started) / 1000) : 0;
+    return sec >= 5 ? `${sec} วิ` : '';
+}
+
+function startWaiting() {
+    stopWaiting();
+    const s = ctx.state;
+    s.wait = { kind: waitKind(), started: Date.now(), timer: null };
+    // Update the text in place: a full render() would reset scroll and focus.
+    s.wait.timer = setInterval(() => {
+        const status = ctx?.el.querySelector('#ai-status');
+        if (!status) return;
+        const text = statusText();
+        if (status.textContent !== text) {
+            status.classList.remove('ai-status-in');
+            void status.offsetWidth; // restart the fade-in
+            status.textContent = text;
+            status.classList.add('ai-status-in');
+        }
+        const elapsed = ctx.el.querySelector('#ai-elapsed');
+        if (elapsed) elapsed.textContent = elapsedText();
+    }, 500);
+}
+
+function stopWaiting() {
+    const s = ctx?.state;
+    if (s?.wait) {
+        clearInterval(s.wait.timer);
+        s.wait = null;
+    }
 }
 
 function persist() {
@@ -513,6 +579,7 @@ async function callServer(approvals) {
     const mine = ctx;
     s.loading = true;
     s.error = null;
+    startWaiting();
     render();
     try {
         const res = await api.post('/ai/chat', { model: s.modelId, messages: s.messages, approvals });
@@ -525,6 +592,7 @@ async function callServer(approvals) {
         s.error = err.message;
     }
     s.loading = false;
+    stopWaiting();
     persist();
     render();
     ctx?.el.querySelector('#ai-input')?.focus();
