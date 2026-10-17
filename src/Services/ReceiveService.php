@@ -24,13 +24,14 @@ class ReceiveService
     }
 
     /**
-     * @param array<int,array{name:string, cost_price:float, qty:int, barcode?:string, expiry_date?:string}> $items
+     * @param array<int,array{name:string, cost_price:float, qty:int, mfg_date:string, barcode?:string, expiry_date?:string}> $items
      */
     public function receive(int $consignorId, array $items, int $userId, ?string $ip, ?int $requestId = null): array
     {
         if (empty($items)) {
             throw new \RuntimeException('ไม่มีรายการรับฝาก');
         }
+        $items = ConsignRequestRepo::cleanItems($items, 500);
         if (!$this->consignors->find($consignorId)) {
             throw new \RuntimeException('ไม่พบผู้ฝากขาย');
         }
@@ -77,6 +78,7 @@ class ReceiveService
                     'round_per_unit' => $calc['round'],
                     'rounding_beneficiary' => $beneficiary,
                     'qty' => $item['qty'],
+                    'mfg_date' => $item['mfg_date'],
                     'expiry_date' => $item['expiry_date'] ?? null,
                     'listing_fee_status' => $isWaived ? 'waived' : 'charged',
                     'listing_fee_amount' => $listingFeeCharged,

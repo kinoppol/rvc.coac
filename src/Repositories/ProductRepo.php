@@ -145,8 +145,8 @@ class ProductRepo
         $stmt = $this->db->prepare(
             'INSERT INTO products
                 (consignor_id, name, barcode, cost_price, sale_price, fee_per_unit, round_per_unit, rounding_beneficiary,
-                 qty_received, qty_stock, expiry_date, listing_fee_status, listing_fee_amount, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                 qty_received, qty_stock, mfg_date, expiry_date, listing_fee_status, listing_fee_amount, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
         );
         $stmt->execute([
             $data['consignor_id'],
@@ -159,6 +159,7 @@ class ProductRepo
             $data['rounding_beneficiary'] ?? 'store',
             $data['qty'],
             $data['qty'],
+            $data['mfg_date'] ?? null,
             $data['expiry_date'] ?? null,
             $data['listing_fee_status'],
             $data['listing_fee_amount'],

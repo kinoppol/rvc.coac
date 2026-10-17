@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
+import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 
 const STATUS = {
     pending: ['warn', 'รอร้านตรวจรับ'],
@@ -15,6 +15,7 @@ export async function render(container) {
     let error = null;
     let success = null;
     let requests = [];
+    let quoteSeq = 0; // ignore quote replies that arrive after a newer keystroke
 
     async function load() {
         requests = (await api.get('/my/requests')).data;
@@ -38,10 +39,11 @@ export async function render(container) {
           ${r.status === 'rejected' ? `<div class="card-pad" style="padding-bottom:0"><div class="error-box">เหตุผล: ${escapeHtml(r.review_note || '-')}</div></div>` : ''}
           ${r.note ? `<div class="card-pad muted" style="padding-bottom:0;font-size:12.5px">หมายเหตุ: ${escapeHtml(r.note)}</div>` : ''}
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th class="num">ราคาที่ต้องการได้</th><th class="num">จำนวน</th><th>วันหมดอายุ</th></tr></thead>
+            <thead><tr><th>สินค้า</th><th class="num">ราคาที่ต้องการได้</th><th class="num">จำนวน</th><th>วันที่ผลิต</th><th>วันหมดอายุ</th></tr></thead>
             <tbody>${r.items.map((i) => `
               <tr><td>${escapeHtml(i.name)}${i.barcode ? `<div class="muted" style="font-size:11.5px;font-family:ui-monospace,monospace">${escapeHtml(i.barcode)}</div>` : ''}</td>
                   <td class="num">${money(i.cost_price)}</td><td class="num">${Number(i.qty)}</td>
+                  <td class="muted">${i.mfg_date ? fmtDate(i.mfg_date) : '-'}</td>
                   <td class="muted">${i.expiry_date ? fmtDate(i.expiry_date) : '-'}</td></tr>`).join('')}
             </tbody>
           </table></div>
@@ -61,10 +63,12 @@ export async function render(container) {
             ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
             <div class="form-grid">
               <label class="field" style="grid-column:span 2">ชื่อสินค้า <input id="f-name" placeholder="เช่น ขนมทองม้วนสมุนไพร"></label>
-              <label class="field">ราคาที่ต้องการได้ต่อชิ้น (บาท) <input id="f-cost" type="number" step="0.25" min="0"></label>
-              <label class="field">จำนวน (ชิ้น) <input id="f-qty" type="number" min="1" value="1"></label>
-              <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode"></label>
+              <label class="field">ราคาที่ต้องการได้ต่อชิ้น (บาท) * <input id="f-cost" type="number" step="0.25" min="0"></label>
+              <div class="field">ราคาขายหน้าร้าน <div id="f-price" class="price-preview">-</div></div>
+              <label class="field">จำนวน (ชิ้น) * <input id="f-qty" type="number" min="1" value="1"></label>
+              <label class="field">วันที่ผลิต * <input id="f-mfg" type="date" value="${todayISO()}" max="${todayISO()}" required></label>
               <label class="field">วันหมดอายุ (ถ้ามี) <input id="f-expiry" type="date"></label>
+              <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode"></label>
             </div>
             <div id="quote-box" class="muted" style="margin:12px 0;font-size:13px"></div>
             <button type="button" class="btn secondary" id="btn-add">+ เพิ่มลงรายการ</button>
@@ -72,11 +76,11 @@ export async function render(container) {
           <section class="card">
             <div class="card-head"><h2>รายการที่จะฝาก (${cart.length})</h2></div>
             <div class="table-wrap"><table>
-              <thead><tr><th>สินค้า</th><th class="num">ราคาที่ต้องการได้</th><th class="num">ราคาขายโดยประมาณ</th><th class="num">จำนวน</th><th></th></tr></thead>
+              <thead><tr><th>สินค้า</th><th class="num">ราคาที่ต้องการได้</th><th class="num">ราคาขายหน้าร้าน</th><th class="num">จำนวน</th><th>วันที่ผลิต</th><th></th></tr></thead>
               <tbody>${cart.map((it, i) => `
                 <tr><td>${escapeHtml(it.name)}</td><td class="num">${money(it.cost_price)}</td><td class="num">${money(it.price)}</td>
-                    <td class="num">${it.qty}</td><td style="text-align:right"><button type="button" class="btn secondary sm" data-remove="${i}">ลบ</button></td></tr>`).join('')
-                || '<tr><td colspan="5" class="empty">ยังไม่มีรายการ</td></tr>'}
+                    <td class="num">${it.qty}</td><td class="muted">${fmtDate(it.mfg_date)}</td><td style="text-align:right"><button type="button" class="btn secondary sm" data-remove="${i}">ลบ</button></td></tr>`).join('')
+                || '<tr><td colspan="6" class="empty">ยังไม่มีรายการ</td></tr>'}
               </tbody>
             </table></div>
             <div class="card-pad" style="display:flex;flex-direction:column;gap:10px">
@@ -114,9 +118,17 @@ export async function render(container) {
     async function updateQuote() {
         const cost = Number(container.querySelector('#f-cost').value);
         const box = container.querySelector('#quote-box');
-        if (!cost) { box.textContent = ''; return; }
-        const q = (await api.post('/my/quote', { cost_price: cost })).data;
-        box.innerHTML = `ราคาขายหน้าร้านโดยประมาณ <b>฿${money(q.price)}</b> (รวมค่าฝากขาย ฿${money(q.fee)} แล้วปัดเศษ)`;
+        const priceEl = container.querySelector('#f-price');
+        const seq = ++quoteSeq;
+        if (!cost) { box.textContent = ''; priceEl.textContent = '-'; return; }
+        try {
+            const q = (await api.post('/my/quote', { cost_price: cost })).data;
+            if (seq !== quoteSeq) return;
+            priceEl.textContent = `฿ ${money(q.price)}`;
+            box.innerHTML = `ราคาที่คุณได้ ฿${money(cost)} + ค่าฝากขาย ฿${money(q.fee)} = ฿${money(q.raw)} → ปัดเป็นราคาขาย <b>฿${money(q.price)}</b>`;
+        } catch (e) {
+            if (seq === quoteSeq) { priceEl.textContent = '-'; box.textContent = e.message; }
+        }
     }
 
     async function addItem() {
@@ -127,13 +139,19 @@ export async function render(container) {
         const qty = Number(container.querySelector('#f-qty').value);
         const barcode = container.querySelector('#f-barcode').value.trim();
         const expiry = container.querySelector('#f-expiry').value;
-        if (!name || !cost || !qty) {
-            error = 'กรุณากรอกชื่อสินค้า ราคา และจำนวนให้ครบ';
+        const mfg = container.querySelector('#f-mfg').value;
+        if (!name || !cost || !qty || !mfg) {
+            error = 'กรุณากรอกชื่อสินค้า ราคา จำนวน และวันที่ผลิตให้ครบ';
+            draw();
+            return;
+        }
+        if (mfg > todayISO() || (expiry && expiry < mfg)) {
+            error = mfg > todayISO() ? 'วันที่ผลิตต้องไม่เกินวันนี้' : 'วันหมดอายุต้องไม่ก่อนวันที่ผลิต';
             draw();
             return;
         }
         const q = (await api.post('/my/quote', { cost_price: cost })).data;
-        cart.push({ name, cost_price: cost, qty, barcode: barcode || null, expiry_date: expiry || null, price: q.price });
+        cart.push({ name, cost_price: cost, qty, barcode: barcode || null, mfg_date: mfg, expiry_date: expiry || null, price: q.price });
         draw();
     }
 
@@ -141,7 +159,7 @@ export async function render(container) {
         try {
             const res = await api.post('/my/requests', {
                 note,
-                items: cart.map(({ name, cost_price, qty, barcode, expiry_date }) => ({ name, cost_price, qty, barcode, expiry_date })),
+                items: cart.map(({ name, cost_price, qty, barcode, mfg_date, expiry_date }) => ({ name, cost_price, qty, barcode, mfg_date, expiry_date })),
             });
             cart = [];
             note = '';

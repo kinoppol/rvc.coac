@@ -19,16 +19,18 @@ class ConsignRequestRepo
 
     /**
      * Validates and normalises request items; throws with a message for the user.
-     * @return array<int,array{name:string,cost_price:float,qty:int,barcode:?string,expiry_date:?string}>
+     * Also used for staff receive slips (with a higher $maxItems).
+     * @return array<int,array{name:string,cost_price:float,qty:int,barcode:?string,mfg_date:string,expiry_date:?string}>
      */
-    public static function cleanItems(mixed $items): array
+    public static function cleanItems(mixed $items, int $maxItems = self::MAX_ITEMS): array
     {
         if (!is_array($items) || !$items) {
             throw new \RuntimeException('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ');
         }
-        if (count($items) > self::MAX_ITEMS) {
-            throw new \RuntimeException('เพิ่มได้ไม่เกิน ' . self::MAX_ITEMS . ' รายการต่อครั้ง');
+        if (count($items) > $maxItems) {
+            throw new \RuntimeException('เพิ่มได้ไม่เกิน ' . $maxItems . ' รายการต่อครั้ง');
         }
+        $today = date('Y-m-d');
         $out = [];
         foreach (array_values($items) as $i => $it) {
             $name = trim((string) ($it['name'] ?? ''));
@@ -37,17 +39,36 @@ class ConsignRequestRepo
             if ($name === '' || $cost <= 0 || $qty <= 0) {
                 throw new \RuntimeException('รายการที่ ' . ($i + 1) . ': กรุณากรอกชื่อสินค้า ราคา และจำนวนให้ถูกต้อง');
             }
-            $expiry = trim((string) ($it['expiry_date'] ?? ''));
+            $expiry = self::date($it['expiry_date'] ?? null);
+            $mfg = self::date($it['mfg_date'] ?? null);
+            if ($mfg === null) {
+                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): กรุณาระบุวันที่ผลิต');
+            }
+            if ($mfg > $today) {
+                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): วันที่ผลิตต้องไม่เกินวันนี้');
+            }
+            if ($expiry !== null && $expiry < $mfg) {
+                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): วันหมดอายุต้องไม่ก่อนวันที่ผลิต');
+            }
             $barcode = trim((string) ($it['barcode'] ?? ''));
             $out[] = [
                 'name' => mb_substr($name, 0, 191),
                 'cost_price' => round($cost, 2),
                 'qty' => $qty,
                 'barcode' => $barcode !== '' ? mb_substr($barcode, 0, 64) : null,
-                'expiry_date' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $expiry) ? $expiry : null,
+                'mfg_date' => $mfg,
+                'expiry_date' => $expiry,
             ];
         }
         return $out;
+    }
+
+    /** A valid Y-m-d date string, or null. */
+    private static function date(mixed $value): ?string
+    {
+        $v = trim((string) $value);
+        $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $v);
+        return $d && $d->format('Y-m-d') === $v ? $v : null;
     }
 
     public function create(int $consignorId, array $items, ?string $note, int $userId, ?string $ip): array
@@ -62,10 +83,10 @@ class ConsignRequestRepo
             )->execute([$no, $consignorId, $userId, $note]);
             $id = (int) $this->db->lastInsertId();
             $ins = $this->db->prepare(
-                'INSERT INTO consign_request_items (request_id, name, cost_price, qty, barcode, expiry_date) VALUES (?, ?, ?, ?, ?, ?)'
+                'INSERT INTO consign_request_items (request_id, name, cost_price, qty, barcode, mfg_date, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
             foreach ($items as $it) {
-                $ins->execute([$id, $it['name'], $it['cost_price'], $it['qty'], $it['barcode'], $it['expiry_date']]);
+                $ins->execute([$id, $it['name'], $it['cost_price'], $it['qty'], $it['barcode'], $it['mfg_date'], $it['expiry_date']]);
             }
             $this->db->commit();
         } catch (\Throwable $e) {
