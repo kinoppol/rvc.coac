@@ -21,6 +21,6 @@ export async function render(container) {
               <td class="muted">${p.expiry_date ? fmtDate(p.expiry_date) : '-'}</td>
             </tr>`).join('')}
         </tbody>
-      </table></div>` : '<div class="empty">ยังไม่มีสินค้าที่ฝากขาย</div>'}
+      </table></div>` : '<div class="empty">ยังไม่มีสินค้าที่ฝากขาย — แจ้งรายการสินค้าที่จะนำมาฝากได้ที่เมนู «แจ้งฝากสินค้า»</div>'}
     </section>`;
 }

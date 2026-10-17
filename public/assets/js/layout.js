@@ -36,6 +36,7 @@ const PAGES = [
         { key: 'withdraw', label: 'เบิก / จ่ายเงิน', perm: 'withdraw.create' },
     ]},
     { group: 'ผู้ฝากขาย (ของฉัน)', items: [
+        { key: 'myrequests', label: 'แจ้งฝากสินค้า', perm: 'consignor.portal', icon: 'receive' },
         { key: 'mypassbook', label: 'สมุดบัญชีของฉัน', perm: 'consignor.portal', icon: 'passbook' },
         { key: 'myproducts', label: 'สินค้าที่ฝากขาย', perm: 'consignor.portal', icon: 'inventory' },
     ]},
@@ -60,6 +61,7 @@ const PAGE_TITLES = {
     consignors: ['ผู้ฝากขาย', 'ทะเบียนผู้ฝากขาย'],
     passbook: ['ผู้ฝากขาย', 'สมุดบัญชีผู้ฝากขาย'],
     withdraw: ['ผู้ฝากขาย', 'เบิกเงิน / จ่ายเงินผู้ฝากขาย'],
+    myrequests: ['ผู้ฝากขาย', 'แจ้งฝากสินค้า'],
     mypassbook: ['ผู้ฝากขาย', 'สมุดบัญชีของฉัน'],
     myproducts: ['ผู้ฝากขาย', 'สินค้าที่ฉันฝากขาย'],
     reports: ['รายงานและระบบ', 'รายงานสรุป'],

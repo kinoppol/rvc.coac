@@ -10,7 +10,7 @@ const ROUTE_PERMS = {
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
-    mypassbook: 'consignor.portal', myproducts: 'consignor.portal',
+    mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 
 const state = { user: null, permissions: [] };
@@ -71,6 +71,12 @@ async function refreshBadges() {
             if (wd.pending_count) badges.withdraw = { count: wd.pending_count, warn: true };
         }
     } catch (e) { /* ignore */ }
+    try {
+        if (state.permissions.includes('receive.create')) {
+            const rq = await api.get('/receive/requests');
+            badges.receive = { count: rq.pending_count, warn: true };
+        }
+    } catch (e) { /* ignore (e.g. migration not run yet) */ }
     updateBadges(badges);
 }
 

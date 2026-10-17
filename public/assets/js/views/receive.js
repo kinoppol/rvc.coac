@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, escapeHtml } from '../util.js';
+import { money, escapeHtml, fmtDateTime } from '../util.js';
 
 export async function render(container) {
     const options = (await api.get('/consignors/options')).data;
@@ -8,6 +8,41 @@ export async function render(container) {
     let quote = null;
     let error = null;
     let success = null;
+    let requests = []; // consignors' pending requests
+    let loaded = null; // the request being checked, if any
+
+    async function loadRequests() {
+        try {
+            requests = (await api.get('/receive/requests')).data.map((r) => ({ ...r, id: Number(r.id) }));
+        } catch (e) {
+            requests = []; // e.g. migration not run yet
+        }
+    }
+
+    function requestsCard() {
+        if (!requests.length) return '';
+        return `
+        <section class="card">
+          <div class="card-head"><h2>คำขอฝากจากผู้ฝากขาย <span class="pill warn">${requests.length} รอตรวจรับ</span></h2></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>เลขที่</th><th>ผู้ฝากขาย</th><th>รายการ</th><th>แจ้งเมื่อ</th><th></th></tr></thead>
+            <tbody>${requests.map((r) => `
+              <tr>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(r.request_no)}</td>
+                <td>${escapeHtml(r.consignor_code)} - ${escapeHtml(r.consignor_name)}
+                  ${r.note ? `<div class="muted" style="font-size:12px">หมายเหตุ: ${escapeHtml(r.note)}</div>` : ''}</td>
+                <td style="font-size:12.5px">${r.items.map((i) => `${escapeHtml(i.name)} × ${Number(i.qty)}`).join('<br>')}</td>
+                <td class="muted" style="font-size:12.5px">${fmtDateTime(r.created_at)}</td>
+                <td style="text-align:right;white-space:nowrap">
+                  ${loaded?.id === r.id ? '<span class="pill ok">กำลังตรวจรับ</span>'
+                      : `<button type="button" class="btn sm" data-load="${r.id}">ตรวจรับ</button>`}
+                  <button type="button" class="btn sm secondary" data-reject="${r.id}">ไม่รับฝาก</button>
+                </td>
+              </tr>`).join('')}
+            </tbody>
+          </table></div>
+        </section>`;
+    }
 
     function draw() {
         const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
@@ -16,12 +51,16 @@ export async function render(container) {
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
         <div class="two-col">
           <div style="display:flex;flex-direction:column;gap:16px">
-            <div class="hint"><div class="dot">i</div><div>ทำ 3 ขั้น: <b>1)</b> เลือกผู้ฝากขาย <b>2)</b> กรอกสินค้าทีละรายการแล้วกดเพิ่ม <b>3)</b> ตรวจยอดด้านขวาแล้วกดบันทึก</div></div>
+            ${requestsCard()}
+            <div class="hint"><div class="dot">i</div><div>ทำ 3 ขั้น: <b>1)</b> เลือกผู้ฝากขาย (หรือกด «ตรวจรับ» คำขอฝากด้านบน) <b>2)</b> กรอกสินค้าทีละรายการแล้วกดเพิ่ม — แก้ราคา/จำนวนในตารางให้ตรงกับของจริงได้ <b>3)</b> ตรวจยอดด้านขวาแล้วกดบันทึก</div></div>
 
             <section class="card card-pad">
               <div class="step-title"><span class="step-num">1</span><h2>ผู้ฝากขาย</h2></div>
+              ${loaded ? `<div class="pill warn" style="margin-bottom:10px;display:inline-flex;gap:8px;align-items:center">
+                  ตรวจรับคำขอ ${escapeHtml(loaded.request_no)} — ตรวจนับของจริงแล้วแก้ราคา/จำนวนในตารางให้ตรง
+                  <button type="button" class="btn sm secondary" id="btn-unload">เลิกตรวจรับ</button></div>` : ''}
               <label class="field">เลือกผู้ฝากขาย
-                <select id="sel-consignor">${options.map((o) => `<option value="${o.id}" ${o.id === consignorId ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
+                <select id="sel-consignor" ${loaded ? 'disabled' : ''}>${options.map((o) => `<option value="${o.id}" ${Number(o.id) === Number(consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
               </label>
             </section>
 
@@ -48,8 +87,12 @@ export async function render(container) {
                 <thead><tr><th>สินค้า</th><th class="num">ราคาผู้ฝาก</th><th class="num">ราคาขาย</th><th class="num">จำนวน</th><th></th></tr></thead>
                 <tbody>
                   ${cart.map((it, i) => `
-                    <tr><td>${escapeHtml(it.name)}</td><td class="num">${money(it.cost_price)}</td><td class="num">${money(it.price)}</td>
-                        <td class="num">${it.qty}</td><td style="text-align:right"><button type="button" class="btn secondary sm" data-remove="${i}">ลบ</button></td></tr>
+                    <tr><td>${escapeHtml(it.name)}</td>
+                        <td class="num"><input type="number" step="0.25" min="0" value="${it.cost_price}" data-cost="${i}" style="width:90px;text-align:right"></td>
+                        <td class="num">${money(it.price)}</td>
+                        <td class="num"><input type="number" min="1" value="${it.qty}" data-qty="${i}" style="width:70px;text-align:right">
+                          ${it.req_qty != null && it.req_qty !== it.qty ? `<div class="muted" style="font-size:11.5px">แจ้งไว้ ${it.req_qty}</div>` : ''}</td>
+                        <td style="text-align:right"><button type="button" class="btn secondary sm" data-remove="${i}">ลบ</button></td></tr>
                   `).join('') || `<tr><td colspan="5" class="empty">ยังไม่มีรายการ</td></tr>`}
                 </tbody>
               </table></div>
@@ -63,7 +106,7 @@ export async function render(container) {
               <div style="display:flex;justify-content:space-between"><span class="muted">จำนวนชิ้นรวม</span><span>${cart.reduce((s, i) => s + i.qty, 0)}</span></div>
               <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);padding-top:8px"><span>มูลค่ารวม (ราคาขาย)</span><span>฿ ${money(total)}</span></div>
             </div>
-            <button type="button" class="btn" style="width:100%" id="btn-submit" ${cart.length ? '' : 'disabled'}>บันทึกการรับฝาก</button>
+            <button type="button" class="btn" style="width:100%" id="btn-submit" ${cart.length ? '' : 'disabled'}>${loaded ? 'ยืนยันและบันทึกการรับฝาก' : 'บันทึกการรับฝาก'}</button>
           </section>
         </div>`;
 
@@ -75,12 +118,70 @@ export async function render(container) {
         container.querySelector('#f-cost').addEventListener('input', updateQuote);
         container.querySelector('#btn-clear').addEventListener('click', () => { draw(); });
         container.querySelector('#btn-add').addEventListener('click', addItem);
+        container.querySelector('#btn-unload')?.addEventListener('click', () => {
+            loaded = null;
+            cart = [];
+            draw();
+        });
         container.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', () => {
             cart.splice(Number(btn.dataset.remove), 1);
             draw();
         }));
+        container.querySelectorAll('[data-qty]').forEach((inp) => inp.addEventListener('change', () => {
+            const qty = Math.floor(Number(inp.value));
+            if (qty > 0) cart[Number(inp.dataset.qty)].qty = qty;
+            draw();
+        }));
+        container.querySelectorAll('[data-cost]').forEach((inp) => inp.addEventListener('change', async () => {
+            const cost = Number(inp.value);
+            const it = cart[Number(inp.dataset.cost)];
+            if (cost > 0) {
+                it.cost_price = cost;
+                it.price = (await api.post('/receive/quote', { cost_price: cost })).data.price;
+            }
+            draw();
+        }));
+        container.querySelectorAll('[data-load]').forEach((btn) => btn.addEventListener('click', () => loadRequest(Number(btn.dataset.load))));
+        container.querySelectorAll('[data-reject]').forEach((btn) => btn.addEventListener('click', () => rejectRequest(Number(btn.dataset.reject))));
         const submitBtn = container.querySelector('#btn-submit');
         if (submitBtn) submitBtn.addEventListener('click', submit);
+    }
+
+    async function loadRequest(id) {
+        const r = requests.find((x) => x.id === id);
+        if (!r) return;
+        if (cart.length && !confirm('ล้างรายการในใบรับฝากปัจจุบัน แล้วโหลดคำขอนี้แทน?')) return;
+        if (!options.some((o) => Number(o.id) === Number(r.consignor_id))) {
+            error = `ผู้ฝากขาย ${r.consignor_code} ยังไม่อยู่ในสถานะใช้งาน — เปิดใช้งานในทะเบียนผู้ฝากขายก่อน`;
+            draw();
+            return;
+        }
+        const prices = await Promise.all(r.items.map((i) => api.post('/receive/quote', { cost_price: Number(i.cost_price) })));
+        loaded = r;
+        consignorId = Number(r.consignor_id);
+        cart = r.items.map((i, k) => ({
+            name: i.name, cost_price: Number(i.cost_price), qty: Number(i.qty), req_qty: Number(i.qty),
+            barcode: i.barcode || null, expiry_date: i.expiry_date || null, price: prices[k].data.price,
+        }));
+        error = null;
+        success = null;
+        draw();
+    }
+
+    async function rejectRequest(id) {
+        const r = requests.find((x) => x.id === id);
+        const note = prompt(`เหตุผลที่ไม่รับฝาก ${r?.request_no || ''} (ผู้ฝากจะเห็นข้อความนี้)`);
+        if (note === null) return;
+        try {
+            await api.post(`/receive/requests/${id}/reject`, { note });
+            if (loaded?.id === id) { loaded = null; cart = []; }
+            success = `บันทึกไม่รับฝาก ${r?.request_no || ''} แล้ว`;
+            error = null;
+        } catch (e) {
+            error = e.message;
+        }
+        await loadRequests();
+        draw();
     }
 
     async function updateQuote() {
@@ -114,11 +215,14 @@ export async function render(container) {
         try {
             const result = await api.post('/receive', {
                 consignor_id: consignorId,
+                request_id: loaded?.id ?? null,
                 items: cart.map((i) => ({ name: i.name, cost_price: i.cost_price, qty: i.qty, barcode: i.barcode, expiry_date: i.expiry_date })),
             });
+            success = `บันทึกใบรับฝากสำเร็จ: ${result.data.doc_no}${loaded ? ` (จากคำขอ ${loaded.request_no})` : ''}`;
             cart = [];
+            loaded = null;
             error = null;
-            success = `บันทึกใบรับฝากสำเร็จ: ${result.data.doc_no}`;
+            await loadRequests();
             draw();
         } catch (e) {
             error = e.message;
@@ -126,5 +230,6 @@ export async function render(container) {
         }
     }
 
+    await loadRequests();
     draw();
 }

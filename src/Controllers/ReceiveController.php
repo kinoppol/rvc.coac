@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Repositories\ConsignRequestRepo;
 use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use App\Services\AuditLogger;
@@ -42,6 +43,36 @@ class ReceiveController
         return $this->json($response, ['data' => $calc->priceFor($cost)]);
     }
 
+    /** Consignors' requests waiting to be checked (or recent ones with ?status=all). */
+    public function requests(Request $request, Response $response): Response
+    {
+        $db = Db::connection();
+        $repo = new ConsignRequestRepo($db, new AuditLogger($db));
+        $status = (string) ($request->getQueryParams()['status'] ?? 'pending');
+        return $this->json($response, [
+            'data' => $repo->listForStaff($status === 'all' ? null : 'pending'),
+            'pending_count' => $repo->pendingCount(),
+        ]);
+    }
+
+    /** The goods don't match / can't be taken: close the request with a reason the consignor sees. */
+    public function rejectRequest(Request $request, Response $response, array $args): Response
+    {
+        $note = trim((string) (((array) $request->getParsedBody())['note'] ?? ''));
+        if ($note === '') {
+            return $this->error($response, 'กรุณาระบุเหตุผล', 422);
+        }
+        $db = Db::connection();
+        $ok = (new ConsignRequestRepo($db, new AuditLogger($db)))->close(
+            (int) $args['id'], 'rejected', null, $note,
+            (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
+        );
+        if (!$ok) {
+            return $this->error($response, 'คำขอฝากนี้ถูกดำเนินการไปแล้ว', 422);
+        }
+        return $this->json($response, ['ok' => true]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();
@@ -53,6 +84,18 @@ class ReceiveController
 
         $db = Db::connection();
         $audit = new AuditLogger($db);
+
+        $requestId = !empty($body['request_id']) ? (int) $body['request_id'] : null;
+        if ($requestId !== null) {
+            $req = (new ConsignRequestRepo($db, $audit))->find($requestId);
+            if (!$req || $req['status'] !== 'pending') {
+                return $this->error($response, 'คำขอฝากนี้ถูกดำเนินการไปแล้วหรือไม่พบ กรุณารีเฟรชหน้า', 422);
+            }
+            if ((int) $req['consignor_id'] !== $consignorId) {
+                return $this->error($response, 'ผู้ฝากขายไม่ตรงกับคำขอฝาก', 422);
+            }
+        }
+
         $settings = new SettingsService($db);
         $service = new ReceiveService(
             $db,
@@ -67,7 +110,7 @@ class ReceiveController
 
         $user = $request->getAttribute('user');
         try {
-            $result = $service->receive($consignorId, $items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $result = $service->receive($consignorId, $items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, $requestId);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

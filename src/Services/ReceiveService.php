@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Repositories\ConsignRequestRepo;
 use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use PDO;
@@ -25,7 +26,7 @@ class ReceiveService
     /**
      * @param array<int,array{name:string, cost_price:float, qty:int, barcode?:string, expiry_date?:string}> $items
      */
-    public function receive(int $consignorId, array $items, int $userId, ?string $ip): array
+    public function receive(int $consignorId, array $items, int $userId, ?string $ip, ?int $requestId = null): array
     {
         if (empty($items)) {
             throw new \RuntimeException('ไม่มีรายการรับฝาก');
@@ -92,6 +93,12 @@ class ReceiveService
 
             $updDoc = $this->db->prepare('UPDATE receive_documents SET total_qty = ?, total_value = ? WHERE id = ?');
             $updDoc->execute([$totalQty, round($totalValue, 2), $docId]);
+
+            // Received from a consignor's request: close it in the same transaction.
+            if ($requestId !== null
+                && !(new ConsignRequestRepo($this->db, $this->audit))->close($requestId, 'received', $docId, null, $userId, $ip)) {
+                throw new \RuntimeException('คำขอฝากนี้ถูกดำเนินการไปแล้ว กรุณารีเฟรชหน้า');
+            }
 
             if ($plan['charged_total'] > 0) {
                 $refNo = $this->docs->next('LF', 'ledger_entries', 'ref_no');

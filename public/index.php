@@ -92,6 +92,14 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('consignor.portal'));
     $group->get('/my/products', [MyConsignorController::class, 'products'])
         ->add(new RoleGuard('consignor.portal'));
+    $group->get('/my/requests', [MyConsignorController::class, 'requests'])
+        ->add(new RoleGuard('consignor.portal'));
+    $group->post('/my/requests', [MyConsignorController::class, 'storeRequest'])
+        ->add(new RoleGuard('consignor.portal'));
+    $group->post('/my/requests/{id:[0-9]+}/cancel', [MyConsignorController::class, 'cancelRequest'])
+        ->add(new RoleGuard('consignor.portal'));
+    $group->post('/my/quote', [ReceiveController::class, 'quote'])
+        ->add(new RoleGuard('consignor.portal'));
 
     $group->get('/dashboard', [DashboardController::class, 'index']);
 
@@ -105,6 +113,10 @@ $app->group('/api', function ($group) {
     $group->get('/products/barcode/{code}', [ReceiveController::class, 'lookupBarcode']);
     $group->post('/receive/quote', [ReceiveController::class, 'quote']);
     $group->post('/receive', [ReceiveController::class, 'store'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/requests', [ReceiveController::class, 'requests'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/requests/{id:[0-9]+}/reject', [ReceiveController::class, 'rejectRequest'])
         ->add(new RoleGuard('receive.create'));
 
     $group->get('/returns/stock/{id}', [ReturnController::class, 'stockFor']);
