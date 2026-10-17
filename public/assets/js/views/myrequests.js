@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 
 const STATUS = {
@@ -38,6 +39,7 @@ export async function render(container) {
             <h2 style="font-size:14px">${escapeHtml(r.request_no)} <span class="pill ${cls}">${label}</span></h2>
             <div class="actions-row">
               <span class="muted" style="font-size:12.5px">${fmtDateTime(r.created_at)} · ${r.items.length} รายการ ${qty} ชิ้น</span>
+              ${r.status !== 'cancelled' ? `<button type="button" class="btn sm secondary" data-print="${r.id}">พิมพ์ใบฝากขาย</button>` : ''}
               ${r.status === 'pending' ? `<button type="button" class="btn sm secondary" data-cancel="${r.id}">ยกเลิกคำขอ</button>` : ''}
             </div>
           </div>
@@ -137,6 +139,16 @@ export async function render(container) {
 
     function wire() {
         container.querySelector('#btn-open').addEventListener('click', openModal);
+        container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', async () => {
+            const r = requests.find((x) => String(x.id) === btn.dataset.print);
+            btn.disabled = true;
+            try {
+                await printConsignSlip(r, async (cost) => (await api.post('/my/quote', { cost_price: cost })).data.price);
+            } catch (e) {
+                alert(e.message);
+            }
+            btn.disabled = false;
+        }));
         container.querySelectorAll('[data-cancel]').forEach((btn) => btn.addEventListener('click', async () => {
             if (!confirm('ยกเลิกคำขอฝากนี้?')) return;
             try {

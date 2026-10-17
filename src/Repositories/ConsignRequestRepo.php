@@ -143,6 +143,7 @@ class ConsignRequestRepo
     {
         $stmt = $this->db->prepare(
             "SELECT r.*, c.code AS consignor_code, c.name AS consignor_name,
+                    c.department AS consignor_department, c.phone AS consignor_phone,
                     rd.doc_no AS receive_doc_no, u.full_name AS reviewed_by_name
              FROM consign_requests r
              JOIN consignors c ON c.id = r.consignor_id

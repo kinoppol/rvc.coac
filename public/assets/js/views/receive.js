@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
 
 export async function render(container) {
@@ -37,6 +38,7 @@ export async function render(container) {
                 <td style="text-align:right;white-space:nowrap">
                   ${loaded?.id === r.id ? '<span class="pill ok">กำลังตรวจรับ</span>'
                       : `<button type="button" class="btn sm" data-load="${r.id}">ตรวจรับ</button>`}
+                  <button type="button" class="btn sm secondary" data-print="${r.id}" title="พิมพ์ใบฝากขายไว้ตรวจนับ">พิมพ์</button>
                   <button type="button" class="btn sm secondary" data-reject="${r.id}">ไม่รับฝาก</button>
                 </td>
               </tr>`).join('')}
@@ -149,6 +151,16 @@ export async function render(container) {
             draw();
         }));
         container.querySelectorAll('[data-load]').forEach((btn) => btn.addEventListener('click', () => loadRequest(Number(btn.dataset.load))));
+        container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', async () => {
+            const r = requests.find((x) => x.id === Number(btn.dataset.print));
+            btn.disabled = true;
+            try {
+                await printConsignSlip(r, async (cost) => (await api.post('/receive/quote', { cost_price: cost })).data.price);
+            } catch (e) {
+                alert(e.message);
+            }
+            btn.disabled = false;
+        }));
         container.querySelectorAll('[data-reject]').forEach((btn) => btn.addEventListener('click', () => rejectRequest(Number(btn.dataset.reject))));
         const submitBtn = container.querySelector('#btn-submit');
         if (submitBtn) submitBtn.addEventListener('click', submit);
