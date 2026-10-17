@@ -86,7 +86,7 @@ class PurchaseController
         $db = Db::connection();
         $repo = new AiProviderRepo($db);
 
-        $resolved = $repo->resolveEnabledModel((int) ($body['model'] ?? 0));
+        $resolved = $repo->resolveEnabledModel((int) ($body['model'] ?? 0), $user['role']);
         if (!$resolved) {
             return $this->error($response, 'ไม่พบโมเดลที่เลือก หรือโมเดลถูกปิดใช้งาน', 422);
         }

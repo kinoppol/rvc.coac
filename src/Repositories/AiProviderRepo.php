@@ -20,6 +20,12 @@ class AiProviderRepo
         'custom' => ['name' => 'LLM Server อื่น ๆ (OpenAI-compatible)', 'base_url' => ''],
     ];
 
+    /** Roles a provider can be limited to (same as users.role, minus consignor-only). */
+    public const ROLES = ['admin', 'manager', 'advisor', 'cashier'];
+
+    /** SQL: provider p is open to the role bound at this placeholder. */
+    private const ROLE_FILTER = '(p.allowed_roles IS NULL OR FIND_IN_SET(?, p.allowed_roles) > 0)';
+
     public function __construct(private PDO $db)
     {
     }
@@ -67,8 +73,8 @@ class AiProviderRepo
     public function create(array $data): int
     {
         $stmt = $this->db->prepare(
-            'INSERT INTO ai_providers (name, preset, base_url, api_key_enc, extra_headers, enabled, sort_order, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+            'INSERT INTO ai_providers (name, preset, base_url, api_key_enc, extra_headers, enabled, allowed_roles, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
         );
         $key = trim((string) ($data['api_key'] ?? ''));
         $stmt->execute([
@@ -78,6 +84,7 @@ class AiProviderRepo
             $key !== '' ? Crypto::encrypt($key) : null,
             $this->encodeHeaders($data['extra_headers'] ?? null),
             !empty($data['enabled']) ? 1 : 0,
+            $this->encodeRoles($data['allowed_roles'] ?? null),
             (int) ($data['sort_order'] ?? 0),
         ]);
         return (int) $this->db->lastInsertId();
@@ -86,13 +93,14 @@ class AiProviderRepo
     /** A blank api_key keeps the stored one; pass clear_api_key to remove it. */
     public function update(int $id, array $data): void
     {
-        $sets = ['name = ?', 'preset = ?', 'base_url = ?', 'extra_headers = ?', 'enabled = ?', 'sort_order = ?', 'updated_at = NOW()'];
+        $sets = ['name = ?', 'preset = ?', 'base_url = ?', 'extra_headers = ?', 'enabled = ?', 'allowed_roles = ?', 'sort_order = ?', 'updated_at = NOW()'];
         $params = [
             $data['name'],
             $data['preset'] ?? 'custom',
             rtrim($data['base_url'], '/'),
             $this->encodeHeaders($data['extra_headers'] ?? null),
             !empty($data['enabled']) ? 1 : 0,
+            $this->encodeRoles($data['allowed_roles'] ?? null),
             (int) ($data['sort_order'] ?? 0),
         ];
         $key = trim((string) ($data['api_key'] ?? ''));
@@ -152,16 +160,18 @@ class AiProviderRepo
         }
     }
 
-    /** Models a regular user may pick in the chat widget. */
-    public function enabledModels(): array
+    /** Models a user with this role may pick in the chat widget. */
+    public function enabledModels(string $role): array
     {
-        return $this->db->query(
+        $stmt = $this->db->prepare(
             'SELECT m.id, m.model_id, m.display_name, m.supports_tools, m.supports_vision, m.price_in, m.price_out,
                     p.id AS provider_id, p.name AS provider_name
              FROM ai_models m JOIN ai_providers p ON p.id = m.provider_id
-             WHERE m.enabled = 1 AND p.enabled = 1
+             WHERE m.enabled = 1 AND p.enabled = 1 AND ' . self::ROLE_FILTER . '
              ORDER BY p.sort_order ASC, p.id ASC, m.model_id ASC'
-        )->fetchAll();
+        );
+        $stmt->execute([$role]);
+        return $stmt->fetchAll();
     }
 
     /**
@@ -170,30 +180,30 @@ class AiProviderRepo
      * still act in the system. Models without a price sort after priced ones.
      * @return array{0:array,1:array}|null [provider row, model row]
      */
-    public function pickCheapest(bool $needVision): ?array
+    public function pickCheapest(bool $needVision, string $role): ?array
     {
         $stmt = $this->db->prepare(
             'SELECT m.* FROM ai_models m JOIN ai_providers p ON p.id = m.provider_id
-             WHERE m.enabled = 1 AND p.enabled = 1 AND (? = 0 OR m.supports_vision = 1)
+             WHERE m.enabled = 1 AND p.enabled = 1 AND (? = 0 OR m.supports_vision = 1) AND ' . self::ROLE_FILTER . '
              ORDER BY m.supports_tools DESC,
                       (m.price_in IS NULL OR m.price_out IS NULL) ASC,
                       (COALESCE(m.price_in, 0) + COALESCE(m.price_out, 0)) ASC,
                       p.sort_order ASC, m.id ASC
              LIMIT 1'
         );
-        $stmt->execute([$needVision ? 1 : 0]);
+        $stmt->execute([$needVision ? 1 : 0, $role]);
         $model = $stmt->fetch();
         return $model ? [$this->find((int) $model['provider_id']), $model] : null;
     }
 
-    /** @return array{0:array,1:array}|null [provider row, model row] if both are enabled */
-    public function resolveEnabledModel(int $modelRowId): ?array
+    /** @return array{0:array,1:array}|null [provider row, model row] if both are enabled and open to the role */
+    public function resolveEnabledModel(int $modelRowId, string $role): ?array
     {
         $stmt = $this->db->prepare(
             'SELECT m.* FROM ai_models m JOIN ai_providers p ON p.id = m.provider_id
-             WHERE m.id = ? AND m.enabled = 1 AND p.enabled = 1'
+             WHERE m.id = ? AND m.enabled = 1 AND p.enabled = 1 AND ' . self::ROLE_FILTER
         );
-        $stmt->execute([$modelRowId]);
+        $stmt->execute([$modelRowId, $role]);
         $model = $stmt->fetch();
         if (!$model) {
             return null;
@@ -213,8 +223,16 @@ class AiProviderRepo
             'api_key_hint' => $key !== '' ? '••••' . substr($key, -4) : '',
             'extra_headers' => $this->extraHeaders($p),
             'enabled' => (bool) $p['enabled'],
+            'allowed_roles' => $p['allowed_roles'] !== null ? explode(',', $p['allowed_roles']) : [],
             'sort_order' => (int) $p['sort_order'],
         ];
+    }
+
+    /** Empty / every role → NULL (open to everyone with ai.use). */
+    private function encodeRoles(mixed $roles): ?string
+    {
+        $roles = array_values(array_intersect(self::ROLES, is_array($roles) ? $roles : []));
+        return $roles && count($roles) < count(self::ROLES) ? implode(',', $roles) : null;
     }
 
     private function encodeHeaders(mixed $headers): ?string

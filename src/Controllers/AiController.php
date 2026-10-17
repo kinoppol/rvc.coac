@@ -42,7 +42,7 @@ class AiController
 
     public function models(Request $request, Response $response): Response
     {
-        $rows = $this->repo()->enabledModels();
+        $rows = $this->repo()->enabledModels($request->getAttribute('user')['role']);
         return $this->json($response, ['data' => array_map(fn ($m) => [
             'id' => (int) $m['id'],
             'model_id' => $m['model_id'],
@@ -83,11 +83,11 @@ class AiController
         // "auto": photos in this turn → cheapest vision model; anything else → cheapest model overall.
         $auto = ($body['model'] ?? 'auto') === 'auto';
         $needVision = !$approvals && !empty($lastUser['attachments']) && end($history)['role'] === 'user';
-        $resolved = $auto ? $repo->pickCheapest($needVision) : $repo->resolveEnabledModel((int) $body['model']);
+        $resolved = $auto ? $repo->pickCheapest($needVision, $user['role']) : $repo->resolveEnabledModel((int) $body['model'], $user['role']);
         if (!$resolved) {
             return $this->error($response, $auto && $needVision
                 ? 'ยังไม่มีโมเดลที่อ่านรูปได้ — ผู้ดูแลระบบต้องเปิดโมเดลที่อ่านรูปได้และติ๊ก "อ่านรูป" ในหน้าตั้งค่าผู้ช่วย AI'
-                : 'ไม่พบโมเดลที่เลือก หรือโมเดลถูกปิดใช้งาน', 422);
+                : 'ไม่พบโมเดลที่เลือก หรือโมเดลถูกปิดใช้งาน / ไม่ได้เปิดให้บทบาทของคุณใช้', 422);
         }
         [$provider, $model] = $resolved;
 

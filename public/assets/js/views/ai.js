@@ -2,6 +2,13 @@ import { api } from '../api.js';
 import { escapeHtml } from '../util.js';
 import { refreshAssistantModels } from '../assistant.js';
 
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย' };
+
+/** Empty list = open to every role that has the ai.use permission. */
+function rolesText(roles) {
+    return roles && roles.length ? roles.map((r) => ROLE_LABEL[r] || r).join(', ') : 'ทุกบทบาท';
+}
+
 /** Admin page: configure AI providers (OpenAI-compatible APIs) and which models are enabled. */
 export async function render(container) {
     let providers = [];
@@ -33,13 +40,14 @@ export async function render(container) {
             editing = {
                 ...p, api_key: '', clear_api_key: false,
                 headersText: Object.entries(p.extra_headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
+                allowed_roles: [...(p.allowed_roles || [])],
                 models: p.models.map((m) => ({ ...m })),
             };
         } else {
             const first = presets[0];
             editing = {
                 id: null, name: first.name, preset: first.key, base_url: first.base_url, api_key: '',
-                has_api_key: false, enabled: true, sort_order: providers.length, headersText: '', models: [],
+                has_api_key: false, enabled: true, allowed_roles: [], sort_order: providers.length, headersText: '', models: [],
             };
         }
         draw();
@@ -65,12 +73,14 @@ export async function render(container) {
         editing.enabled = fd.get('enabled') === 'on';
         editing.sort_order = Number(fd.get('sort_order') || 0);
         editing.headersText = fd.get('headers');
+        editing.allowed_roles = fd.getAll('allowed_roles');
     }
 
     function payload() {
         return {
             name: editing.name, preset: editing.preset, base_url: editing.base_url, api_key: editing.api_key,
             clear_api_key: editing.clear_api_key, enabled: editing.enabled, sort_order: editing.sort_order,
+            allowed_roles: editing.allowed_roles,
             extra_headers: parseHeaders(editing.headersText),
             models: editing.models.map((m) => ({
                 model_id: m.model_id, display_name: m.display_name || '', enabled: m.enabled !== false,
@@ -129,6 +139,11 @@ export async function render(container) {
             <label class="field"><span>Header เพิ่มเติม <span class="muted" style="font-weight:400">(บรรทัดละ 1 รายการ เช่น HTTP-Referer: https://shop.example)</span></span>
               <textarea name="headers" rows="2">${escapeHtml(e.headersText)}</textarea>
             </label>
+            <div class="field"><span>ผู้ใช้ที่เรียกใช้ได้ <span class="muted" style="font-weight:400">(ไม่ติ๊กเลย = ทุกบทบาทที่มีสิทธิ์ใช้ผู้ช่วย AI)</span></span>
+              <div class="actions-row">
+                ${Object.entries(ROLE_LABEL).map(([k, v]) => `<label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" name="allowed_roles" value="${k}" ${(e.allowed_roles || []).includes(k) ? 'checked' : ''}> ${escapeHtml(v)}</label>`).join('')}
+              </div>
+            </div>
             <div class="actions-row">
               <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" name="enabled" ${e.enabled ? 'checked' : ''}> เปิดใช้งาน</label>
               ${e.has_api_key ? `<label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" name="clear_api_key" ${e.clear_api_key ? 'checked' : ''}> ลบ API Key ที่บันทึกไว้</label>` : ''}
@@ -200,12 +215,13 @@ export async function render(container) {
               </div>
             </div>
             ${providers.length ? `<div class="table-wrap"><table>
-              <thead><tr><th>ชื่อ</th><th>Base URL</th><th class="num">โมเดล</th><th>สถานะ</th><th></th></tr></thead>
+              <thead><tr><th>ชื่อ</th><th>Base URL</th><th class="num">โมเดล</th><th>ผู้ใช้ที่เรียกใช้ได้</th><th>สถานะ</th><th></th></tr></thead>
               <tbody>${providers.map((p) => `
                 <tr>
                   <td style="font-weight:600">${escapeHtml(p.name)}<div class="muted" style="font-size:12px;font-weight:400">${escapeHtml(presetOf(p.preset)?.name || p.preset)}</div></td>
                   <td class="muted" style="font-size:12.5px;word-break:break-all">${escapeHtml(p.base_url)}</td>
                   <td class="num">${p.models.filter((m) => m.enabled).length} / ${p.models.length}</td>
+                  <td style="font-size:12.5px">${escapeHtml(rolesText(p.allowed_roles))}</td>
                   <td>${p.enabled ? '<span class="pill ok">เปิด</span>' : '<span class="pill muted">ปิด</span>'}</td>
                   <td><button type="button" class="btn secondary sm" data-edit="${p.id}">แก้ไข</button></td>
                 </tr>`).join('')}</tbody></table></div>`
