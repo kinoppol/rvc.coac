@@ -13,6 +13,9 @@ class ConsignRequestRepo
 {
     public const MAX_ITEMS = 50;
 
+    /** Days a deleted request stays restorable before it is removed for good. */
+    public const RETENTION_DAYS = 30;
+
     public function __construct(private PDO $db, private AuditLogger $audit)
     {
     }
@@ -104,13 +107,69 @@ class ConsignRequestRepo
 
     public function forConsignor(int $consignorId): array
     {
-        return $this->fetch('r.consignor_id = ?', [$consignorId], 50);
+        return $this->fetch('r.consignor_id = ? AND r.deleted_at IS NULL', [$consignorId], 50);
+    }
+
+    /** The consignor's deleted requests that can still be restored. */
+    public function deletedForConsignor(int $consignorId): array
+    {
+        return $this->fetch('r.consignor_id = ? AND r.deleted_at IS NOT NULL', [$consignorId], 50);
     }
 
     /** For staff: pending first, then the latest handled ones. */
     public function listForStaff(?string $status): array
     {
-        return $status ? $this->fetch('r.status = ?', [$status], 100) : $this->fetch('1 = 1', [], 100);
+        return $status
+            ? $this->fetch('r.status = ? AND r.deleted_at IS NULL', [$status], 100)
+            : $this->fetch('r.deleted_at IS NULL', [], 100);
+    }
+
+    /** Only cancelled requests can be deleted; they stay restorable for RETENTION_DAYS. */
+    public function softDelete(int $id, int $consignorId, int $userId, ?string $ip): bool
+    {
+        $before = $this->find($id);
+        $stmt = $this->db->prepare(
+            "UPDATE consign_requests SET deleted_at = NOW()
+             WHERE id = ? AND consignor_id = ? AND status = 'cancelled' AND deleted_at IS NULL"
+        );
+        $stmt->execute([$id, $consignorId]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        $this->audit->log('consign_requests', $id, 'update', ['deleted_at' => null], ['deleted_at' => 'now', 'request_no' => $before['request_no'] ?? null], $userId, $ip);
+        return true;
+    }
+
+    public function restore(int $id, int $consignorId, int $userId, ?string $ip): bool
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE consign_requests SET deleted_at = NULL WHERE id = ? AND consignor_id = ? AND deleted_at IS NOT NULL'
+        );
+        $stmt->execute([$id, $consignorId]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        $this->audit->log('consign_requests', $id, 'update', ['deleted_at' => 'set'], ['deleted_at' => null], $userId, $ip);
+        return true;
+    }
+
+    /** Permanently removes requests deleted more than RETENTION_DAYS ago (items cascade). */
+    public function purgeExpired(): int
+    {
+        $stmt = $this->db->prepare(
+            'SELECT id, request_no, consignor_id FROM consign_requests WHERE deleted_at < DATE_SUB(NOW(), INTERVAL ? DAY)'
+        );
+        $stmt->execute([self::RETENTION_DAYS]);
+        $expired = $stmt->fetchAll();
+        if (!$expired) {
+            return 0;
+        }
+        $del = $this->db->prepare('DELETE FROM consign_requests WHERE id = ?');
+        foreach ($expired as $r) {
+            $del->execute([$r['id']]);
+            $this->audit->log('consign_requests', (int) $r['id'], 'delete', $r, null, null, null);
+        }
+        return count($expired);
     }
 
     public function pendingCount(): int
@@ -144,7 +203,8 @@ class ConsignRequestRepo
         $stmt = $this->db->prepare(
             "SELECT r.*, c.code AS consignor_code, c.name AS consignor_name,
                     c.department AS consignor_department, c.phone AS consignor_phone,
-                    rd.doc_no AS receive_doc_no, u.full_name AS reviewed_by_name
+                    rd.doc_no AS receive_doc_no, u.full_name AS reviewed_by_name,
+                    DATE_ADD(r.deleted_at, INTERVAL " . self::RETENTION_DAYS . " DAY) AS purge_at
              FROM consign_requests r
              JOIN consignors c ON c.id = r.consignor_id
              LEFT JOIN receive_documents rd ON rd.id = r.receive_document_id

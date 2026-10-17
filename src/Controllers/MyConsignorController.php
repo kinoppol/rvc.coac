@@ -55,7 +55,40 @@ class MyConsignorController
         if (!$consignor) {
             return $this->error($response, 'บัญชีนี้ยังไม่ได้ผูกกับผู้ฝากขาย', 404);
         }
-        return $this->json($response, ['data' => $this->requestRepo()->forConsignor((int) $consignor['id'])]);
+        $repo = $this->requestRepo();
+        $repo->purgeExpired();
+        return $this->json($response, [
+            'data' => $repo->forConsignor((int) $consignor['id']),
+            'deleted' => $repo->deletedForConsignor((int) $consignor['id']),
+            'retention_days' => ConsignRequestRepo::RETENTION_DAYS,
+        ]);
+    }
+
+    /** Hide a cancelled request; it can be restored until it is purged after RETENTION_DAYS. */
+    public function deleteRequest(Request $request, Response $response, array $args): Response
+    {
+        $consignor = $this->consignorFor($request);
+        $ok = $consignor && $this->requestRepo()->softDelete(
+            (int) $args['id'], (int) $consignor['id'],
+            (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
+        );
+        if (!$ok) {
+            return $this->error($response, 'ลบได้เฉพาะคำขอที่ยกเลิกแล้ว', 422);
+        }
+        return $this->json($response, ['ok' => true]);
+    }
+
+    public function restoreRequest(Request $request, Response $response, array $args): Response
+    {
+        $consignor = $this->consignorFor($request);
+        $ok = $consignor && $this->requestRepo()->restore(
+            (int) $args['id'], (int) $consignor['id'],
+            (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
+        );
+        if (!$ok) {
+            return $this->error($response, 'ไม่พบคำขอที่ลบไว้ (อาจเกินกำหนดกู้คืนแล้ว)', 404);
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     /** The consignor lists the goods and quantities they will bring for staff to check and receive. */

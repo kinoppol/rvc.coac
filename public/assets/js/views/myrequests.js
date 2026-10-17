@@ -16,6 +16,8 @@ export async function render(container) {
     let error = null;
     let success = null;
     let requests = [];
+    let deleted = []; // soft-deleted, restorable until purge_at
+    let retentionDays = 30;
     let quoteSeq = 0; // ignore quote replies that arrive after a newer keystroke
     let open = false; // the "แจ้งฝากขาย" modal
 
@@ -26,7 +28,10 @@ export async function render(container) {
     document.addEventListener('keydown', onKey);
 
     async function load() {
-        requests = (await api.get('/my/requests')).data;
+        const res = await api.get('/my/requests');
+        requests = res.data;
+        deleted = res.deleted || [];
+        retentionDays = res.retention_days || retentionDays;
         draw();
     }
 
@@ -41,6 +46,7 @@ export async function render(container) {
               <span class="muted" style="font-size:12.5px">${fmtDateTime(r.created_at)} · ${r.items.length} รายการ ${qty} ชิ้น</span>
               ${r.status !== 'cancelled' ? `<button type="button" class="btn sm secondary" data-print="${r.id}">พิมพ์ใบฝากขาย</button>` : ''}
               ${r.status === 'pending' ? `<button type="button" class="btn sm secondary" data-cancel="${r.id}">ยกเลิกคำขอ</button>` : ''}
+              ${r.status === 'cancelled' ? `<button type="button" class="btn sm secondary" data-delete="${r.id}">ลบ</button>` : ''}
             </div>
           </div>
           ${r.status === 'received' ? `<div class="card-pad" style="padding-bottom:0;font-size:13px">ร้านรับฝากแล้ว เลขที่ใบรับฝาก <b>${escapeHtml(r.receive_doc_no || '')}</b>
@@ -118,6 +124,22 @@ export async function render(container) {
           ${success ? `<div class="pill ok" style="align-self:flex-start;font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
           ${!open && error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
           ${requests.length ? requests.map(requestCard).join('') : '<div class="empty">ยังไม่มีคำขอฝาก — กด «+ แจ้งฝากขาย» เพื่อเริ่ม</div>'}
+          ${deleted.length ? `
+          <details class="card">
+            <summary class="card-pad" style="cursor:pointer;font-size:13.5px">ลบแล้ว ${deleted.length} รายการ
+              <span class="muted" style="font-size:12.5px">— กู้คืนได้ภายใน ${retentionDays} วันหลังลบ จากนั้นจะถูกลบถาวร</span></summary>
+            <div class="table-wrap"><table>
+              <thead><tr><th>เลขที่</th><th>รายการ</th><th>จะลบถาวรเมื่อ</th><th></th></tr></thead>
+              <tbody>${deleted.map((r) => `
+                <tr>
+                  <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(r.request_no)}</td>
+                  <td style="font-size:12.5px">${r.items.map((i) => `${escapeHtml(i.name)} × ${Number(i.qty)}`).join(', ')}</td>
+                  <td class="muted" style="font-size:12.5px">${fmtDate(r.purge_at)}</td>
+                  <td style="text-align:right"><button type="button" class="btn sm secondary" data-restore="${r.id}">กู้คืน</button></td>
+                </tr>`).join('')}
+              </tbody>
+            </table></div>
+          </details>` : ''}
         </div>
         ${open ? drawModal() : ''}`;
         wire();
@@ -139,6 +161,27 @@ export async function render(container) {
 
     function wire() {
         container.querySelector('#btn-open').addEventListener('click', openModal);
+        container.querySelectorAll('[data-delete]').forEach((btn) => btn.addEventListener('click', async () => {
+            if (!confirm(`ลบคำขอนี้? กู้คืนได้ภายใน ${retentionDays} วัน หลังจากนั้นจะถูกลบถาวร`)) return;
+            try {
+                await api.post(`/my/requests/${btn.dataset.delete}/delete`);
+                success = `ลบแล้ว — กู้คืนได้จากหัวข้อ «ลบแล้ว» ด้านล่างภายใน ${retentionDays} วัน`;
+                error = null;
+            } catch (e) {
+                error = e.message;
+            }
+            await load();
+        }));
+        container.querySelectorAll('[data-restore]').forEach((btn) => btn.addEventListener('click', async () => {
+            try {
+                await api.post(`/my/requests/${btn.dataset.restore}/restore`);
+                success = 'กู้คืนคำขอแล้ว';
+                error = null;
+            } catch (e) {
+                error = e.message;
+            }
+            await load();
+        }));
         container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', async () => {
             const r = requests.find((x) => String(x.id) === btn.dataset.print);
             btn.disabled = true;

@@ -48,6 +48,7 @@ class ReceiveController
     {
         $db = Db::connection();
         $repo = new ConsignRequestRepo($db, new AuditLogger($db));
+        $repo->purgeExpired();
         $status = (string) ($request->getQueryParams()['status'] ?? 'pending');
         return $this->json($response, [
             'data' => $repo->listForStaff($status === 'all' ? null : 'pending'),

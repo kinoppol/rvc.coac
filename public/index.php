@@ -98,6 +98,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('consignor.portal'));
     $group->post('/my/requests/{id:[0-9]+}/cancel', [MyConsignorController::class, 'cancelRequest'])
         ->add(new RoleGuard('consignor.portal'));
+    $group->post('/my/requests/{id:[0-9]+}/delete', [MyConsignorController::class, 'deleteRequest'])
+        ->add(new RoleGuard('consignor.portal'));
+    $group->post('/my/requests/{id:[0-9]+}/restore', [MyConsignorController::class, 'restoreRequest'])
+        ->add(new RoleGuard('consignor.portal'));
     $group->post('/my/quote', [ReceiveController::class, 'quote'])
         ->add(new RoleGuard('consignor.portal'));
 
