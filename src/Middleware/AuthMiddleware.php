@@ -31,6 +31,20 @@ class AuthMiddleware implements MiddlewareInterface
         }
 
         $request = $request->withAttribute('user', $user);
+
+        if (!empty($_SESSION['impersonator_id'])) {
+            $admin = $userRepo->find((int) $_SESSION['impersonator_id']);
+            if (!$admin || !UserRepo::canSignIn($admin) || $admin['role'] !== 'admin') {
+                $_SESSION = [];
+                $response = (new ResponseFactory())->createResponse(401);
+                $response->getBody()->write(json_encode(['error' => 'กรุณาเข้าสู่ระบบ']));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+            $request = $request->withAttribute('impersonator', [
+                'id' => (int) $admin['id'],
+                'full_name' => $admin['full_name'],
+            ]);
+        }
         return $handler->handle($request);
     }
 }

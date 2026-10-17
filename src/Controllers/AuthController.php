@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\UserRepo;
+use App\Services\AuditLogger;
 use App\Services\SettingsService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -39,6 +40,7 @@ class AuthController
         }
 
         session_regenerate_id(true);
+        unset($_SESSION['impersonator_id']);
         $_SESSION['user_id'] = (int) $user['id'];
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
@@ -57,6 +59,20 @@ class AuthController
 
     public function logout(Request $request, Response $response): Response
     {
+        // Signing out of an impersonated account drops back to the admin who started it.
+        if (!empty($_SESSION['impersonator_id'])) {
+            $adminId = (int) $_SESSION['impersonator_id'];
+            $admin = (new UserRepo(Db::connection()))->find($adminId);
+            if ($admin && UserRepo::canSignIn($admin) && $admin['role'] === 'admin') {
+                $this->auditImpersonation($request, (int) $_SESSION['user_id'], $adminId, 'impersonate_stop');
+                session_regenerate_id(true);
+                unset($_SESSION['impersonator_id']);
+                $_SESSION['user_id'] = $adminId;
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                return $this->json($response, ['ok' => true, 'restored' => true]);
+            }
+        }
+
         $_SESSION = [];
         session_destroy();
         return $this->json($response, ['ok' => true]);
@@ -70,7 +86,46 @@ class AuthController
             'user' => $this->publicUser($user),
             'permissions' => $this->permissionsFor($userRepo, $user['role']),
             'csrf_token' => $_SESSION['csrf_token'] ?? null,
+            'impersonator' => $request->getAttribute('impersonator'),
         ]);
+    }
+
+    /** Admin only: act as another user until logout, which returns to the admin account. */
+    public function impersonate(Request $request, Response $response, array $args): Response
+    {
+        $me = $request->getAttribute('user');
+        if (!empty($_SESSION['impersonator_id']) || $me['role'] !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่สวมสิทธิ์ผู้ใช้อื่นได้', 403);
+        }
+
+        $id = (int) $args['id'];
+        $target = (new UserRepo(Db::connection()))->find($id);
+        if (!$target) {
+            return $this->error($response, 'ไม่พบผู้ใช้', 404);
+        }
+        if ($id === (int) $me['id']) {
+            return $this->error($response, 'ไม่สามารถสวมสิทธิ์ตัวเองได้', 422);
+        }
+        if (!UserRepo::canSignIn($target)) {
+            return $this->error($response, 'บัญชีผู้ใช้นี้ปิดอยู่หรือถูกระงับ', 422);
+        }
+
+        $this->auditImpersonation($request, $id, (int) $me['id'], 'impersonate_start');
+        session_regenerate_id(true);
+        $_SESSION['impersonator_id'] = (int) $me['id'];
+        $_SESSION['user_id'] = $id;
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+        return $this->json($response, ['ok' => true]);
+    }
+
+    private function auditImpersonation(Request $request, int $targetId, int $adminId, string $event): void
+    {
+        (new AuditLogger(Db::connection()))->log(
+            'users', $targetId, 'update', null, ['event' => $event],
+            $adminId,
+            $request->getServerParams()['REMOTE_ADDR'] ?? null
+        );
     }
 
     private function publicUser(array $user): array

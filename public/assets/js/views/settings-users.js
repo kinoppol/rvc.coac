@@ -49,7 +49,7 @@ export async function renderUsersPanel(el, { user: me }) {
           <div class="card-head"><h2>ผู้ใช้งานระบบ</h2></div>
           ${message ? `<div class="card-pad" style="display:flex;padding-bottom:0">${messageBox(message)}</div>` : ''}
           <div class="table-wrap"><table>
-            <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>RVC-ONE</th><th>บทบาท</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th></tr></thead>
+            <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>RVC-ONE</th><th>บทบาท</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th><th></th></tr></thead>
             <tbody>
               ${users.map((u) => {
                   const self = Number(u.id) === Number(me.id);
@@ -66,6 +66,8 @@ export async function renderUsersPanel(el, { user: me }) {
                       : self ? '<span class="pill ok">ใช้งาน</span>'
                       : `<button class="pill ${Number(u.active) ? 'ok' : 'muted'}" style="border:0;cursor:pointer" data-toggle>${Number(u.active) ? 'ใช้งาน' : 'ปิดอยู่'}</button>`}</td>
                   <td class="muted" style="font-size:12.5px">${u.last_login_at ? fmtDateTime(u.last_login_at) : '-'}</td>
+                  <td>${!self && me.role === 'admin' && Number(u.active) && !suspended
+                      ? '<button class="btn sm secondary" data-impersonate>สวมสิทธิ์</button>' : ''}</td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -98,6 +100,18 @@ export async function renderUsersPanel(el, { user: me }) {
                 act(() => api.put(`/users/${id}`, { role: e.target.value }), 'เปลี่ยนบทบาทแล้ว'));
             tr.querySelector('[data-toggle]')?.addEventListener('click', (e) =>
                 act(() => api.put(`/users/${id}`, { active: e.target.textContent.trim() !== 'ใช้งาน' })));
+            tr.querySelector('[data-impersonate]')?.addEventListener('click', async () => {
+                const name = tr.children[0].textContent.trim();
+                if (!confirm(`สวมสิทธิ์เป็น ${name}? จะใช้งานระบบด้วยสิทธิ์ของผู้ใช้นี้ จนกว่าจะกด «กลับเป็นผู้ดูแลระบบ»`)) return;
+                try {
+                    await api.post(`/users/${id}/impersonate`);
+                    location.hash = '';
+                    location.reload();
+                } catch (err) {
+                    message = { ok: false, text: err.message };
+                    await load();
+                }
+            });
             tr.querySelector('[data-unlink]')?.addEventListener('click', () => {
                 if (confirm('ยกเลิกการผูกบัญชี RVC-ONE? ผู้ใช้นี้จะเข้าสู่ระบบผ่าน RVC-ONE ไม่ได้อีก')) {
                     act(() => api.put(`/users/${id}`, { oa_user_id: null }), 'ยกเลิกการผูกแล้ว');

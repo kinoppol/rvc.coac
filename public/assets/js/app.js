@@ -140,15 +140,18 @@ function onAuthenticated(data) {
     state.permissions = data.permissions || [];
     setCsrfToken(data.csrf_token);
 
-    renderShell(root, { user: state.user, permissions: state.permissions });
+    renderShell(root, { user: state.user, permissions: state.permissions, impersonator: data.impersonator });
 
     document.getElementById('theme-toggle').addEventListener('click', () => {
         cycleTheme();
         updateThemeButton();
     });
     document.getElementById('logout-btn').addEventListener('click', async () => {
-        try { await api.post('/auth/logout'); } catch (e) { /* ignore */ }
+        let restored = false;
+        try { restored = !!(await api.post('/auth/logout')).restored; } catch (e) { /* ignore */ }
         location.hash = '';
+        // Leaving an impersonated account: reload straight back into the admin's own session.
+        if (restored) { location.reload(); return; }
         unmountAssistant();
         showLogin();
     });

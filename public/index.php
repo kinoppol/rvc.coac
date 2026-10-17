@@ -148,6 +148,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('settings.edit'));
     $group->put('/users/{id:[0-9]+}', [UsersController::class, 'update'])
         ->add(new RoleGuard('settings.edit'));
+    $group->post('/users/{id:[0-9]+}/impersonate', [AuthController::class, 'impersonate'])
+        ->add(new RoleGuard('settings.edit'));
 
     $group->get('/oa/status', [OaAdminController::class, 'status'])
         ->add(new RoleGuard('settings.edit'));

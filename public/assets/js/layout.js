@@ -66,7 +66,7 @@ const PAGE_TITLES = {
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย' };
 
-export function renderShell(root, { user, permissions, badges = {} }) {
+export function renderShell(root, { user, permissions, impersonator = null, badges = {} }) {
     const has = (perm) => permissions.includes(perm);
     const initials = (user.full_name || user.username).slice(0, 2);
 
@@ -113,10 +113,14 @@ export function renderShell(root, { user, permissions, badges = {} }) {
                 <div class="name">${escapeHtml(user.full_name)}</div>
                 <div class="role">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</div>
               </div>
-              <span class="logout-link" id="logout-btn">ออกจากระบบ</span>
+              <span class="logout-link" id="logout-btn">${impersonator ? 'กลับเป็นผู้ดูแลระบบ' : 'ออกจากระบบ'}</span>
             </div>
           </div>
         </header>
+        ${impersonator ? `<div class="impersonate-bar">
+          กำลังสวมสิทธิ์เป็น <b>${escapeHtml(user.full_name)}</b> (${escapeHtml(ROLE_LABEL[user.role] || user.role)})
+          — ผู้ดูแลระบบ ${escapeHtml(impersonator.full_name)} · กด «กลับเป็นผู้ดูแลระบบ» เพื่อออกและกลับสู่สิทธิ์เดิม
+        </div>` : ''}
         <div class="content" id="view"></div>
       </div>
     </div>
