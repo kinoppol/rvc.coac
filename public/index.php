@@ -11,6 +11,7 @@ use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
 use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
+use App\Controllers\MyConsignorController;
 use App\Controllers\OaAdminController;
 use App\Controllers\PortalController;
 use App\Controllers\PurchaseController;
@@ -85,6 +86,12 @@ $app->get('/auth/callback', [SsoController::class, 'cancelled']);
 $app->group('/api', function ($group) {
     $group->post('/auth/logout', [AuthController::class, 'logout']);
     $group->get('/auth/me', [AuthController::class, 'me']);
+    $group->post('/auth/role', [AuthController::class, 'switchRole']);
+
+    $group->get('/my/passbook', [MyConsignorController::class, 'passbook'])
+        ->add(new RoleGuard('consignor.portal'));
+    $group->get('/my/products', [MyConsignorController::class, 'products'])
+        ->add(new RoleGuard('consignor.portal'));
 
     $group->get('/dashboard', [DashboardController::class, 'index']);
 

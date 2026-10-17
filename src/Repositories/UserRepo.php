@@ -8,6 +8,11 @@ use PDO;
 
 class UserRepo
 {
+    public const CONSIGNOR = 'consignor';
+
+    /** Fixed: the consignor view only ever sees the person's own data. */
+    public const CONSIGNOR_PERMISSIONS = ['consignor.portal'];
+
     public function __construct(private PDO $db)
     {
     }
@@ -101,10 +106,52 @@ class UserRepo
     {
         return $this->db->query(
             'SELECT u.id, u.username, u.full_name, u.role, u.active, u.oa_user_id, u.oa_status, u.last_login_at, u.created_at,
-                    o.department AS oa_department, o.user_type AS oa_user_type
-             FROM users u LEFT JOIN oa_users o ON o.oa_user_id = u.oa_user_id
+                    o.department AS oa_department, o.user_type AS oa_user_type,
+                    c.id AS consignor_id, c.code AS consignor_code
+             FROM users u
+             LEFT JOIN oa_users o ON o.oa_user_id = u.oa_user_id
+             LEFT JOIN consignors c ON c.user_id = u.id
              ORDER BY u.id ASC'
         )->fetchAll();
+    }
+
+    /** The consignor record this user owns, if any. */
+    public function consignorOf(int $userId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT id, code, name FROM consignors WHERE user_id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Roles the user can switch between: their staff role (unless they are
+     * consignor-only) plus 'consignor' when a consignor record is linked.
+     *
+     * @return string[]
+     */
+    public function rolesOf(array $user): array
+    {
+        $roles = $user['role'] !== self::CONSIGNOR ? [$user['role']] : [];
+        if ($this->consignorOf((int) $user['id'])) {
+            $roles[] = self::CONSIGNOR;
+        }
+        return $roles;
+    }
+
+    /** @return string[] */
+    public function permissionsFor(string $role): array
+    {
+        if ($role === self::CONSIGNOR) {
+            return self::CONSIGNOR_PERMISSIONS;
+        }
+        $keys = [];
+        foreach ($this->rolePermissions() as $rp) {
+            if ($rp['role'] === $role && (bool) $rp['allowed']) {
+                $keys[] = $rp['permission_key'];
+            }
+        }
+        return $keys;
     }
 
     public function rolePermissions(): array
@@ -114,6 +161,9 @@ class UserRepo
 
     public function hasPermission(string $role, string $permissionKey): bool
     {
+        if ($role === self::CONSIGNOR) {
+            return in_array($permissionKey, self::CONSIGNOR_PERMISSIONS, true);
+        }
         $stmt = $this->db->prepare(
             'SELECT allowed FROM role_permissions WHERE role = ? AND permission_key = ? LIMIT 1'
         );

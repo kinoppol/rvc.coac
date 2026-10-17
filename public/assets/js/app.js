@@ -10,6 +10,7 @@ const ROUTE_PERMS = {
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
+    mypassbook: 'consignor.portal', myproducts: 'consignor.portal',
 };
 
 const state = { user: null, permissions: [] };
@@ -21,7 +22,12 @@ function currentRoute() {
     const hash = location.hash.replace(/^#\/?/, '');
     const [key, queryStr] = hash.split('?');
     const params = Object.fromEntries(new URLSearchParams(queryStr || ''));
-    return { key: key || 'dashboard', params };
+    return { key: key || homeRoute(), params };
+}
+
+/** Consignor-only menus have no dashboard; land on their own passbook. */
+function homeRoute() {
+    return state.permissions.includes('dashboard.view') || !state.permissions.includes('consignor.portal') ? 'dashboard' : 'mypassbook';
 }
 
 async function loadView({ key, params }) {
@@ -154,6 +160,15 @@ function onAuthenticated(data) {
         if (restored) { location.reload(); return; }
         unmountAssistant();
         showLogin();
+    });
+    document.getElementById('role-switch')?.addEventListener('change', async (e) => {
+        try {
+            await api.post('/auth/role', { role: e.target.value });
+            location.hash = '';
+            location.reload();
+        } catch (err) {
+            alert(err.message);
+        }
     });
     document.getElementById('side-nav').addEventListener('click', (e) => {
         const btn = e.target.closest('.nav-btn');

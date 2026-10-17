@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', consignor: 'ผู้ฝากขายเท่านั้น' };
 const METHOD_LABEL = { both: 'รหัสผ่าน และ RVC-ONE', sso: 'เฉพาะ RVC-ONE', password: 'เฉพาะรหัสผ่าน' };
 const METHOD_HINT = {
     both: 'ผู้ใช้เลือกได้ว่าจะเข้าด้วยชื่อผู้ใช้/รหัสผ่าน หรือผ่าน RVC-ONE',
@@ -49,7 +49,7 @@ export async function renderUsersPanel(el, { user: me }) {
           <div class="card-head"><h2>ผู้ใช้งานระบบ</h2></div>
           ${message ? `<div class="card-pad" style="display:flex;padding-bottom:0">${messageBox(message)}</div>` : ''}
           <div class="table-wrap"><table>
-            <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>RVC-ONE</th><th>บทบาท</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th><th></th></tr></thead>
+            <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>RVC-ONE</th><th>บทบาท</th><th>ผู้ฝากขาย</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th><th></th></tr></thead>
             <tbody>
               ${users.map((u) => {
                   const self = Number(u.id) === Number(me.id);
@@ -62,6 +62,9 @@ export async function renderUsersPanel(el, { user: me }) {
                       ? `ID ${u.oa_user_id}${u.oa_department ? ` · ${escapeHtml(u.oa_department)}` : ''} <button class="btn sm secondary" data-unlink>ยกเลิกผูก</button>`
                       : `<button class="btn sm secondary" data-link>ผูกบัญชี</button>`}</td>
                   <td>${self ? escapeHtml(ROLE_LABEL[u.role] || u.role) : roleSelect('role', u.role)}</td>
+                  <td style="font-size:12.5px;white-space:nowrap">${u.consignor_code
+                      ? `${escapeHtml(u.consignor_code)}${u.role === 'consignor' ? '' : ' <button class="btn sm secondary" data-unconsign>ยกเลิก</button>'}`
+                      : '<button class="btn sm secondary" data-consign>ตั้งเป็นผู้ฝากขาย</button>'}</td>
                   <td>${suspended ? '<span class="pill bad">ถูกระงับที่ RVC-ONE</span>'
                       : self ? '<span class="pill ok">ใช้งาน</span>'
                       : `<button class="pill ${Number(u.active) ? 'ok' : 'muted'}" style="border:0;cursor:pointer" data-toggle>${Number(u.active) ? 'ใช้งาน' : 'ปิดอยู่'}</button>`}</td>
@@ -110,6 +113,17 @@ export async function renderUsersPanel(el, { user: me }) {
                 } catch (err) {
                     message = { ok: false, text: err.message };
                     await load();
+                }
+            });
+            tr.querySelector('[data-consign]')?.addEventListener('click', () => {
+                const code = prompt('ผูกกับรหัสผู้ฝากขายที่มีอยู่แล้ว (เช่น C-012)\nหรือเว้นว่างเพื่อสร้างผู้ฝากขายใหม่จากข้อมูลผู้ใช้นี้');
+                if (code === null) return;
+                act(() => api.put(`/users/${id}`, { consignor: code.trim() || 'new' }),
+                    'ตั้งเป็นผู้ฝากขายแล้ว ผู้ใช้สลับไปเมนูผู้ฝากขายได้จากมุมขวาบน');
+            });
+            tr.querySelector('[data-unconsign]')?.addEventListener('click', () => {
+                if (confirm('ยกเลิกการเป็นผู้ฝากขายของผู้ใช้นี้? (ข้อมูลผู้ฝากขายและสมุดบัญชียังอยู่ครบ เพียงไม่ผูกกับบัญชีนี้)')) {
+                    act(() => api.put(`/users/${id}`, { consignor: null }), 'ยกเลิกแล้ว');
                 }
             });
             tr.querySelector('[data-unlink]')?.addEventListener('click', () => {

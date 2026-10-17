@@ -17,17 +17,28 @@ class AuthMiddleware implements MiddlewareInterface
     public function process(Request $request, Handler $handler): Response
     {
         if (empty($_SESSION['user_id'])) {
-            $response = (new ResponseFactory())->createResponse(401);
-            $response->getBody()->write(json_encode(['error' => 'กรุณาเข้าสู่ระบบ']));
-            return $response->withHeader('Content-Type', 'application/json');
+            return $this->deny(401, 'กรุณาเข้าสู่ระบบ');
         }
 
         $userRepo = new UserRepo(Db::connection());
         $user = $userRepo->find((int) $_SESSION['user_id']);
         if (!$user || !UserRepo::canSignIn($user)) {
-            $response = (new ResponseFactory())->createResponse(401);
-            $response->getBody()->write(json_encode(['error' => 'บัญชีผู้ใช้ไม่พร้อมใช้งาน']));
-            return $response->withHeader('Content-Type', 'application/json');
+            return $this->deny(401, 'บัญชีผู้ใช้ไม่พร้อมใช้งาน');
+        }
+
+        // Users with a staff role and a consignor record switch between the two;
+        // the chosen one becomes $user['role'] so RoleGuard checks it as usual.
+        $roles = $userRepo->rolesOf($user);
+        if (!$roles) {
+            return $this->deny(401, 'บัญชีนี้ยังไม่ได้ผูกกับผู้ฝากขาย กรุณาติดต่อผู้ดูแลระบบ');
+        }
+        $active = in_array($_SESSION['active_role'] ?? null, $roles, true) ? $_SESSION['active_role'] : $roles[0];
+        $user['role'] = $active;
+        $user['roles'] = $roles;
+
+        // The consignor view only reaches its own data; most staff routes have no RoleGuard.
+        if ($active === UserRepo::CONSIGNOR && !preg_match('#/api/(auth|my)/#', $request->getUri()->getPath())) {
+            return $this->deny(403, 'ไม่มีสิทธิ์เข้าถึงส่วนนี้');
         }
 
         $request = $request->withAttribute('user', $user);
@@ -36,9 +47,7 @@ class AuthMiddleware implements MiddlewareInterface
             $admin = $userRepo->find((int) $_SESSION['impersonator_id']);
             if (!$admin || !UserRepo::canSignIn($admin) || $admin['role'] !== 'admin') {
                 $_SESSION = [];
-                $response = (new ResponseFactory())->createResponse(401);
-                $response->getBody()->write(json_encode(['error' => 'กรุณาเข้าสู่ระบบ']));
-                return $response->withHeader('Content-Type', 'application/json');
+                return $this->deny(401, 'กรุณาเข้าสู่ระบบ');
             }
             $request = $request->withAttribute('impersonator', [
                 'id' => (int) $admin['id'],
@@ -46,5 +55,12 @@ class AuthMiddleware implements MiddlewareInterface
             ]);
         }
         return $handler->handle($request);
+    }
+
+    private function deny(int $status, string $message): Response
+    {
+        $response = (new ResponseFactory())->createResponse($status);
+        $response->getBody()->write(json_encode(['error' => $message]));
+        return $response->withHeader('Content-Type', 'application/json');
     }
 }

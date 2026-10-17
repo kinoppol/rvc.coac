@@ -129,6 +129,10 @@ class SsoController
             return $this->page($response, 403, 'บัญชีถูกปิดการใช้งาน',
                 'บัญชีของคุณในระบบฝากขาย ร้านค้าสหการ ถูกปิดการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
         }
+        if (!$users->rolesOf($user)) {
+            return $this->page($response, 403, 'ยังไม่มีสิทธิ์ใช้งาน',
+                'บัญชีของคุณยังไม่ได้ผูกกับผู้ฝากขาย กรุณาติดต่อผู้ดูแลระบบ');
+        }
 
         session_regenerate_id(true);
         $_SESSION = [

@@ -40,6 +40,22 @@ class ConsignorRepo
         return $row ?: null;
     }
 
+    public function findByCode(string $code): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM consignors WHERE code = ?');
+        $stmt->execute([$code]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** Link (or unlink with null) the user account that owns this consignor record. */
+    public function linkUser(int $id, ?int $linkUserId, ?int $userId, ?string $ip): void
+    {
+        $before = $this->find($id);
+        $this->db->prepare('UPDATE consignors SET user_id = ? WHERE id = ?')->execute([$linkUserId, $id]);
+        $this->audit->log('consignors', $id, 'update', $before, $this->find($id), $userId, $ip);
+    }
+
     public function options(): array
     {
         $stmt = $this->db->query("SELECT id, code, name FROM consignors WHERE status = 'active' ORDER BY name ASC");

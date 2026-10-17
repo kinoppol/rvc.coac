@@ -35,6 +35,10 @@ const PAGES = [
         { key: 'passbook', label: 'สมุดบัญชีผู้ฝาก', perm: 'passbook.view' },
         { key: 'withdraw', label: 'เบิก / จ่ายเงิน', perm: 'withdraw.create' },
     ]},
+    { group: 'ผู้ฝากขาย (ของฉัน)', items: [
+        { key: 'mypassbook', label: 'สมุดบัญชีของฉัน', perm: 'consignor.portal', icon: 'passbook' },
+        { key: 'myproducts', label: 'สินค้าที่ฝากขาย', perm: 'consignor.portal', icon: 'inventory' },
+    ]},
     { group: 'รายงานและระบบ', items: [
         { key: 'reports', label: 'รายงานสรุป', perm: 'reports.view' },
         { key: 'settings', label: 'ตั้งค่าระบบ', perm: 'settings.view' },
@@ -56,6 +60,8 @@ const PAGE_TITLES = {
     consignors: ['ผู้ฝากขาย', 'ทะเบียนผู้ฝากขาย'],
     passbook: ['ผู้ฝากขาย', 'สมุดบัญชีผู้ฝากขาย'],
     withdraw: ['ผู้ฝากขาย', 'เบิกเงิน / จ่ายเงินผู้ฝากขาย'],
+    mypassbook: ['ผู้ฝากขาย', 'สมุดบัญชีของฉัน'],
+    myproducts: ['ผู้ฝากขาย', 'สินค้าที่ฉันฝากขาย'],
     reports: ['รายงานและระบบ', 'รายงานสรุป'],
     settings: ['รายงานและระบบ', 'ตั้งค่าระบบฝากขาย'],
     ai: ['รายงานและระบบ', 'ตั้งค่าผู้ช่วย AI'],
@@ -64,7 +70,7 @@ const PAGE_TITLES = {
     audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
 };
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย' };
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', consignor: 'ผู้ฝากขาย' };
 
 export function renderShell(root, { user, permissions, impersonator = null, badges = {} }) {
     const has = (perm) => permissions.includes(perm);
@@ -86,7 +92,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
               if (!items.length) return '';
               return `<div class="group-label">${escapeHtml(g.group)}</div>` + items.map((it) => `
                 <button type="button" class="nav-btn" data-route="${it.key}">
-                  ${ICONS[it.key] || ''}<span>${escapeHtml(it.label)}</span>
+                  ${ICONS[it.icon || it.key] || ''}<span>${escapeHtml(it.label)}</span>
                   ${badges[it.key] ? `<span class="badge${badges[it.key].warn ? ' warn' : ''}">${badges[it.key].count}</span>` : ''}
                 </button>`).join('');
           }).join('')}
@@ -111,7 +117,10 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
               <div class="avatar">${escapeHtml(initials)}</div>
               <div>
                 <div class="name">${escapeHtml(user.full_name)}</div>
-                <div class="role">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</div>
+                ${(user.roles || []).length > 1
+                    ? `<select class="role-switch" id="role-switch" title="สลับบทบาท">${user.roles.map((r) =>
+                        `<option value="${r}" ${r === user.role ? 'selected' : ''}>${escapeHtml(ROLE_LABEL[r] || r)}</option>`).join('')}</select>`
+                    : `<div class="role">${escapeHtml(ROLE_LABEL[user.role] || user.role)}</div>`}
               </div>
               <span class="logout-link" id="logout-btn">${impersonator ? 'กลับเป็นผู้ดูแลระบบ' : 'ออกจากระบบ'}</span>
             </div>

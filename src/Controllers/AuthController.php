@@ -39,16 +39,19 @@ class AuthController
             return $this->error($response, 'ระบบเปิดให้เข้าสู่ระบบผ่าน RVC-ONE เท่านั้น (รหัสผ่านใช้ได้เฉพาะผู้ดูแลระบบ)', 403);
         }
 
+        $roles = $userRepo->rolesOf($user);
+        if (!$roles) {
+            return $this->error($response, 'บัญชีนี้ยังไม่ได้ผูกกับผู้ฝากขาย กรุณาติดต่อผู้ดูแลระบบ', 403);
+        }
+
         session_regenerate_id(true);
-        unset($_SESSION['impersonator_id']);
+        unset($_SESSION['impersonator_id'], $_SESSION['active_role']);
         $_SESSION['user_id'] = (int) $user['id'];
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
-        return $this->json($response, [
-            'user' => $this->publicUser($user),
-            'permissions' => $this->permissionsFor($userRepo, $user['role']),
-            'csrf_token' => $_SESSION['csrf_token'],
-        ]);
+        $user['role'] = $roles[0];
+        $user['roles'] = $roles;
+        return $this->json($response, $this->sessionPayload($userRepo, $user, null));
     }
 
     /** Public: which sign-in options the login page should offer. */
@@ -66,7 +69,7 @@ class AuthController
             if ($admin && UserRepo::canSignIn($admin) && $admin['role'] === 'admin') {
                 $this->auditImpersonation($request, (int) $_SESSION['user_id'], $adminId, 'impersonate_stop');
                 session_regenerate_id(true);
-                unset($_SESSION['impersonator_id']);
+                unset($_SESSION['impersonator_id'], $_SESSION['active_role']);
                 $_SESSION['user_id'] = $adminId;
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 return $this->json($response, ['ok' => true, 'restored' => true]);
@@ -80,14 +83,23 @@ class AuthController
 
     public function me(Request $request, Response $response): Response
     {
+        return $this->json($response, $this->sessionPayload(
+            new UserRepo(Db::connection()),
+            $request->getAttribute('user'),
+            $request->getAttribute('impersonator')
+        ));
+    }
+
+    /** Switch the menus/permissions between the roles this user holds (e.g. manager ↔ consignor). */
+    public function switchRole(Request $request, Response $response): Response
+    {
         $user = $request->getAttribute('user');
-        $userRepo = new UserRepo(Db::connection());
-        return $this->json($response, [
-            'user' => $this->publicUser($user),
-            'permissions' => $this->permissionsFor($userRepo, $user['role']),
-            'csrf_token' => $_SESSION['csrf_token'] ?? null,
-            'impersonator' => $request->getAttribute('impersonator'),
-        ]);
+        $role = (string) (((array) $request->getParsedBody())['role'] ?? '');
+        if (!in_array($role, $user['roles'], true)) {
+            return $this->error($response, 'คุณไม่มีบทบาทนี้', 422);
+        }
+        $_SESSION['active_role'] = $role;
+        return $this->json($response, ['ok' => true]);
     }
 
     /** Admin only: act as another user until logout, which returns to the admin account. */
@@ -99,7 +111,8 @@ class AuthController
         }
 
         $id = (int) $args['id'];
-        $target = (new UserRepo(Db::connection()))->find($id);
+        $userRepo = new UserRepo(Db::connection());
+        $target = $userRepo->find($id);
         if (!$target) {
             return $this->error($response, 'ไม่พบผู้ใช้', 404);
         }
@@ -109,9 +122,13 @@ class AuthController
         if (!UserRepo::canSignIn($target)) {
             return $this->error($response, 'บัญชีผู้ใช้นี้ปิดอยู่หรือถูกระงับ', 422);
         }
+        if (!$userRepo->rolesOf($target)) {
+            return $this->error($response, 'ผู้ใช้นี้ยังไม่ได้ผูกกับผู้ฝากขาย', 422);
+        }
 
         $this->auditImpersonation($request, $id, (int) $me['id'], 'impersonate_start');
         session_regenerate_id(true);
+        unset($_SESSION['active_role']);
         $_SESSION['impersonator_id'] = (int) $me['id'];
         $_SESSION['user_id'] = $id;
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -128,25 +145,22 @@ class AuthController
         );
     }
 
-    private function publicUser(array $user): array
+    /** What the SPA needs about the signed-in session; $user['role'] is the active role. */
+    private function sessionPayload(UserRepo $userRepo, array $user, ?array $impersonator): array
     {
+        $consignor = in_array(UserRepo::CONSIGNOR, $user['roles'], true) ? $userRepo->consignorOf((int) $user['id']) : null;
         return [
-            'id' => (int) $user['id'],
-            'username' => $user['username'],
-            'full_name' => $user['full_name'],
-            'role' => $user['role'],
+            'user' => [
+                'id' => (int) $user['id'],
+                'username' => $user['username'],
+                'full_name' => $user['full_name'],
+                'role' => $user['role'],
+                'roles' => $user['roles'],
+                'consignor' => $consignor,
+            ],
+            'permissions' => $userRepo->permissionsFor($user['role']),
+            'csrf_token' => $_SESSION['csrf_token'] ?? null,
+            'impersonator' => $impersonator,
         ];
-    }
-
-    /** @return string[] */
-    private function permissionsFor(UserRepo $userRepo, string $role): array
-    {
-        $keys = [];
-        foreach ($userRepo->rolePermissions() as $rp) {
-            if ($rp['role'] === $role && (bool) $rp['allowed']) {
-                $keys[] = $rp['permission_key'];
-            }
-        }
-        return $keys;
     }
 }

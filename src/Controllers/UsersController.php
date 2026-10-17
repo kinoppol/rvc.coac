@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Repositories\ConsignorRepo;
 use App\Repositories\OaUserRepo;
 use App\Repositories\UserRepo;
 use App\Services\AuditLogger;
@@ -16,7 +17,7 @@ class UsersController
 {
     use JsonResponse;
 
-    private const ROLES = ['admin', 'manager', 'advisor', 'cashier'];
+    private const ROLES = ['admin', 'manager', 'advisor', 'cashier', 'consignor'];
 
     public function index(Request $request, Response $response): Response
     {
@@ -74,6 +75,9 @@ class UsersController
         $user = $repo->find($id);
         unset($user['password_hash']);
         $this->audit($request, $id, 'create', null, $user);
+        if ($role === UserRepo::CONSIGNOR) {
+            $this->linkConsignor($request, $user, null);
+        }
         return $this->json($response, ['data' => $user], 201);
     }
 
@@ -119,6 +123,23 @@ class UsersController
             $fields['oa_user_id'] = $oaId;
         }
 
+        $linkedConsignor = $repo->consignorOf($id);
+        $consignorChange = array_key_exists('consignor', $body);
+        $consignorCode = $consignorChange && $body['consignor'] !== null ? trim((string) $body['consignor']) : null;
+        if ($consignorChange && $consignorCode === null) {
+            if (($fields['role'] ?? $user['role']) === UserRepo::CONSIGNOR) {
+                return $this->error($response, 'ผู้ใช้นี้มีบทบาทผู้ฝากขายอย่างเดียว เปลี่ยนบทบาทก่อนจึงยกเลิกการเป็นผู้ฝากขายได้', 422);
+            }
+        } elseif ($consignorCode !== null && $consignorCode !== '' && $consignorCode !== 'new') {
+            $target = $this->consignors()->findByCode($consignorCode);
+            if (!$target) {
+                return $this->error($response, 'ไม่พบรหัสผู้ฝากขาย ' . $consignorCode, 422);
+            }
+            if ($target['user_id'] && (int) $target['user_id'] !== $id) {
+                return $this->error($response, 'ผู้ฝากขาย ' . $consignorCode . ' ผูกกับผู้ใช้อื่นอยู่แล้ว', 422);
+            }
+        }
+
         if ((int) $me['id'] === $id && ((isset($fields['active']) && !$fields['active'])
             || (isset($fields['role']) && $fields['role'] !== $user['role']))) {
             return $this->error($response, 'ไม่สามารถปิดบัญชีหรือเปลี่ยนบทบาทของตัวเองได้', 422);
@@ -130,10 +151,54 @@ class UsersController
         }
 
         $repo->update($id, $fields);
+        if ($consignorChange) {
+            if ($linkedConsignor && ($consignorCode === null || $consignorCode !== $linkedConsignor['code'])) {
+                $this->consignors()->linkUser((int) $linkedConsignor['id'], null, (int) $me['id'], $this->ip($request));
+                $linkedConsignor = null;
+            }
+            if ($consignorCode !== null && !$linkedConsignor) {
+                $this->linkConsignor($request, $user, in_array($consignorCode, ['', 'new'], true) ? null : $consignorCode);
+            }
+        } elseif (($fields['role'] ?? null) === UserRepo::CONSIGNOR && !$linkedConsignor) {
+            // Consignor-only needs a consignor record; make one from the user's details.
+            $this->linkConsignor($request, $user, null);
+        }
         $after = $repo->find($id);
         unset($user['password_hash'], $after['password_hash']);
         $this->audit($request, $id, 'update', $user, $after);
         return $this->json($response, ['data' => $after]);
+    }
+
+    private function consignors(): ConsignorRepo
+    {
+        $db = Db::connection();
+        return new ConsignorRepo($db, new AuditLogger($db));
+    }
+
+    private function ip(Request $request): ?string
+    {
+        return $request->getServerParams()['REMOTE_ADDR'] ?? null;
+    }
+
+    /** Make the user the owner of consignor $code, or of a new consignor record built from their profile. */
+    private function linkConsignor(Request $request, array $user, ?string $code): void
+    {
+        $repo = $this->consignors();
+        $meId = (int) $request->getAttribute('user')['id'];
+        if ($code !== null) {
+            $consignorId = (int) $repo->findByCode($code)['id'];
+        } else {
+            $oaUser = $user['oa_user_id'] ? (new OaUserRepo(Db::connection()))->find((int) $user['oa_user_id']) : null;
+            $consignorId = $repo->create([
+                'name' => $user['full_name'],
+                'type' => ($oaUser['user_type'] ?? null) === 'student' ? 'นักเรียน / นักศึกษา' : 'ครู / บุคลากร',
+                'department' => $oaUser['department'] ?? null,
+                'phone' => '',
+                'pay_channel' => 'cash',
+                'status' => 'active',
+            ], $meId, $this->ip($request));
+        }
+        $repo->linkUser($consignorId, (int) $user['id'], $meId, $this->ip($request));
     }
 
     private function audit(Request $request, int $id, string $action, ?array $old, ?array $new): void
