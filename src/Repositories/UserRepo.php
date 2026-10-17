@@ -104,22 +104,36 @@ class UserRepo
 
     public function all(): array
     {
-        return $this->db->query(
-            'SELECT u.id, u.username, u.full_name, u.role, u.active, u.oa_user_id, u.oa_status, u.last_login_at, u.created_at,
-                    o.department AS oa_department, o.user_type AS oa_user_type,
-                    c.id AS consignor_id, c.code AS consignor_code
+        $sql = 'SELECT u.id, u.username, u.full_name, u.role, u.active, u.oa_user_id, u.oa_status, u.last_login_at, u.created_at,
+                    o.department AS oa_department, o.user_type AS oa_user_type, %s
              FROM users u
-             LEFT JOIN oa_users o ON o.oa_user_id = u.oa_user_id
-             LEFT JOIN consignors c ON c.user_id = u.id
-             ORDER BY u.id ASC'
-        )->fetchAll();
+             LEFT JOIN oa_users o ON o.oa_user_id = u.oa_user_id %s
+             ORDER BY u.id ASC';
+        try {
+            return $this->db->query(sprintf($sql, 'c.id AS consignor_id, c.code AS consignor_code',
+                'LEFT JOIN consignors c ON c.user_id = u.id'))->fetchAll();
+        } catch (\PDOException $e) {
+            if ($e->getCode() !== '42S22') {
+                throw $e;
+            }
+            // Migration 0019 not run yet.
+            return $this->db->query(sprintf($sql, 'NULL AS consignor_id, NULL AS consignor_code', ''))->fetchAll();
+        }
     }
 
     /** The consignor record this user owns, if any. */
     public function consignorOf(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT id, code, name FROM consignors WHERE user_id = ? LIMIT 1');
-        $stmt->execute([$userId]);
+        try {
+            $stmt = $this->db->prepare('SELECT id, code, name FROM consignors WHERE user_id = ? LIMIT 1');
+            $stmt->execute([$userId]);
+        } catch (\PDOException $e) {
+            // Before migration 0019 there is no consignors.user_id; sign-in must still work so it can be run.
+            if ($e->getCode() === '42S22') {
+                return null;
+            }
+            throw $e;
+        }
         $row = $stmt->fetch();
         return $row ?: null;
     }
