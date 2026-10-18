@@ -109,6 +109,10 @@ $app->group('/api', function ($group) {
 
     $group->get('/consignors', [ConsignorController::class, 'index']);
     $group->get('/consignors/options', [ConsignorController::class, 'options']);
+    $group->get('/consignors/directory', [ConsignorController::class, 'directory'])
+        ->add(new RoleGuard('consignors.create'));
+    $group->post('/consignors/from-oa', [ConsignorController::class, 'importFromOa'])
+        ->add(new RoleGuard('consignors.create'));
     $group->get('/consignors/{id}', [ConsignorController::class, 'show']);
     $group->get('/consignors/{id}/passbook', [ConsignorController::class, 'passbook']);
     $group->post('/consignors', [ConsignorController::class, 'store'])

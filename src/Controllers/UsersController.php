@@ -189,14 +189,11 @@ class UsersController
             $consignorId = (int) $repo->findByCode($code)['id'];
         } else {
             $oaUser = $user['oa_user_id'] ? (new OaUserRepo(Db::connection()))->find((int) $user['oa_user_id']) : null;
-            $consignorId = $repo->create([
-                'name' => $user['full_name'],
-                'type' => ($oaUser['user_type'] ?? null) === 'student' ? 'นักเรียน / นักศึกษา' : 'ครู / บุคลากร',
-                'department' => $oaUser['department'] ?? null,
-                'phone' => '',
-                'pay_channel' => 'cash',
-                'status' => 'active',
-            ], $meId, $this->ip($request));
+            $consignorId = $repo->create(
+                ConsignorRepo::profileFrom((string) $user['full_name'], $oaUser),
+                $meId,
+                $this->ip($request)
+            );
         }
         $repo->linkUser($consignorId, (int) $user['id'], $meId, $this->ip($request));
     }

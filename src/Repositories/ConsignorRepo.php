@@ -56,6 +56,19 @@ class ConsignorRepo
         $this->audit->log('consignors', $id, 'update', $before, $this->find($id), $userId, $ip);
     }
 
+    /** Fields of a new consignor record built from a person's account / RVC-ONE profile. */
+    public static function profileFrom(string $fullName, ?array $oaUser): array
+    {
+        return [
+            'name' => $fullName,
+            'type' => ($oaUser['user_type'] ?? null) === 'student' ? 'นักเรียน / นักศึกษา' : 'ครู / บุคลากร',
+            'department' => $oaUser['department'] ?? null,
+            'phone' => '',
+            'pay_channel' => 'cash',
+            'status' => 'active',
+        ];
+    }
+
     public function options(): array
     {
         $stmt = $this->db->query("SELECT id, code, name FROM consignors WHERE status = 'active' ORDER BY name ASC");

@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use App\Services\AuditLogger;
+use App\Services\ConsignorImporter;
 use App\Services\LedgerService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -47,6 +48,40 @@ class ConsignorController
 
         $id = $repo->create($body, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
         return $this->json($response, ['data' => $repo->find($id)], 201);
+    }
+
+    /** Staff and students from the RVC-ONE directory, for the "import as consignor" picker. */
+    public function directory(Request $request, Response $response): Response
+    {
+        $q = $request->getQueryParams();
+        $type = (string) ($q['type'] ?? '');
+        $rows = (new ConsignorImporter(Db::connection()))->directory(
+            trim((string) ($q['q'] ?? '')),
+            in_array($type, ['staff', 'student'], true) ? $type : ''
+        );
+        return $this->json($response, ['data' => $rows]);
+    }
+
+    /** Make the chosen RVC-ONE people consignors (each gets a consignor-only account if they have none). */
+    public function importFromOa(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $ids = array_values(array_unique(array_filter(
+            array_map('intval', (array) ($body['oa_user_ids'] ?? [])),
+            fn ($id) => $id > 0
+        )));
+        if (!$ids) {
+            return $this->error($response, 'กรุณาเลือกบุคลากรหรือนักเรียนอย่างน้อย 1 คน', 422);
+        }
+        if (count($ids) > 200) {
+            return $this->error($response, 'เพิ่มได้ครั้งละไม่เกิน 200 คน', 422);
+        }
+
+        $importer = new ConsignorImporter(Db::connection());
+        $meId = (int) $request->getAttribute('user')['id'];
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        $results = array_map(fn ($id) => $importer->import($id, $meId, $ip), $ids);
+        return $this->json($response, ['data' => $results]);
     }
 
     public function show(Request $request, Response $response, array $args): Response
