@@ -38,9 +38,9 @@ class OaUserSync
         }
 
         try {
-            $since = $full ? null : $this->lastServerTime();
-            $mode = $since === null ? 'full' : 'incremental';
             $type = (string) OaConfig::get('sync_type');
+            $since = $full ? null : $this->lastServerTime($type);
+            $mode = $since === null ? 'full' : 'incremental';
 
             $this->db->prepare(
                 "INSERT INTO oa_sync_runs (mode, user_type, since_value, status, triggered_by, started_at)
@@ -69,12 +69,20 @@ class OaUserSync
         }
     }
 
-    /** server_time of the latest successful run = since of the next one. */
-    public function lastServerTime(): ?string
+    /**
+     * server_time of the latest successful run for this user type = since of
+     * the next one. Switching type (e.g. staff → staff + students) has no
+     * since yet, so the first run after it pulls everyone of the new type.
+     */
+    public function lastServerTime(?string $type = null): ?string
     {
-        $v = $this->db->query(
-            "SELECT server_time FROM oa_sync_runs WHERE status = 'ok' AND server_time IS NOT NULL ORDER BY id DESC LIMIT 1"
-        )->fetchColumn();
+        $type ??= (string) OaConfig::get('sync_type');
+        $stmt = $this->db->prepare(
+            "SELECT server_time FROM oa_sync_runs
+             WHERE status = 'ok' AND server_time IS NOT NULL AND user_type <=> ? ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([$type !== '' ? $type : null]);
+        $v = $stmt->fetchColumn();
         return $v === false ? null : (string) $v;
     }
 

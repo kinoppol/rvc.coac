@@ -23,7 +23,7 @@ return [
         // 'client_id'     => 'cl_8edfa15f2a',
         // 'redirect_uri'  => 'https://coac.rvc.ac.th/web/auth/callback',
         'client_secret' => '', // or set env OA_CLIENT_SECRET (takes precedence). Never commit it.
-        'sync_type' => 'staff', // staff | student | all | '' (= whatever RVC-ONE allows this app)
+        'sync_type' => '', // staff | student | all | '' (= staff + students, whatever RVC-ONE allows this app); the settings page overrides it
         'auto_provision' => false, // true = anyone signing in via RVC-ONE gets an account with default_role
         'default_role' => 'cashier',
     ],

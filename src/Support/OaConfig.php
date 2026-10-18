@@ -24,8 +24,9 @@ class OaConfig
         'client_id' => 'cl_8edfa15f2a',
         'client_secret' => '',
         'redirect_uri' => 'https://coac.rvc.ac.th/web/auth/callback',
-        // Which RVC-ONE users to mirror: staff | student | all | '' (= everything the app is allowed)
-        'sync_type' => 'staff',
+        // Which RVC-ONE users to mirror: staff | student | all | '' (= everything the app is allowed).
+        // The choice an admin saves on the settings page wins over this.
+        'sync_type' => '',
         // When an RVC-ONE user with no linked account signs in: create one
         // (with default_role) or refuse until an admin grants access.
         'auto_provision' => false,
@@ -38,6 +39,9 @@ class OaConfig
         if ($key === 'client_secret') {
             return self::secret()[0];
         }
+        if ($key === 'sync_type') {
+            return self::syncType();
+        }
         return Config::get('oa.' . $key, self::DEFAULTS[$key] ?? null);
     }
 
@@ -45,6 +49,22 @@ class OaConfig
     public static function secretSource(): string
     {
         return self::secret()[1];
+    }
+
+    /** Saved on the settings page (settings.oa_sync_type) first, then config/config.php, then the default. */
+    private static function syncType(): string
+    {
+        try {
+            $stmt = Db::connection()->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+            $stmt->execute([SettingsService::OA_SYNC_TYPE_KEY]);
+            $saved = $stmt->fetchColumn();
+            if ($saved !== false && in_array($saved, SettingsService::OA_SYNC_TYPES, true)) {
+                return (string) $saved;
+            }
+        } catch (\Throwable) {
+            // Not installed yet: fall back to the config file.
+        }
+        return (string) Config::get('oa.sync_type', self::DEFAULTS['sync_type']);
     }
 
     /** @return array{0:string,1:string} [secret, source] */

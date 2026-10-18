@@ -121,6 +121,15 @@ class OaUserRepo
         return (int) $this->db->query('SELECT COUNT(*) FROM oa_users')->fetchColumn();
     }
 
+    /** @return array<string,int> user_type => number of people */
+    public function countByType(): array
+    {
+        $rows = $this->db->query(
+            "SELECT COALESCE(user_type, '') AS t, COUNT(*) AS n FROM oa_users GROUP BY user_type"
+        )->fetchAll();
+        return array_column(array_map(fn ($r) => ['t' => $r['t'], 'n' => (int) $r['n']], $rows), 'n', 't');
+    }
+
     private static function str(mixed $v): ?string
     {
         if (!is_scalar($v)) {

@@ -26,6 +26,7 @@ class OaAdminController
         $redirect = (string) OaConfig::get('redirect_uri');
         return $this->json($response, [
             'directory_count' => (new OaUserRepo($db))->count(),
+            'directory_by_type' => (new OaUserRepo($db))->countByType(),
             'since' => $sync->lastServerTime(),
             'runs' => $sync->recentRuns(10),
             'sync_type' => OaConfig::get('sync_type'),
@@ -58,6 +59,17 @@ class OaAdminController
         return $this->json($response, ['ok' => true, 'secret_source' => OaConfig::secretSource()]);
     }
 
+    /** Which RVC-ONE users to mirror: '' (staff + students) | staff | student. */
+    public function saveSyncType(Request $request, Response $response): Response
+    {
+        $type = (string) (((array) $request->getParsedBody())['sync_type'] ?? '');
+        if (!in_array($type, SettingsService::OA_SYNC_TYPES, true)) {
+            return $this->error($response, 'ประเภทผู้ใช้ที่จะซิงค์ไม่ถูกต้อง', 422);
+        }
+        (new SettingsService(Db::connection()))->setOaSyncType($type, (int) $request->getAttribute('user')['id']);
+        return $this->json($response, ['ok' => true, 'sync_type' => OaConfig::get('sync_type')]);
+    }
+
     public function search(Request $request, Response $response): Response
     {
         $q = $request->getQueryParams();
@@ -79,7 +91,8 @@ class OaAdminController
             $msg = match ($e->apiError) {
                 'sync_disabled' => 'ผู้ดูแล RVC-ONE ยังไม่ได้เปิดสิทธิ์ «API ซิงค์ข้อมูลผู้ใช้» ให้แอปนี้',
                 'invalid_client' => 'client_id / client_secret ไม่ถูกต้อง หรือแอปถูกปิดใช้งานที่ RVC-ONE',
-                'type_not_allowed' => 'แอปนี้ไม่ได้รับอนุญาตให้ดึงผู้ใช้ประเภท ' . OaConfig::get('sync_type'),
+                'type_not_allowed' => 'แอปนี้ไม่ได้รับอนุญาตให้ดึงผู้ใช้ประเภท ' . (OaConfig::get('sync_type') ?: 'ทั้งหมด')
+                    . ' — ขอให้ผู้ดูแล RVC-ONE เปิดสิทธิ์ หรือเลือกประเภทที่จะซิงค์ใหม่',
                 default => 'ซิงค์ไม่สำเร็จ: ' . $e->getMessage(),
             };
             return $this->error($response, $msg, 422);

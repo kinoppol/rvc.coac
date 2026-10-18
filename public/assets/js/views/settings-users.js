@@ -3,6 +3,7 @@ import { escapeHtml, fmtDateTime } from '../util.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', consignor: 'ผู้ฝากขายเท่านั้น' };
 const METHOD_LABEL = { both: 'รหัสผ่าน และ RVC-ONE', sso: 'เฉพาะ RVC-ONE', password: 'เฉพาะรหัสผ่าน' };
+const SYNC_TYPE_LABEL = { '': 'ครูและนักเรียนนักศึกษา', staff: 'เฉพาะครู/บุคลากร', student: 'เฉพาะนักเรียนนักศึกษา' };
 const METHOD_HINT = {
     both: 'ผู้ใช้เลือกได้ว่าจะเข้าด้วยชื่อผู้ใช้/รหัสผ่าน หรือผ่าน RVC-ONE',
     sso: 'ผู้ใช้ทั่วไปเข้าได้ผ่าน RVC-ONE เท่านั้น — ผู้ดูแลระบบยังใช้รหัสผ่านได้จากลิงก์ «ผู้ดูแลระบบ: ลงชื่อเข้าใช้ด้วยรหัสผ่าน» ในหน้าเข้าสู่ระบบ (สำหรับกรณี RVC-ONE ล่ม)',
@@ -217,7 +218,15 @@ export async function renderOaPanel(el) {
           </section>
           <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
             <h2>ซิงค์รายชื่อผู้ใช้</h2>
-            <div>รายชื่อจาก RVC-ONE: <b>${oa.directory_count}</b> คน · ซิงค์ล่าสุด: ${syncLine(oa)}</div>
+            <div>รายชื่อจาก RVC-ONE: <b>${oa.directory_count}</b> คน
+              (ครู/บุคลากร ${(oa.directory_by_type || {}).staff || 0} · นักเรียนนักศึกษา ${(oa.directory_by_type || {}).student || 0})
+              · ซิงค์ล่าสุด: ${syncLine(oa)}</div>
+            <div class="actions-row">
+              <span>ประเภทที่ซิงค์:</span>
+              ${Object.entries(SYNC_TYPE_LABEL).map(([k, v]) =>
+                  `<button type="button" class="tab-btn ${k === (oa.sync_type || '') ? 'active' : ''}" data-sync-type="${k}">${escapeHtml(v)}</button>`).join('')}
+            </div>
+            <div class="muted" style="font-size:12px">เมื่อเปลี่ยนประเภท การซิงค์ครั้งถัดไปจะดึงรายชื่อทั้งหมดของประเภทนั้นใหม่ · ตั้ง cron ให้รัน <code>php bin/oa-sync.php</code> ทุก 30 นาที เพื่อดึงเฉพาะที่เปลี่ยน</div>
             <div class="actions-row">
               <button class="btn sm" data-sync="0">ซิงค์รายชื่อตอนนี้</button>
               <button class="btn sm secondary" data-sync="1">ซิงค์ทั้งหมดใหม่</button>
@@ -244,6 +253,9 @@ export async function renderOaPanel(el) {
             if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
             act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
         }));
+        el.querySelectorAll('[data-sync-type]').forEach((btn) => btn.addEventListener('click', () =>
+            act(() => api.put('/oa/sync-type', { sync_type: btn.dataset.syncType }),
+                'บันทึกแล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อดึงรายชื่อ')));
         el.querySelectorAll('[data-sync]').forEach((btn) => btn.addEventListener('click', () => {
             btn.disabled = true;
             btn.textContent = 'กำลังซิงค์...';

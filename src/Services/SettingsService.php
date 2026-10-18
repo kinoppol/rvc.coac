@@ -27,6 +27,10 @@ class SettingsService
         'login_methods' => 'both',
     ];
 
+    /** Which RVC-ONE users the sync pulls: '' = staff and students (everything the app is allowed). */
+    public const OA_SYNC_TYPE_KEY = 'oa_sync_type';
+    public const OA_SYNC_TYPES = ['', 'staff', 'student'];
+
     /** both = password + RVC-ONE; sso = RVC-ONE only (admins keep a password fallback). */
     public const LOGIN_METHODS = ['both', 'password', 'sso'];
 
@@ -115,6 +119,24 @@ class SettingsService
             'INSERT INTO settings_audit_log (setting_key, old_value, new_value, changed_by, changed_at)
              VALUES (?, ?, ?, ?, NOW())'
         )->execute(['oa_client_secret', $had ? '(ตั้งค่าไว้)' : '', $secret === '' ? '' : '(ตั้งค่าใหม่)', $userId]);
+    }
+
+    /** Always stored (even '') so it overrides oa.sync_type in config/config.php. */
+    public function setOaSyncType(string $type, ?int $userId): void
+    {
+        $stmt = $this->db->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute([self::OA_SYNC_TYPE_KEY]);
+        $old = $stmt->fetchColumn();
+        $this->db->prepare(
+            'INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)'
+        )->execute([self::OA_SYNC_TYPE_KEY, $type]);
+        if ($old !== $type) {
+            $this->db->prepare(
+                'INSERT INTO settings_audit_log (setting_key, old_value, new_value, changed_by, changed_at)
+                 VALUES (?, ?, ?, ?, NOW())'
+            )->execute([self::OA_SYNC_TYPE_KEY, $old === false ? null : $old, $type, $userId]);
+        }
     }
 
     public function auditLog(int $limit = 20): array
