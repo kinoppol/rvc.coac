@@ -8,6 +8,7 @@ const TABS = [
     { key: 'fees', label: 'ค่าฝากขาย' },
     { key: 'users', label: 'ผู้ใช้งาน', edit: true },
     { key: 'rvcone', label: 'RVC-ONE', edit: true },
+    { key: 'time', label: 'เขตเวลา (Time zone)' },
     { key: 'roles', label: 'สิทธิ์ตามบทบาท' },
     { key: 'history', label: 'ประวัติการเปลี่ยนแปลง' },
 ];
@@ -49,7 +50,62 @@ export async function render(page, { user, permissions, params = {} }) {
         draw(data);
     }
 
+    /** Current wall-clock time in a time zone, e.g. «20 ต.ค. 2569 14:05 (UTC+07:00)». */
+    function clockIn(tz) {
+        try {
+            const d = new Date();
+            const text = d.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short', timeZone: tz });
+            const off = new Intl.DateTimeFormat('en', { timeZone: tz, timeZoneName: 'longOffset' }).formatToParts(d)
+                .find((p) => p.type === 'timeZoneName')?.value.replace('GMT', 'UTC') || '';
+            return `${text}${off ? ` (${off === 'UTC' ? 'UTC+00:00' : off})` : ''}`;
+        } catch (e) {
+            return '-';
+        }
+    }
+
+    function drawTime({ settings: s, timezones, timezone_default: def, timezone_current: cur }) {
+        const chosen = s.timezone || '';
+        pane.innerHTML = `
+          <div style="max-width:720px">
+            <form id="tz-form">
+              <fieldset ${canEdit ? '' : 'disabled'} style="border:0;padding:0;margin:0">
+                <section class="card card-pad">
+                  <h2 style="margin-bottom:6px">เขตเวลาของระบบ (Time zone)</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">ใช้กำหนดวันและเวลาที่บันทึกลงเอกสารทุกชนิด (ขาย รับฝาก ซื้อสินค้า ฯลฯ) การตัดยอดรายงานรายวัน และวันที่ «วันนี้» ที่แสดงในระบบ</p>
+                  <div class="form-grid">
+                    <label class="field">เขตเวลา
+                      <select name="timezone" id="tz-select">
+                        <option value="" ${chosen === '' ? 'selected' : ''}>ตามไฟล์ตั้งค่าระบบ (${escapeHtml(def)})</option>
+                        ${timezones.map((z) => `<option value="${escapeHtml(z)}" ${z === chosen ? 'selected' : ''}>${escapeHtml(z)}</option>`).join('')}
+                      </select>
+                    </label>
+                    <div class="field">เวลาปัจจุบันตามเขตเวลาที่เลือก<div id="tz-clock" style="font-weight:600;padding:8px 0">${escapeHtml(clockIn(chosen || def))}</div></div>
+                  </div>
+                  <p class="muted" style="font-size:12.5px;margin:10px 0 0">ขณะนี้ระบบใช้ <b>${escapeHtml(cur)}</b> ·
+                    การเปลี่ยนเขตเวลามีผลกับรายการที่บันทึกหลังจากนี้ ข้อมูลเดิมจะไม่ถูกแปลงเวลา</p>
+                </section>
+                ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกเขตเวลา</button></div>` : ''}
+              </fieldset>
+            </form>
+          </div>`;
+        const sel = pane.querySelector('#tz-select');
+        sel.addEventListener('change', () => { pane.querySelector('#tz-clock').textContent = clockIn(sel.value || def); });
+        if (!canEdit) return;
+        pane.querySelector('#tz-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                await api.put('/settings', { timezone: sel.value });
+                // Reload so the top bar, «today» defaults and every view pick up the new zone.
+                location.reload();
+            } catch (err) {
+                error = err.message;
+                drawTime(data);
+            }
+        });
+    }
+
     function draw({ settings: s, role_permissions, audit_log }) {
+        if (tab === 'time') return drawTime(data);
         const byRole = {};
         role_permissions.forEach((rp) => { (byRole[rp.role] ||= []).push(rp.permission_key); });
 

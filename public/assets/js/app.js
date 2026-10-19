@@ -1,7 +1,7 @@
 import { api, setCsrfToken } from './api.js';
 import { renderShell, setActiveNav, updateThemeButton, updateBadges } from './layout.js';
 import { initTheme, cycleTheme } from './theme.js';
-import { escapeHtml } from './util.js';
+import { escapeHtml, setAppTimeZone } from './util.js';
 import { mountAssistant, unmountAssistant } from './assistant.js';
 
 const ROUTE_PERMS = {
@@ -151,6 +151,7 @@ function onAuthenticated(data) {
     state.user = data.user;
     state.permissions = data.permissions || [];
     setCsrfToken(data.csrf_token);
+    setAppTimeZone(data.timezone);
 
     renderShell(root, { user: state.user, permissions: state.permissions, impersonator: data.impersonator });
 

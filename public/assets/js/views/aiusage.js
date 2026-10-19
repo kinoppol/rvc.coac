@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, count, escapeHtml, fmtDateTime, qs } from '../util.js';
+import { money, count, escapeHtml, fmtDateTime, qs, todayISO } from '../util.js';
 
 /** AI usage log and estimated cost, summarised per day / week / month. */
 const PERIOD_LABEL = { day: 'รายวัน', week: 'รายสัปดาห์', month: 'รายเดือน' };
@@ -52,7 +52,7 @@ export async function render(container) {
         <div class="kpi-grid">
           ${kpi('ค่าใช้จ่ายวันนี้', current.today)}
           ${kpi('สัปดาห์นี้', current.week, `${thDate(current.week.from, { day: 'numeric', month: 'short' })} – ${thDate(current.week.to, { day: 'numeric', month: 'short' })}`)}
-          ${kpi('เดือนนี้', current.month, thDate(new Date().toISOString().slice(0, 10), { month: 'long', year: 'numeric' }))}
+          ${kpi('เดือนนี้', current.month, thDate(todayISO(), { month: 'long', year: 'numeric' }))}
         </div>
 
         <section class="card card-pad">

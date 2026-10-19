@@ -27,10 +27,30 @@ export function fmtDate(s) {
     return d.toLocaleDateString('th-TH', { dateStyle: 'medium' });
 }
 
-/** Today's date (Y-m-d) in the browser's local time zone, not UTC. */
+/** The system's time zone (set by the admin); undefined = the browser's own. */
+let appTimeZone;
+
+export function setAppTimeZone(tz) {
+    try {
+        new Intl.DateTimeFormat('en', { timeZone: tz });
+        appTimeZone = tz;
+    } catch (e) {
+        appTimeZone = undefined;
+    }
+}
+
+export function getAppTimeZone() {
+    return appTimeZone;
+}
+
+/** Today's date (Y-m-d) in the system's time zone, not UTC. */
 export function todayISO() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return new Intl.DateTimeFormat('en-CA', { timeZone: appTimeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+/** The current date/time in the system's time zone, formatted like fmtDateTime. */
+export function fmtNow(opts = { dateStyle: 'medium', timeStyle: 'short' }) {
+    return new Date().toLocaleString('th-TH', { ...opts, timeZone: appTimeZone });
 }
 
 export function qs(obj) {

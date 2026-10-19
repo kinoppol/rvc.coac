@@ -1,4 +1,4 @@
-import { escapeHtml } from './util.js';
+import { escapeHtml, fmtNow } from './util.js';
 import { currentTheme, cycleTheme, themeMeta } from './theme.js';
 
 const ICONS = {
@@ -138,7 +138,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
   `;
 
     updateThemeButton();
-    document.getElementById('topbar-date').textContent = new Date().toLocaleDateString('th-TH', {
+    document.getElementById('topbar-date').textContent = fmtNow({
         weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
     });
 }

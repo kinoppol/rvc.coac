@@ -161,6 +161,7 @@ class AuthController
             'permissions' => $userRepo->permissionsFor($user['role']),
             'csrf_token' => $_SESSION['csrf_token'] ?? null,
             'impersonator' => $impersonator,
+            'timezone' => date_default_timezone_get(),
         ];
     }
 }

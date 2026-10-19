@@ -1,4 +1,4 @@
-import { money, escapeHtml, fmtDate, fmtDateTime } from './util.js';
+import { money, escapeHtml, fmtDate, fmtDateTime, fmtNow } from './util.js';
 
 const STATUS = { pending: 'รอร้านตรวจรับ', received: 'รับฝากแล้ว', rejected: 'ไม่รับฝาก', cancelled: 'ยกเลิกแล้ว' };
 
@@ -91,7 +91,7 @@ export async function printConsignSlip(req, quote) {
     <div><div class="line">(${escapeHtml(req.consignor_name)})</div>ผู้ฝากขาย<br>วันที่ ........../........../..........</div>
     <div><div class="line">(.................................................)</div>ผู้ตรวจรับสินค้า<br>วันที่ ........../........../..........</div>
   </div>
-  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtDateTime(new Date().toISOString()))}</div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
 </body></html>`;
 
     printHtml(html);
@@ -190,7 +190,7 @@ export function printPurchaseDoc(d) {
     <div><div class="line">(${escapeHtml(d.user_name || '.................................................')})</div>ผู้บันทึก<br>วันที่ ........../........../..........</div>
     <div><div class="line">(.................................................)</div>ผู้ตรวจสอบ<br>วันที่ ........../........../..........</div>
   </div>
-  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtDateTime(new Date().toISOString()))}</div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
 </body></html>`;
 
     printHtml(html);

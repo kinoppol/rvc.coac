@@ -16,8 +16,36 @@ class Db
         if (self::$pdo === null) {
             $cfg = Config::get('db');
             self::$pdo = self::connect($cfg);
+            self::applyTimezone(self::$pdo);
         }
         return self::$pdo;
+    }
+
+    /**
+     * Uses the admin's time zone setting (else app.timezone from config) for PHP
+     * and for this MySQL session, so NOW()/CURDATE() agree with date().
+     */
+    private static function applyTimezone(PDO $pdo): void
+    {
+        $tz = '';
+        try {
+            $tz = (string) $pdo->query("SELECT setting_value FROM settings WHERE setting_key = 'timezone'")->fetchColumn();
+        } catch (PDOException) {
+            // settings table not created yet (fresh install)
+        }
+        if (!self::isTimezone($tz)) {
+            $tz = (string) Config::get('app.timezone', 'Asia/Bangkok');
+        }
+        if (!self::isTimezone($tz)) {
+            $tz = 'Asia/Bangkok';
+        }
+        date_default_timezone_set($tz);
+        $pdo->exec("SET time_zone = '" . (new \DateTimeImmutable())->format('P') . "'");
+    }
+
+    public static function isTimezone(string $tz): bool
+    {
+        return $tz !== '' && in_array($tz, \DateTimeZone::listIdentifiers(), true);
     }
 
     /**

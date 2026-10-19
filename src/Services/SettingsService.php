@@ -25,6 +25,7 @@ class SettingsService
         'ai_markdown_min_chars' => '1000',
         'ai_markdown_min_table_rows' => '10',
         'login_methods' => 'both',
+        'timezone' => '', // '' = app.timezone from config/config.php
     ];
 
     /** Which RVC-ONE users the sync pulls: '' = staff and students (everything the app is allowed). */
