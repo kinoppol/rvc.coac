@@ -253,7 +253,9 @@ function render() {
               <div class="ai-suggest">${SUGGESTIONS.map((q) => `<button type="button" data-suggest="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>
             </div>`}
           ${pendingHtml()}
-          ${s.loading ? `<div class="ai-msg bot"><div class="ai-bubble ai-thinking">
+          ${s.loading ? `<div class="ai-msg bot">
+            ${s.progress?.done.length ? `<div class="ai-bubble ai-progress">${s.progress.done.map((d) => `<div>${d.icon} ${escapeHtml(d.text)}</div>`).join('')}</div>` : ''}
+            <div class="ai-bubble ai-thinking">
             <div class="ai-typing"><span></span><span></span><span></span></div>
             <span class="ai-status" id="ai-status">${escapeHtml(statusText())}</span>
             <span class="ai-elapsed" id="ai-elapsed">${elapsedText()}</span></div></div>` : ''}
@@ -407,6 +409,7 @@ function waitKind() {
 }
 
 function statusText() {
+    if (ctx.state.progress) return ctx.state.progress.text; // real step of a .md import
     const w = ctx.state.wait;
     if (!w) return '';
     const lines = STATUS_LINES[w.kind];
@@ -475,7 +478,112 @@ async function send(text) {
         s.documents = [];
     }
     s.messages.push(msg);
+    if (msg.documents && s.canPurchase && await importReceipts(msg)) return;
     await callServer({});
+}
+
+// ---------------- Step-by-step .md receipt import ----------------
+
+/**
+ * Reads receipt tables in attached .md files a few rows per request, so small
+ * or free models don't time out on a long receipt, and reports each step as it
+ * really happens. Returns false when no file has an item table (normal chat then).
+ */
+async function importReceipts(msg) {
+    const s = ctx.state;
+    const mine = ctx;
+    s.loading = true;
+    s.error = null;
+    s.progress = { text: 'กำลังแยกตารางรายการสินค้าในไฟล์...', done: [] };
+    startWaiting();
+    render();
+    const step = (text) => { s.progress.text = text; render(); };
+    const done = (text, icon = '✓') => { s.progress.done.push({ icon, text }); render(); };
+    const finish = () => {
+        s.loading = false;
+        s.progress = null;
+        stopWaiting();
+        persist();
+        render();
+    };
+
+    try {
+        const plans = [];
+        for (const doc of msg.documents) {
+            const plan = await api.post('/ai/receipt/plan', { content: doc.content });
+            if (ctx !== mine) return true;
+            if (plan.rows.length) plans.push({ doc, plan });
+        }
+        if (!plans.length) {
+            finish();
+            return false;
+        }
+
+        const receipts = [];
+        for (const { doc, plan } of plans) {
+            const total = plan.rows.length;
+            const prefix = plans.length > 1 ? `${doc.name}: ` : '';
+            done(`${prefix}พบรายการสินค้า ${total} บรรทัด จะอ่านทีละ ${plan.chunk_size} บรรทัด`);
+            const items = [];
+            const warnings = [];
+            for (let i = 0; i < total; i += plan.chunk_size) {
+                const got = await readRows(plan, i, Math.min(i + plan.chunk_size, total), total, prefix, step, done, warnings);
+                if (ctx !== mine) return true;
+                items.push(...got);
+            }
+            step(`${prefix}กำลังสรุปยอดทั้งหมด (ร้านค้า เลขที่ใบเสร็จ ส่วนลด ยอดสุทธิ)...`);
+            const sum = await api.post('/ai/receipt/summary', {
+                model: s.modelId, header: plan.header, footer: plan.footer, file_name: doc.name, item_count: items.length,
+            });
+            if (ctx !== mine) return true;
+            if (sum.error) warnings.push(`อ่านยอดสรุปจากไฟล์ไม่สำเร็จ (${sum.error}) กรุณาตรวจชื่อร้านและยอดสุทธิเอง`);
+            done(sum.summary
+                ? `${prefix}สรุปยอด: ${sum.summary.supplier_name || 'ไม่ระบุร้าน'} สุทธิ ฿${money(sum.summary.total)}`
+                : `${prefix}อ่านยอดสรุปไม่สำเร็จ`, sum.summary ? '✓' : '⚠');
+            receipts.push({ file_name: doc.name, items, summary: sum.summary, warnings });
+            doc.imported = true;
+        }
+
+        step('กำลังจับคู่สินค้ากับสต๊อกและเตรียมร่างใบซื้อ...');
+        const res = await api.post('/ai/receipt/draft', { receipts, model_label: modelLabel() });
+        if (ctx !== mine) return true;
+        s.messages.push(res.message);
+        s.pending = res.pending_actions || [];
+    } catch (err) {
+        if (ctx !== mine) return true;
+        s.error = `${err.message}${s.progress?.text ? ` (ขณะ${s.progress.text.replace(/^กำลัง/, '').replace(/\.\.\.$/, '')})` : ''}`;
+    }
+    finish();
+    return true;
+}
+
+/** Reads rows [from, to); a failed request is retried in halves, down to one row. */
+async function readRows(plan, from, to, total, prefix, step, done, warnings) {
+    const label = to - from > 1 ? `รายการที่ ${from + 1}–${to}` : `รายการที่ ${from + 1}`;
+    step(`${prefix}กำลังอ่าน${label} จาก ${total}...`);
+    try {
+        const res = await api.post('/ai/receipt/items', { model: ctx.state.modelId, columns: plan.columns, rows: plan.rows.slice(from, to) });
+        if (res.fallback) {
+            warnings.push(`รายการที่ ${from + 1}: AI อ่านไม่ได้ ระบบแยกข้อมูลจากตารางให้แทน กรุณาตรวจ`);
+            done(`${prefix}${label}: AI อ่านไม่ได้ ใช้ข้อมูลจากตารางโดยตรง`, '⚠');
+        } else {
+            done(`${prefix}อ่าน${label} แล้ว`);
+        }
+        return res.items;
+    } catch (err) {
+        if (to - from <= 1) throw err;
+        const mid = from + Math.ceil((to - from) / 2);
+        done(`${prefix}${label} ไม่สำเร็จ (${err.message}) — แบ่งอ่านทีละน้อยลง`, '↻');
+        return [
+            ...await readRows(plan, from, mid, total, prefix, step, done, warnings),
+            ...await readRows(plan, mid, to, total, prefix, step, done, warnings),
+        ];
+    }
+}
+
+function modelLabel() {
+    const m = currentModel();
+    return m?.auto ? 'อัตโนมัติ' : m?.label || '';
 }
 
 /** Splits picked files: .md/.txt are read as text, images are uploaded. */

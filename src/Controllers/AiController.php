@@ -136,6 +136,17 @@ class AiController
         $history = $this->resolveOpenToolCalls($history, $toolbox, $approvals);
         $firstNew = count($history);
 
+        // Drafts from the step-by-step .md import: report the save result directly
+        // instead of asking a (possibly slow) model to restate it.
+        if ($approvals && array_filter(array_keys($approvals), fn ($id) => str_starts_with((string) $id, 'imp_')) === array_keys($approvals)) {
+            $history[] = ['role' => 'assistant', 'content' => $this->importResultText($history, $approvals)];
+            return $this->json($response, [
+                'messages' => $history,
+                'pending_actions' => [],
+                'client_actions' => $toolbox->takeClientActions(),
+            ]);
+        }
+
         $toolNames = array_column(array_column($tools, 'function'), 'name');
         // A receipt turn must end in a create_purchase draft; weaker models sometimes
         // just describe the purchase ("บันทึกแล้ว") without calling the tool.
@@ -274,6 +285,31 @@ class AiController
         return implode(', ', $out);
     }
 
+    private function importResultText(array $history, array $approvals): string
+    {
+        $lines = [];
+        foreach ($history as $m) {
+            if ($m['role'] !== 'tool' || !isset($approvals[$m['tool_call_id']])) {
+                continue;
+            }
+            $r = json_decode($m['content'], true) ?: [];
+            if (!empty($r['ok'])) {
+                $lines[] = sprintf(
+                    '✓ บันทึกใบซื้อ **%s** แล้ว ยอด ฿%s — สินค้าใหม่ %d รายการ, เติมสต๊อก %d รายการ%s',
+                    $r['doc_no'], number_format((float) $r['total'], 2), $r['new_products'], $r['restocked_products'],
+                    $r['business_supplies'] ? ", ใช้ในกิจการ {$r['business_supplies']} รายการ" : ''
+                );
+            } elseif (!empty($r['error'])) {
+                $lines[] = '⚠ บันทึกไม่สำเร็จ: ' . $r['error'];
+            } else {
+                $lines[] = $approvals[$m['tool_call_id']] === 'edit'
+                    ? 'เปิดร่างใบซื้อในหน้า "ซื้อสินค้าเข้าร้าน" แล้ว ตรวจแก้และกดบันทึกที่หน้านั้นได้เลย'
+                    : 'ยกเลิกแล้ว ยังไม่ได้บันทึกใบซื้อ';
+            }
+        }
+        return implode("\n", $lines) ?: 'ไม่มีรายการที่ต้องดำเนินการ';
+    }
+
     private function resolveOpenToolCalls(array $history, AiToolbox $toolbox, array $approvals): array
     {
         $lastAssistant = null;
@@ -397,7 +433,11 @@ class AiController
     {
         $out = '';
         foreach ($docs as $d) {
-            $out .= "\n\n--- ไฟล์แนบ: {$d['name']} ---\n{$d['content']}\n--- จบไฟล์ {$d['name']} ---";
+            if (!empty($d['imported'])) {
+                $out .= "\n[ไฟล์แนบ: {$d['name']} — นำเข้าเป็นร่างใบซื้อแล้ว]";
+                continue;
+            }
+            $out .="\n\n--- ไฟล์แนบ: {$d['name']} ---\n{$d['content']}\n--- จบไฟล์ {$d['name']} ---";
         }
         return $out;
     }
@@ -427,7 +467,8 @@ class AiController
                         continue;
                     }
                     $name = preg_replace('/[^\p{L}\p{N} ._()-]/u', '', (string) ($d['name'] ?? 'file.md')) ?: 'file.md';
-                    $docs[] = ['name' => mb_substr($name, 0, 120), 'content' => mb_substr((string) $d['content'], 0, self::MAX_DOC_CHARS)];
+                    $docs[] = ['name' => mb_substr($name, 0, 120), 'content' => mb_substr((string) $d['content'], 0, self::MAX_DOC_CHARS)]
+                        + (!empty($d['imported']) ? ['imported' => true] : []);
                 }
                 if ($text !== '' || $tokens || $docs) {
                     $msg = ['role' => 'user', 'content' => mb_substr($text, 0, self::MAX_PROMPT_CHARS)];

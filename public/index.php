@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Controllers\AiController;
+use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
 use App\Controllers\AttachmentController;
 use App\Controllers\AuditController;
@@ -226,6 +227,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('ai.use'));
     $group->post('/ai/chat', [AiController::class, 'chat'])
         ->add(new RoleGuard('ai.use'));
+    foreach (['plan', 'items', 'summary', 'draft'] as $step) {
+        $group->post("/ai/receipt/{$step}", [AiReceiptController::class, $step])
+            ->add(new RoleGuard('ai.use'));
+    }
     $group->get('/ai/providers', [AiController::class, 'providers'])
         ->add(new RoleGuard('ai.manage'));
     $group->post('/ai/providers', [AiController::class, 'storeProvider'])
