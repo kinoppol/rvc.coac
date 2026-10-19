@@ -39,17 +39,18 @@ export async function render(container) {
     let editing = null; // { id, doc_no } while the form holds a saved purchase
     let previewTimer = null;
 
-    /** Applies a server preview to an item; returns true if its type changed. */
+    /** Applies a server preview to an item; returns true if the row needs redrawing. */
     function applyPreview(it, p) {
-        const before = it.item_type;
-        if (!it.typeTouched && p.item_type) it.item_type = p.item_type;
+        // Lines are for sale unless the user picks "ใช้ในกิจการ"; history only adds a hint.
+        const hintBefore = it.prevSupply;
+        it.prevSupply = p.previous_type === 'supply';
         it.match = p.match;
         // A known pack barcode fills in how many pieces the pack holds.
         const packFilled = p.pack_size > 1 && Number(it.pack_size) <= 1;
         if (packFilled) it.pack_size = p.pack_size;
         it.suggested = p.match ? p.match.sale_price : p.suggested_price;
         if (!it.priceTouched) it.sale_price = it.suggested || 0;
-        return before !== it.item_type || packFilled;
+        return hintBefore !== it.prevSupply || packFilled;
     }
 
     try {
@@ -210,7 +211,7 @@ export async function render(container) {
                   <td><select data-type class="pc-type ${it.item_type === 'supply' ? 'supply' : ''}">
                     <option value="stock" ${it.item_type === 'stock' ? 'selected' : ''}>เพื่อขาย</option>
                     <option value="supply" ${it.item_type === 'supply' ? 'selected' : ''}>ใช้ในกิจการ</option>
-                  </select></td>
+                  </select>${it.prevSupply && it.item_type === 'stock' ? '<div class="muted" style="font-size:11px;margin-top:2px" title="ใบซื้อก่อนหน้าบันทึกรายการนี้เป็นใช้ในกิจการ">เคยบันทึกเป็นใช้ในกิจการ</div>' : ''}</td>
                   <td><input data-f="barcode" value="${escapeHtml(it.barcode)}" style="width:130px"></td>
                   <td><input data-f="qty" type="number" min="1" step="1" value="${it.qty}" class="num" style="width:70px"></td>
                   <td><input data-f="pack_size" type="number" min="1" step="1" value="${it.pack_size}" class="num" style="width:62px"></td>
@@ -531,7 +532,7 @@ export async function render(container) {
                     if (!it.priceTouched && document.activeElement !== sp) sp.value = it.sale_price || '';
                     updatePriceCell(it, tr);
                 });
-                // A line remembered as a business supply switches its row layout.
+                // A history hint or a pack size filled in from a known barcode changes the row.
                 if (typeChanged) draw();
             } catch (e) { /* preview is best-effort */ }
         }, 300);

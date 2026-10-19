@@ -154,7 +154,8 @@ class PurchaseService
         foreach ($items as $item) {
             $l = $this->line((array) $item);
             $previous = $this->previousType($l['barcode'], $l['receipt_name'], $l['product_name']);
-            $type = $l['item_type'] ?? $previous ?? 'stock';
+            // Goods are for sale unless the user marks the line; previous_type is only a hint.
+            $type = $l['item_type'] ?? 'stock';
             $match = $type === 'stock' ? $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']) : null;
             $out[] = [
                 'item_type' => $type,
@@ -401,7 +402,7 @@ class PurchaseService
             if ($l['product_name'] === '' || $l['qty'] <= 0 || $l['pack_cost'] <= 0) {
                 throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' ข้อมูลไม่ครบ (ต้องมีชื่อ จำนวน และราคาทุน)');
             }
-            $l['item_type'] ??= $this->previousType($l['barcode'], $l['receipt_name'], $l['product_name']) ?? 'stock';
+            $l['item_type'] ??= 'stock';
             $lines[] = $l;
         }
         if (!$lines) {

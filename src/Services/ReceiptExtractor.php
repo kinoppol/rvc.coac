@@ -24,9 +24,7 @@ class ReceiptExtractor
       qty และ unit_price ยังเป็นจำนวนแพ็คและราคาต่อแพ็คตามที่พิมพ์ในใบเสร็จ
       barcode ของสินค้าแพ็คคือบาร์โค้ดของแพ็ค ให้ใส่ตามที่พิมพ์ (ระบบเก็บไว้อ้างอิง)
       ถ้าใบเสร็จไม่มีบาร์โค้ด ให้ใช้ "รหัสสินค้า" ของร้านค้าแทน (ห้ามใช้ลำดับ จำนวน หรือรหัส ภ.พ./VAT)
-    - item_type: "stock" = ซื้อมาขาย, "supply" = ซื้อมาใช้ในกิจการ ไม่ได้ขาย
-      เช่น ถุงหูหิ้ว ถุงร้อน/ถุงเย็น หลอด แก้ว/ฝาแก้วเปล่า ช้อนส้อมพลาสติก กล่องใส่อาหาร ทิชชู่ ถุงขยะ น้ำยาล้างจาน อุปกรณ์ทำความสะอาด เครื่องเขียน
-      ส่วน product_name คือชื่อสินค้าสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คออก เช่น "เมล็ดทานตะวัน 15 ก.X12" → "เมล็ดทานตะวัน 15 ก.")
+    - product_name คือชื่อสินค้าสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คออก เช่น "เมล็ดทานตะวัน 15 ก.X12" → "เมล็ดทานตะวัน 15 ก.")
     - ปี พ.ศ. ให้แปลงเป็น ค.ศ. (ลบ 543) วันที่ใช้รูปแบบ YYYY-MM-DD
     - ตัวเลขที่อ่านไม่ชัดให้ใส่ค่าที่น่าจะถูกที่สุด และบันทึกไว้ใน warnings
     - ตรวจผลรวมราคาทุกบรรทัดเทียบกับยอดสุทธิที่พิมพ์ในใบเสร็จ ถ้าไม่ตรงให้แจ้งใน warnings
@@ -35,7 +33,7 @@ class ReceiptExtractor
     private const FORMAT = <<<TXT
     ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตามโครงสร้างนี้:
     {"supplier_name":"ชื่อร้านที่ขาย","supplier_tax_id":"เลขประจำตัวผู้เสียภาษี หรือ null","receipt_no":"เลขที่ใบเสร็จ หรือ null","receipt_date":"YYYY-MM-DD หรือ null",
-     "items":[{"name":"ชื่อสินค้าตามใบเสร็จ","product_name":"ชื่อสำหรับขายแยกชิ้น","item_type":"stock","barcode":"หรือ null","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}],
+     "items":[{"name":"ชื่อสินค้าตามใบเสร็จ","product_name":"ชื่อสำหรับขายแยกชิ้น","barcode":"หรือ null","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}],
      "discount":0.00,"vat":0.00,"total":0.00,"warnings":["ข้อสังเกต"]}
     TXT;
 
@@ -58,7 +56,14 @@ class ReceiptExtractor
             ? implode('', array_map(fn ($p) => $p['text'] ?? '', $reply['content']))
             : (string) ($reply['content'] ?? '');
 
-        return self::normalize(self::parseJson($text));
+        return self::forSale(self::normalize(self::parseJson($text)));
+    }
+
+    /** Lines read from a receipt are goods for sale; only the user marks a line as a business supply. */
+    public static function forSale(array $draft): array
+    {
+        $draft['items'] = array_map(fn ($it) => ['item_type' => null] + array_diff_key($it, ['item_type' => 0]), $draft['items']);
+        return $draft;
     }
 
     public static function parseJson(string $text): array

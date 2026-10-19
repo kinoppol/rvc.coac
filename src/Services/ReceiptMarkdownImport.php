@@ -20,12 +20,11 @@ class ReceiptMarkdownImport
     - barcode = ตัวเลขบาร์โค้ด (เฉพาะตัวเลข ตัดวงเล็บและตัวอักษรท้ายออก) ถ้าไม่มีใช้รหัสสินค้าของร้าน
     - pack_size = จำนวนชิ้นย่อยใน 1 หน่วยที่ซื้อ ดูจากท้ายชื่อ เช่น "X6" = 6, "X12+1" = 12, "1X50" = 50 ถ้าไม่ใช่แพ็คให้ 1
     - product_name = ชื่อสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คและสัญลักษณ์นำหน้าเช่น % ออก)
-    - item_type: "stock" = ซื้อมาขาย, "supply" = ซื้อมาใช้ในกิจการ (ถุงหูหิ้ว หลอด แก้วเปล่า อุปกรณ์ทำความสะอาด ฯลฯ)
     TXT;
 
     private const ITEM_FORMAT = <<<TXT
     ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น:
-    {"items":[{"row":1,"name":"ชื่อตามใบเสร็จ","product_name":"ชื่อขายแยกชิ้น","item_type":"stock","barcode":"","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}]}
+    {"items":[{"row":1,"name":"ชื่อตามใบเสร็จ","product_name":"ชื่อขายแยกชิ้น","barcode":"","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}]}
     TXT;
 
     private const SUMMARY_FORMAT = <<<TXT
@@ -99,7 +98,7 @@ class ReceiptMarkdownImport
         if (count($items) !== count($rows)) {
             throw new \RuntimeException(sprintf('AI ตอบมา %d รายการ จาก %d บรรทัด', count($items), count($rows)));
         }
-        $out = ReceiptExtractor::normalize(['items' => $items])['items'];
+        $out = ReceiptExtractor::forSale(ReceiptExtractor::normalize(['items' => $items]))['items'];
         if (count($out) !== count($rows)) {
             throw new \RuntimeException('AI ตอบรายการไม่ครบทุกบรรทัด');
         }
