@@ -181,6 +181,148 @@ class PurchaseService
      */
     public function create(array $header, array $items, array $attachments, string $source, int $userId, ?string $ip): array
     {
+        [$h, $lines] = $this->validate($header, $items);
+
+        $this->db->beginTransaction();
+        try {
+            $docNo = $this->docs->next('PO', 'purchase_documents', 'doc_no');
+            $ins = $this->db->prepare(
+                'INSERT INTO purchase_documents
+                    (doc_no, supplier_name, supplier_tax_id, receipt_no, receipt_date, subtotal, discount, vat, total, total_qty, note, source, user_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())'
+            );
+            $ins->execute([
+                $docNo, $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'],
+                $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'],
+                $source === 'ai' ? 'ai' : 'manual',
+                $userId,
+            ]);
+            $docId = (int) $this->db->lastInsertId();
+            $result = $this->applyLines($docId, $lines, [], $userId, $ip);
+
+            $this->attachments->linkToPurchase($attachments, $docId);
+            $this->audit->log('purchase_documents', $docId, 'create', null, [
+                'doc_no' => $docNo, 'supplier_name' => $h['supplier_name'], 'total' => $h['total'], 'items' => count($lines), 'source' => $source,
+            ], $userId, $ip);
+
+            $this->db->commit();
+            return ['id' => $docId, 'doc_no' => $docNo, 'subtotal' => $h['subtotal'], 'supply_total' => $this->supplyTotal($lines), 'total' => $h['total'], 'items' => $result];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Edits a saved purchase in place (same doc no.): the old lines are taken
+     * back out of stock (and out of the moving-average cost), then the edited
+     * lines are applied as on create. Refused if goods already sold would
+     * leave a product with negative stock.
+     * @param string[] $keepTokens photos already on this purchase to keep
+     * @param array[] $newAttachments rows from AttachmentService::ownedBy() to add
+     */
+    public function update(int $id, array $header, array $items, array $keepTokens, array $newAttachments, int $userId, ?string $ip): array
+    {
+        [$h, $lines] = $this->validate($header, $items);
+
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM purchase_documents WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $doc = $stmt->fetch();
+            if (!$doc) {
+                throw new \RuntimeException('ไม่พบใบซื้อ');
+            }
+            $old = $this->find($id);
+
+            // 1) Undo the old lines.
+            $createdHere = [];
+            foreach ($old['items'] as $it) {
+                if ($it['item_type'] !== 'stock' || !$it['product_id']) {
+                    continue;
+                }
+                $productId = (int) $it['product_id'];
+                if ((int) $it['is_new_product']) {
+                    $createdHere[$productId] = true;
+                }
+                $p = $this->products->find($productId);
+                $units = (int) $it['units'];
+                $left = (int) $p['qty_stock'] - $units;
+                $cost = $left > 0
+                    ? max(0, round(((int) $p['qty_stock'] * (float) $p['cost_price'] - $units * (float) $it['piece_cost']) / $left, 2))
+                    : (float) $p['cost_price'];
+                $this->products->addStock($productId, -$units, $userId, $ip);
+                $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
+            }
+            $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
+
+            // 2) Apply the edited lines.
+            $result = $this->applyLines($id, $lines, $createdHere, $userId, $ip);
+
+            // 3) No product may end up below zero (its goods were already sold).
+            $touched = array_unique(array_merge(
+                array_map('intval', array_filter(array_column($old['items'], 'product_id'))),
+                array_map('intval', array_filter(array_column($result, 'product_id')))
+            ));
+            foreach ($touched as $productId) {
+                $p = $this->products->find($productId);
+                if ($p && (int) $p['qty_stock'] < 0) {
+                    throw new \RuntimeException(sprintf(
+                        'แก้ไขไม่ได้: "%s" ขายหรือนำออกไปแล้ว สต๊อกจะติดลบ %d ชิ้น — ลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก',
+                        $p['name'], abs((int) $p['qty_stock'])
+                    ));
+                }
+            }
+
+            // 4) Products this purchase created that are no longer on it and never moved are removed.
+            $stillUsed = array_flip(array_map('intval', array_filter(array_column($result, 'product_id'))));
+            foreach (array_keys($createdHere) as $productId) {
+                $p = isset($stillUsed[$productId]) ? null : $this->products->find($productId);
+                if ($p && (int) $p['qty_stock'] === 0 && (int) $p['qty_received'] === 0 && (int) $p['qty_sold'] === 0) {
+                    try {
+                        $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ?')->execute([$productId]);
+                        $this->db->prepare('DELETE FROM products WHERE id = ?')->execute([$productId]);
+                        $this->audit->log('products', $productId, 'delete', $p, null, $userId, $ip);
+                    } catch (\PDOException $e) {
+                        // Still referenced elsewhere: keep it with zero stock.
+                    }
+                }
+            }
+
+            // 5) Header, totals and photos.
+            $this->db->prepare(
+                'UPDATE purchase_documents SET supplier_name = ?, supplier_tax_id = ?, receipt_no = ?, receipt_date = ?,
+                    subtotal = ?, discount = ?, vat = ?, total = ?, total_qty = ?, note = ? WHERE id = ?'
+            )->execute([
+                $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'],
+                $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'], $id,
+            ]);
+            $keep = array_flip(array_map('strval', $keepTokens));
+            $unlink = $this->db->prepare('UPDATE attachments SET purchase_document_id = NULL WHERE id = ?');
+            foreach ($this->attachments->forPurchase($id) as $a) {
+                if (!isset($keep[$a['token']])) {
+                    $unlink->execute([$a['id']]);
+                }
+            }
+            $this->attachments->linkToPurchase($newAttachments, $id);
+
+            $summary = fn ($d, $n) => [
+                'supplier_name' => $d['supplier_name'], 'receipt_no' => $d['receipt_no'], 'receipt_date' => $d['receipt_date'],
+                'discount' => (float) $d['discount'], 'total' => (float) $d['total'], 'items' => $n,
+            ];
+            $this->audit->log('purchase_documents', $id, 'update', $summary($doc, count($old['items'])), $summary($h, count($lines)), $userId, $ip);
+
+            $this->db->commit();
+            return ['id' => $id, 'doc_no' => $doc['doc_no'], 'subtotal' => $h['subtotal'], 'supply_total' => $this->supplyTotal($lines), 'total' => $h['total'], 'items' => $result];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** @return array{0:array,1:array} [clean header with totals, normalised lines] */
+    private function validate(array $header, array $items): array
+    {
         $supplier = trim((string) ($header['supplier_name'] ?? ''));
         if ($supplier === '') {
             throw new \RuntimeException('กรุณาระบุชื่อร้าน/ผู้ขาย');
@@ -204,113 +346,103 @@ class PurchaseService
         }
         $subtotal = round(array_sum(array_column($lines, 'line_total')), 2);
         $discount = round(abs((float) ($header['discount'] ?? 0)), 2);
-        $vat = round((float) ($header['vat'] ?? 0), 2);
-        $total = isset($header['total']) && (float) $header['total'] > 0 ? round((float) $header['total'], 2) : round($subtotal - $discount, 2);
+        return [[
+            'supplier_name' => mb_substr($supplier, 0, 191),
+            'supplier_tax_id' => trim((string) ($header['supplier_tax_id'] ?? '')) ?: null,
+            'receipt_no' => trim((string) ($header['receipt_no'] ?? '')) ?: null,
+            'receipt_date' => $receiptDate ?: null,
+            'subtotal' => $subtotal,
+            'discount' => $discount,
+            'vat' => round((float) ($header['vat'] ?? 0), 2),
+            'total' => isset($header['total']) && (float) $header['total'] > 0 ? round((float) $header['total'], 2) : round($subtotal - $discount, 2),
+            'total_qty' => array_sum(array_map(fn ($l) => $l['item_type'] === 'stock' ? $l['units'] : 0, $lines)),
+            'note' => trim((string) ($header['note'] ?? '')) ?: null,
+        ], $lines];
+    }
 
-        $this->db->beginTransaction();
-        try {
-            $docNo = $this->docs->next('PO', 'purchase_documents', 'doc_no');
-            $ins = $this->db->prepare(
-                'INSERT INTO purchase_documents
-                    (doc_no, supplier_name, supplier_tax_id, receipt_no, receipt_date, subtotal, discount, vat, total, total_qty, note, source, user_id, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())'
-            );
-            $ins->execute([
-                $docNo, mb_substr($supplier, 0, 191),
-                trim((string) ($header['supplier_tax_id'] ?? '')) ?: null,
-                trim((string) ($header['receipt_no'] ?? '')) ?: null,
-                $receiptDate ?: null,
-                $subtotal, $discount, $vat, $total,
-                array_sum(array_map(fn ($l) => $l['item_type'] === 'stock' ? $l['units'] : 0, $lines)),
-                trim((string) ($header['note'] ?? '')) ?: null,
-                $source === 'ai' ? 'ai' : 'manual',
-                $userId,
-            ]);
-            $docId = (int) $this->db->lastInsertId();
+    private function supplyTotal(array $lines): float
+    {
+        return round(array_sum(array_map(fn ($l) => $l['item_type'] === 'supply' ? $l['line_total'] : 0, $lines)), 2);
+    }
 
-            $insItem = $this->db->prepare(
-                'INSERT INTO purchase_items
-                    (purchase_document_id, product_id, item_type, receipt_name, barcode, qty, unit_cost, pack_size, units, piece_cost, line_total, sale_price, is_new_product)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            );
-            $result = [];
-            foreach ($lines as $l) {
-                if ($l['item_type'] === 'supply') {
-                    $insItem->execute([
-                        $docId, null, 'supply', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
-                        $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], 0, 0,
-                    ]);
-                    $result[] = [
-                        'product_id' => null, 'type' => 'supply', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
-                        'units' => $l['units'], 'piece_cost' => $l['piece_cost'], 'line_total' => $l['line_total'], 'sale_price' => null, 'new' => false,
-                    ];
-                    continue;
-                }
-                // A pack's barcode is not the barcode of the single piece sold at the POS;
-                // each pack size has its own, kept in product_pack_barcodes.
-                $pieceBarcode = $l['pack_size'] === 1 ? $l['barcode'] : null;
-                $packBarcode = $l['pack_size'] > 1 ? $l['barcode'] : null;
-                $match = $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']);
-                if ($match) {
-                    $productId = (int) $match['id'];
-                    $salePrice = $l['sale_price'] ?? (float) $match['sale_price'];
-                    // Moving weighted-average cost: blend what is on the shelf with this lot.
-                    $before = $this->products->find($productId);
-                    $onHand = max((int) $before['qty_stock'], 0);
-                    $avgCost = $onHand + $l['units'] > 0
-                        ? round(($onHand * (float) $before['cost_price'] + $l['units'] * $l['piece_cost']) / ($onHand + $l['units']), 2)
-                        : $l['piece_cost'];
-                    $this->products->addStock($productId, $l['units'], $userId, $ip);
-                    $old = $this->products->find($productId);
-                    $upd = $this->db->prepare(
-                        'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?), updated_at = NOW()
-                         WHERE id = ?'
-                    );
-                    $upd->execute([$avgCost, $salePrice, $pieceBarcode, $productId]);
-                    $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
-                    $isNew = false;
-                } else {
-                    $salePrice = $l['sale_price'] ?? $this->suggestedPrice($l['piece_cost']);
-                    $productId = $this->products->create([
-                        'consignor_id' => null,
-                        'name' => mb_substr($l['product_name'], 0, 191),
-                        'barcode' => $pieceBarcode,
-                        'cost_price' => $l['piece_cost'],
-                        'sale_price' => $salePrice,
-                        'fee_per_unit' => 0,
-                        'round_per_unit' => 0,
-                        'rounding_beneficiary' => 'store',
-                        'qty' => $l['units'],
-                        'listing_fee_status' => 'waived',
-                        'listing_fee_amount' => 0,
-                    ], $userId, $ip);
-                    $isNew = true;
-                }
-                if ($packBarcode !== null) {
-                    $this->products->savePackBarcode($productId, $packBarcode, $l['pack_size']);
-                }
+    /**
+     * Writes a purchase's lines: restocks matched products (moving-average cost)
+     * or creates new ones. $createdHere = products this purchase created before
+     * an edit; they stay marked as new.
+     */
+    private function applyLines(int $docId, array $lines, array $createdHere, int $userId, ?string $ip): array
+    {
+        $insItem = $this->db->prepare(
+            'INSERT INTO purchase_items
+                (purchase_document_id, product_id, item_type, receipt_name, barcode, qty, unit_cost, pack_size, units, piece_cost, line_total, sale_price, is_new_product)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $result = [];
+        foreach ($lines as $l) {
+            if ($l['item_type'] === 'supply') {
                 $insItem->execute([
-                    $docId, $productId, 'stock', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
-                    $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], $salePrice, $isNew ? 1 : 0,
+                    $docId, null, 'supply', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
+                    $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], 0, 0,
                 ]);
                 $result[] = [
-                    'product_id' => $productId, 'type' => 'stock', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
-                    'units' => $l['units'], 'piece_cost' => $l['piece_cost'], 'sale_price' => $salePrice, 'new' => $isNew,
+                    'product_id' => null, 'type' => 'supply', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
+                    'units' => $l['units'], 'piece_cost' => $l['piece_cost'], 'line_total' => $l['line_total'], 'sale_price' => null, 'new' => false,
                 ];
+                continue;
             }
-
-            $this->attachments->linkToPurchase($attachments, $docId);
-            $this->audit->log('purchase_documents', $docId, 'create', null, [
-                'doc_no' => $docNo, 'supplier_name' => $supplier, 'total' => $total, 'items' => count($lines), 'source' => $source,
-            ], $userId, $ip);
-
-            $this->db->commit();
-            $supplyTotal = round(array_sum(array_map(fn ($l) => $l['item_type'] === 'supply' ? $l['line_total'] : 0, $lines)), 2);
-            return ['id' => $docId, 'doc_no' => $docNo, 'subtotal' => $subtotal, 'supply_total' => $supplyTotal, 'total' => $total, 'items' => $result];
-        } catch (\Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
+            // A pack's barcode is not the barcode of the single piece sold at the POS;
+            // each pack size has its own, kept in product_pack_barcodes.
+            $pieceBarcode = $l['pack_size'] === 1 ? $l['barcode'] : null;
+            $packBarcode = $l['pack_size'] > 1 ? $l['barcode'] : null;
+            $match = $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']);
+            if ($match) {
+                $productId = (int) $match['id'];
+                $salePrice = $l['sale_price'] ?? (float) $match['sale_price'];
+                // Moving weighted-average cost: blend what is on the shelf with this lot.
+                $before = $this->products->find($productId);
+                $onHand = max((int) $before['qty_stock'], 0);
+                $avgCost = $onHand + $l['units'] > 0
+                    ? round(($onHand * (float) $before['cost_price'] + $l['units'] * $l['piece_cost']) / ($onHand + $l['units']), 2)
+                    : $l['piece_cost'];
+                $this->products->addStock($productId, $l['units'], $userId, $ip);
+                $old = $this->products->find($productId);
+                $upd = $this->db->prepare(
+                    'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?), updated_at = NOW()
+                     WHERE id = ?'
+                );
+                $upd->execute([$avgCost, $salePrice, $pieceBarcode, $productId]);
+                $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
+                $isNew = isset($createdHere[$productId]);
+            } else {
+                $salePrice = $l['sale_price'] ?? $this->suggestedPrice($l['piece_cost']);
+                $productId = $this->products->create([
+                    'consignor_id' => null,
+                    'name' => mb_substr($l['product_name'], 0, 191),
+                    'barcode' => $pieceBarcode,
+                    'cost_price' => $l['piece_cost'],
+                    'sale_price' => $salePrice,
+                    'fee_per_unit' => 0,
+                    'round_per_unit' => 0,
+                    'rounding_beneficiary' => 'store',
+                    'qty' => $l['units'],
+                    'listing_fee_status' => 'waived',
+                    'listing_fee_amount' => 0,
+                ], $userId, $ip);
+                $isNew = true;
+            }
+            if ($packBarcode !== null) {
+                $this->products->savePackBarcode($productId, $packBarcode, $l['pack_size']);
+            }
+            $insItem->execute([
+                $docId, $productId, 'stock', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
+                $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], $salePrice, $isNew ? 1 : 0,
+            ]);
+            $result[] = [
+                'product_id' => $productId, 'type' => 'stock', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
+                'units' => $l['units'], 'piece_cost' => $l['piece_cost'], 'sale_price' => $salePrice, 'new' => $isNew,
+            ];
         }
+        return $result;
     }
 
     public function recent(int $limit = 30): array

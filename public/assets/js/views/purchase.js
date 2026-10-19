@@ -17,7 +17,8 @@ function emptyHeader() {
 function emptyItem() {
     // name = per-piece product name; qty/unit_cost/line_total = as printed (packs); sale_price = per piece
     // item_type: 'stock' = bought to sell, 'supply' = used in the business (cost only, no stock/price)
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0 };
+    // product_id/origName: set when editing a saved purchase, so an unrenamed line stays on the same product
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -35,6 +36,7 @@ export async function render(container) {
     let docs = [];
     let markup = 20;
     let viewing = null; // purchase doc shown in the modal
+    let editing = null; // { id, doc_no } while the form holds a saved purchase
     let previewTimer = null;
 
     /** Applies a server preview to an item; returns true if its type changed. */
@@ -93,6 +95,39 @@ export async function render(container) {
         if (newPhotos) photos = newPhotos;
     }
 
+    /** Loads a saved purchase into the form; saving then updates it in place. */
+    function startEdit(d) {
+        editing = { id: Number(d.id), doc_no: d.doc_no };
+        header = {
+            ...emptyHeader(),
+            supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
+            receipt_date: d.receipt_date || '', discount: Number(d.discount) || 0, vat: Number(d.vat) || 0, total: Number(d.total) || 0, note: d.note || '',
+        };
+        items = d.items.map((it) => {
+            const name = (it.item_type === 'stock' && it.product_name) || it.receipt_name;
+            return {
+                ...emptyItem(), name, origName: name, product_id: it.product_id ? Number(it.product_id) : null,
+                receipt_name: it.receipt_name, item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: true,
+                pack_size: Number(it.pack_size) || 1, barcode: it.barcode || '', qty: Number(it.qty), unit_cost: Number(it.unit_cost),
+                line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, priceTouched: it.item_type === 'stock',
+            };
+        });
+        if (!items.length) items = [emptyItem()];
+        photos = d.images.map((im) => ({ token: im.token, preview: attachmentUrl(im.token) }));
+        warnings = [];
+        source = d.source;
+        viewing = null;
+        error = null;
+        success = null;
+        draw();
+        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        refreshPreview();
+    }
+
+    function clearForm() {
+        photos = []; header = emptyHeader(); items = [emptyItem()]; warnings = []; source = 'manual'; editing = null;
+    }
+
     async function loadDocs() {
         const res = await api.get('/purchases');
         docs = res.data;
@@ -105,6 +140,11 @@ export async function render(container) {
         const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
         container.innerHTML = `
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
+        ${editing ? `<div class="pc-warn" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:220px"><b>กำลังแก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}</b><br>
+            <span style="font-size:12.5px">เมื่อบันทึก ระบบจะหักสต๊อกตามใบเดิมออกแล้วรับเข้าตามรายการใหม่ (เลขที่ใบซื้อเดิม) — สินค้าที่ขายไปแล้วจะลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก</span></div>
+          <button type="button" class="btn secondary sm" id="pc-cancel-edit">ยกเลิกการแก้ไข</button>
+        </div>` : ''}
         <div class="hint"><div class="dot">i</div><div>
           บันทึกการซื้อสินค้าเข้าร้าน (สินค้าของร้านเอง ไม่ใช่ฝากขาย) — ถ่ายรูปใบเสร็จอย่างย่อแล้วให้ AI อ่านรายการให้ ตรวจแก้แล้วกดบันทึก
           ใบเสร็จยาวถ่ายต่อกันได้หลายรูป (เรียงจากบนลงล่าง ให้ขอบภาพซ้อนกันเล็กน้อย) ราคาในใบเสร็จคือ<b>ราคาทุน</b>
@@ -191,8 +231,8 @@ export async function render(container) {
             ${warnings.length ? `<div class="pc-warn"><b>ข้อสังเกตจาก AI</b><ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>` : ''}
             ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
             <div class="actions-row" style="justify-content:flex-end">
-              <button type="button" class="btn secondary" id="pc-reset">ล้างฟอร์ม</button>
-              <button type="button" class="btn" id="pc-save" ${busy ? 'disabled' : ''}>${busy === 'save' ? 'กำลังบันทึก...' : 'บันทึกใบซื้อ'}</button>
+              <button type="button" class="btn secondary" id="pc-reset">${editing ? 'ยกเลิกการแก้ไข' : 'ล้างฟอร์ม'}</button>
+              <button type="button" class="btn" id="pc-save" ${busy ? 'disabled' : ''}>${busy === 'save' ? 'กำลังบันทึก...' : editing ? `บันทึกการแก้ไข ${escapeHtml(editing.doc_no)}` : 'บันทึกใบซื้อ'}</button>
             </div>
           </div>
         </section>
@@ -212,7 +252,8 @@ export async function render(container) {
                   <td class="num muted">${Number(d.supply_total) ? money(d.supply_total) : '-'}</td>
                   <td>${Number(d.image_count) ? `🖼 ${d.image_count}` : ''}</td>
                   <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div></td>
-                  <td><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button></td>
+                  <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
+                    <button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button></td>
                 </tr>`).join('') || '<tr><td colspan="9" class="empty">ยังไม่มีใบซื้อ</td></tr>'}
             </tbody>
           </table></div>
@@ -289,7 +330,9 @@ export async function render(container) {
                 <div class="pc-photos">${d.images.map((im, i) => `<a class="pc-photo" href="${escapeHtml(attachmentUrl(im.token))}" target="_blank" rel="noopener"><img src="${escapeHtml(attachmentUrl(im.token))}" alt="รูปที่ ${i + 1}"><span class="pc-photo-no">${i + 1}</span></a>`).join('')}</div>` : ''}
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
-            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-close-view>ปิด</button></div>
+            <div class="modal-foot"><span></span><div class="actions-row">
+              <button type="button" class="btn" data-edit="${d.id}">แก้ไขใบซื้อนี้</button>
+              <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
         </div>`;
     }
@@ -365,11 +408,21 @@ export async function render(container) {
             const rows = container.querySelectorAll('tr[data-row] [data-f="name"]');
             rows[rows.length - 1]?.focus();
         });
-        container.querySelector('#pc-reset').addEventListener('click', () => {
-            if (!confirm('ล้างข้อมูลในฟอร์มทั้งหมด?')) return;
-            photos = []; header = emptyHeader(); items = [emptyItem()]; warnings = []; source = 'manual'; error = null; success = null;
+        const resetForm = () => {
+            if (!confirm(editing ? `ยกเลิกการแก้ไข ${editing.doc_no}? (ใบซื้อเดิมไม่เปลี่ยนแปลง)` : 'ล้างข้อมูลในฟอร์มทั้งหมด?')) return;
+            clearForm();
+            error = null; success = null;
             draw();
-        });
+        };
+        container.querySelector('#pc-reset').addEventListener('click', resetForm);
+        container.querySelector('#pc-cancel-edit')?.addEventListener('click', resetForm);
+        container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
+            const formUsed = !editing && items.some((i) => i.name);
+            if ((formUsed || editing) && !confirm('ข้อมูลที่กรอกค้างไว้ในฟอร์มจะถูกแทนที่ด้วยใบซื้อที่เลือก ดำเนินการต่อ?')) return;
+            try {
+                startEdit((await api.get(`/purchases/${b.dataset.edit}`)).data);
+            } catch (e) { alert(e.message); }
+        }));
         container.querySelector('#pc-save').addEventListener('click', save);
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', async () => {
             try {
@@ -418,7 +471,7 @@ export async function render(container) {
             const payload = items.map((it) => ({
                 name: it.receipt_name || it.name, product_name: it.name, barcode: it.barcode, qty: it.qty,
                 pack_size: it.pack_size, unit_cost: it.unit_cost, line_total: it.line_total,
-                item_type: it.typeTouched ? it.item_type : null,
+                item_type: it.typeTouched ? it.item_type : null, product_id: keptProductId(it),
             }));
             try {
                 const res = await api.post('/purchases/preview', { items: payload });
@@ -483,6 +536,11 @@ export async function render(container) {
         draw();
     }
 
+    /** While editing, a line keeps its product unless it was renamed or switched to a business supply. */
+    function keptProductId(it) {
+        return it.product_id && it.item_type === 'stock' && it.name.trim() === it.origName ? it.product_id : null;
+    }
+
     async function save() {
         error = null;
         success = null;
@@ -500,23 +558,24 @@ export async function render(container) {
         busy = 'save';
         draw();
         try {
-            const res = await api.post('/purchases', {
+            const payload = {
                 header: { ...header },
                 items: rows.map((it) => ({
                     name: (it.receipt_name || it.name).trim(), product_name: it.name.trim(), pack_size: Math.max(1, Number(it.pack_size) || 1),
-                    item_type: it.item_type,
+                    item_type: it.item_type, product_id: keptProductId(it),
                     barcode: it.barcode.trim(), qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                     line_total: Number(it.line_total), sale_price: Number(it.sale_price) || null,
                 })),
                 attachments: photos.map((p) => p.token),
                 source,
-            });
+            };
+            const res = editing ? await api.put(`/purchases/${editing.id}`, payload) : await api.post('/purchases', payload);
             const d = res.data;
             const newCount = d.items.filter((i) => i.new).length;
             const supplyCount = d.items.filter((i) => i.type === 'supply').length;
             const unitsIn = d.items.filter((i) => i.type !== 'supply').reduce((n, i) => n + Number(i.units || 0), 0);
-            success = `บันทึกใบซื้อ ${d.doc_no} แล้ว: สินค้าใหม่ ${newCount} รายการ เติมสต๊อก ${d.items.length - newCount - supplyCount} รายการ (เข้าสต๊อกรวม ${unitsIn} ชิ้น)${supplyCount ? ` ใช้ในกิจการ ${supplyCount} รายการ ฿${money(d.supply_total)}` : ''} ยอด ฿${money(d.total)}`;
-            photos = []; header = emptyHeader(); items = [emptyItem()]; warnings = []; source = 'manual';
+            success = `${editing ? 'บันทึกการแก้ไขใบซื้อ' : 'บันทึกใบซื้อ'} ${d.doc_no} แล้ว: สินค้าใหม่ ${newCount} รายการ เติมสต๊อก ${d.items.length - newCount - supplyCount} รายการ (เข้าสต๊อกรวม ${unitsIn} ชิ้น)${supplyCount ? ` ใช้ในกิจการ ${supplyCount} รายการ ฿${money(d.supply_total)}` : ''} ยอด ฿${money(d.total)}`;
+            clearForm();
             await loadDocs();
         } catch (e) {
             error = e.message;

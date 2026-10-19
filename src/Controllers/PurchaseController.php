@@ -78,6 +78,30 @@ class PurchaseController
         return $this->json($response, ['data' => $result], 201);
     }
 
+    public function update(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        $id = (int) $args['id'];
+        $attachments = new AttachmentService(Db::connection());
+        $tokens = array_map('strval', (array) ($body['attachments'] ?? []));
+        $current = array_column($attachments->forPurchase($id), 'token');
+        try {
+            $result = self::service()->update(
+                $id,
+                (array) ($body['header'] ?? []),
+                (array) ($body['items'] ?? []),
+                array_values(array_intersect($tokens, $current)),
+                $attachments->ownedBy(array_diff($tokens, $current), (int) $user['id']),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
     /** Reads receipt photos with a vision model and returns a draft for the form. */
     public function extract(Request $request, Response $response): Response
     {

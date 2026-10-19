@@ -209,6 +209,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('purchase.create'));
     $group->post('/purchases', [PurchaseController::class, 'store'])
         ->add(new RoleGuard('purchase.create'));
+    $group->put('/purchases/{id:[0-9]+}', [PurchaseController::class, 'update'])
+        ->add(new RoleGuard('purchase.create'));
     $group->post('/purchases/preview', [PurchaseController::class, 'preview'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/purchases/extract', [PurchaseController::class, 'extract'])
