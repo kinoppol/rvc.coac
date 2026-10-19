@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { uploadImage, attachmentUrl, imagesFromClipboard } from '../images.js';
+import { printPurchaseDoc } from '../print-slip.js';
 
 /**
  * ซื้อสินค้าเข้าร้าน: store-owned purchases. Receipt photos (one receipt may
@@ -395,6 +396,7 @@ export async function render(container) {
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
             <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">
+              <button type="button" class="btn secondary" data-print-view>🖨 พิมพ์</button>
               ${isCancelled(d) ? '' : `<button type="button" class="btn" data-edit="${d.id}">แก้ไขใบซื้อนี้</button>`}
               <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
@@ -512,6 +514,7 @@ export async function render(container) {
             } catch (e) { alert(e.message); }
         }));
         // The detail modal closes only via its close buttons.
+        container.querySelector('[data-print-view]')?.addEventListener('click', () => printPurchaseDoc(viewing));
         container.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; draw(); }));
 
         container.onpaste = (e) => {

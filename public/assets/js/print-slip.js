@@ -97,6 +97,105 @@ export async function printConsignSlip(req, quote) {
     printHtml(html);
 }
 
+const PURCHASE_TYPE = { stock: 'เติมสต๊อก', new: 'สินค้าใหม่', supply: 'ใช้ในกิจการ' };
+
+/**
+ * Prints a store purchase (ใบซื้อสินค้าเข้าร้าน) on A4 in TH Sarabun New —
+ * the font installed on the computer when present, else the Sarabun web font.
+ */
+export function printPurchaseDoc(d) {
+    const cancelled = d.status === 'cancelled';
+    const typeOf = (it) => (it.item_type === 'supply' ? 'supply' : Number(it.is_new_product) ? 'new' : 'stock');
+    const subtotal = d.items.reduce((s, it) => s + Number(it.line_total || 0), 0);
+    const supply = d.items.filter((it) => it.item_type === 'supply').reduce((s, it) => s + Number(it.line_total || 0), 0);
+    const units = d.items.filter((it) => it.item_type !== 'supply').reduce((s, it) => s + Number(it.units || 0), 0);
+
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>ใบซื้อสินค้าเข้าร้าน ${escapeHtml(d.doc_no)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: 'THSarabun'; font-weight: 400; src: local('TH Sarabun New'), local('THSarabunNew'), local('TH SarabunPSK'), local('THSarabunPSK'); }
+  @font-face { font-family: 'THSarabun'; font-weight: 700; src: local('TH Sarabun New Bold'), local('THSarabunNew-Bold'), local('TH SarabunPSK Bold'), local('THSarabunPSK-Bold'); }
+  @page { size: A4; margin: 12mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #111; background: #fff; font-size: 16pt; line-height: 1.15; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 10px; }
+  h1 { font-size: 24pt; margin: 0; line-height: 1.1; }
+  .sub { color: #444; font-size: 15pt; }
+  .meta { text-align: right; font-size: 15pt; }
+  .meta b { font-size: 18pt; }
+  .void { border: 2px solid #b00; color: #b00; padding: 4px 10px; margin-bottom: 10px; }
+  .box { border: 1px solid #999; border-radius: 6px; padding: 6px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15pt; }
+  th, td { border: 1px solid #999; padding: 2px 6px; vertical-align: top; }
+  th { background: #eee; font-weight: 700; }
+  tr { page-break-inside: avoid; }
+  .num { text-align: right; white-space: nowrap; }
+  .c { text-align: center; white-space: nowrap; }
+  .small { font-size: 13pt; color: #444; }
+  .sum { margin-left: auto; margin-top: 8px; width: 60%; font-size: 16pt; page-break-inside: avoid; }
+  .sum td { border: 0; padding: 1px 6px; }
+  .sum tr.net td { border-top: 1.5px solid #111; font-weight: 700; font-size: 18pt; }
+  .note { margin-top: 8px; }
+  .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 40px; text-align: center; page-break-inside: avoid; }
+  .sign .line { border-top: 1px dotted #111; margin: 0 20px 2px; padding-top: 2px; }
+  .foot { margin-top: 18px; font-size: 12pt; color: #777; text-align: right; }
+</style></head><body>
+  <div class="head">
+    <div><h1>ใบซื้อสินค้าเข้าร้าน</h1><div class="sub">ร้านค้าสหการ</div></div>
+    <div class="meta">เลขที่ <b>${escapeHtml(d.doc_no)}</b><br>
+      บันทึกเมื่อ ${escapeHtml(fmtDateTime(d.created_at))}<br>
+      บันทึกโดย ${escapeHtml(d.user_name || '-')}</div>
+  </div>
+  ${cancelled ? `<div class="void"><b>ยกเลิกแล้ว</b> เมื่อ ${escapeHtml(fmtDateTime(d.cancelled_at))}${d.cancelled_by_name ? ` โดย ${escapeHtml(d.cancelled_by_name)}` : ''} · เหตุผล: ${escapeHtml(d.cancel_reason || '-')}</div>` : ''}
+  <div class="box">
+    <div>ร้าน/ผู้ขาย: <b>${escapeHtml(d.supplier_name || '-')}</b></div>
+    <div>เลขประจำตัวผู้เสียภาษี: ${escapeHtml(d.supplier_tax_id || '-')}</div>
+    <div>เลขที่ใบเสร็จ: <b>${escapeHtml(d.receipt_no || '-')}</b></div>
+    <div>วันที่ใบเสร็จ: ${d.receipt_date ? escapeHtml(fmtDate(d.receipt_date)) : '-'}</div>
+  </div>
+  <table>
+    <thead><tr>
+      <th class="c" style="width:30px">ที่</th><th>สินค้า</th><th class="num">จำนวนซื้อ</th><th class="num">ทุน/หน่วยซื้อ</th><th class="num">รวม</th>
+      <th class="num">เข้าสต๊อก (ชิ้น)</th><th class="num">ทุน/ชิ้น</th><th class="num">ขาย/ชิ้น</th><th class="c">ประเภท</th>
+    </tr></thead>
+    <tbody>${d.items.map((it, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td>${escapeHtml(it.receipt_name)}${it.product_name && it.product_name !== it.receipt_name ? `<div class="small">→ ${escapeHtml(it.product_name)}</div>` : ''}${it.barcode ? `<div class="small">บาร์โค้ด${Number(it.pack_size) > 1 ? 'แพ็ค' : ''}: ${escapeHtml(it.barcode)}</div>` : ''}</td>
+        <td class="num">${escapeHtml(String(it.qty))}${Number(it.pack_size) > 1 ? ` × ${escapeHtml(String(it.pack_size))}` : ''}</td>
+        <td class="num">${money(it.unit_cost)}</td>
+        <td class="num">${money(it.line_total)}</td>
+        <td class="num">${it.item_type === 'supply' ? '—' : escapeHtml(String(it.units))}</td>
+        <td class="num">${money(it.piece_cost)}</td>
+        <td class="num">${it.item_type === 'supply' ? '—' : money(it.sale_price)}</td>
+        <td class="c">${PURCHASE_TYPE[typeOf(it)]}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  <table class="sum">
+    <tr><td colspan="2">รวม ${d.items.length} รายการ · เข้าสต๊อก ${units} ชิ้น</td></tr>
+    ${supply > 0 ? `<tr><td>เพื่อขาย / ใช้ในกิจการ</td><td class="num">${money(subtotal - supply)} / ${money(supply)}</td></tr>` : ''}
+    <tr><td>รวมตามรายการ</td><td class="num">${money(subtotal)}</td></tr>
+    <tr><td>ส่วนลดท้ายบิล</td><td class="num">${money(d.discount)}</td></tr>
+    <tr><td>VAT</td><td class="num">${money(d.vat)}</td></tr>
+    <tr class="net"><td>ยอดสุทธิ (บาท)</td><td class="num">${money(d.total)}</td></tr>
+  </table>
+  ${d.note ? `<div class="note">หมายเหตุ: ${escapeHtml(d.note)}</div>` : ''}
+  <div class="sign">
+    <div><div class="line">(${escapeHtml(d.user_name || '.................................................')})</div>ผู้บันทึก<br>วันที่ ........../........../..........</div>
+    <div><div class="line">(.................................................)</div>ผู้ตรวจสอบ<br>วันที่ ........../........../..........</div>
+  </div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtDateTime(new Date().toISOString()))}</div>
+</body></html>`;
+
+    printHtml(html);
+}
+
 /** Prints a standalone HTML document through a hidden iframe (no pop-up window to block). */
 function printHtml(html) {
     const frame = document.createElement('iframe');
