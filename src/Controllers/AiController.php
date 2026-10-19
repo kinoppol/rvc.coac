@@ -136,6 +136,11 @@ class AiController
         $history = $this->resolveOpenToolCalls($history, $toolbox, $approvals);
         $firstNew = count($history);
 
+        $toolNames = array_column(array_column($tools, 'function'), 'name');
+        // A receipt turn must end in a create_purchase draft; weaker models sometimes
+        // just describe the purchase ("บันทึกแล้ว") without calling the tool.
+        $expectPurchase = in_array('create_purchase', $toolNames, true) && ($newPhotoTurn || $newDocs);
+        $nudged = false;
         $pending = [];
         try {
             for ($round = 0; $round < self::MAX_TOOL_ROUNDS; $round++) {
@@ -143,8 +148,17 @@ class AiController
                     [['role' => 'system', 'content' => $this->systemPrompt($user, $toolbox, (bool) $tools, $vision)]],
                     $this->toModelMessages($history, $vision, $attachments, $imageCache)
                 );
-                $reply = $this->normalizeAssistant($client->chat($model['model_id'], $messages, $tools));
+                if ($nudged) {
+                    $messages[] = ['role' => 'system', 'content' => 'คุณยังไม่ได้เรียกเครื่องมือ create_purchase ใบซื้อจึงยังไม่ถูกบันทึก'
+                        . ' ห้ามตอบว่าบันทึกแล้ว ให้เรียก create_purchase พร้อมรายการสินค้าทั้งหมดจากใบเสร็จตอนนี้เลย ระบบจะแสดงปุ่มให้ผู้ใช้ยืนยันเอง'];
+                }
+                $reply = $this->normalizeAssistant($client->chat($model['model_id'], $messages, $tools), $toolNames);
                 $reply['model'] = $model['display_name'] ?: $model['model_id'];
+
+                if (empty($reply['tool_calls']) && $expectPurchase && !$nudged && !$this->calledTool($history, $firstNew, 'create_purchase')) {
+                    $nudged = true; // retry once; the text-only reply is dropped
+                    continue;
+                }
                 $history[] = $reply;
 
                 if (empty($reply['tool_calls'])) {
@@ -439,13 +453,44 @@ class AiController
         return $out;
     }
 
-    private function normalizeAssistant(array $m): array
+    private function calledTool(array $history, int $from, string $name): bool
+    {
+        foreach (array_slice($history, $from) as $m) {
+            foreach ($m['tool_calls'] ?? [] as $c) {
+                if ($c['function']['name'] === $name) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** @param string[] $toolNames tools offered this turn; used to recover calls a model wrote as text */
+    private function normalizeAssistant(array $m, array $toolNames = []): array
     {
         $content = $m['content'] ?? '';
         if (is_array($content)) { // some servers return content parts
             $content = implode('', array_map(fn ($p) => is_array($p) ? ($p['text'] ?? '') : (string) $p, $content));
         }
-        $msg = ['role' => 'assistant', 'content' => (string) $content];
+        $content = (string) $content;
+        // Reasoning models served without a reasoning parser leak <think>…</think> (sometimes only the closing tag).
+        $content = preg_replace('~<think>.*?</think>~su', '', $content) ?? $content;
+        if (($pos = mb_strrpos($content, '</think>')) !== false) {
+            $content = mb_substr($content, $pos + mb_strlen('</think>'));
+        }
+        // Some servers don't parse tool calls and pass them through as <tool_call>{json}</tool_call> text.
+        if (empty($m['tool_calls']) && $toolNames && preg_match_all('~<tool_call>\s*(\{.*?\})\s*</tool_call>~su', $content, $found)) {
+            foreach ($found[1] as $json) {
+                $call = json_decode($json, true);
+                if (is_array($call) && in_array($call['name'] ?? null, $toolNames, true)) {
+                    $m['tool_calls'][] = ['function' => ['name' => $call['name'], 'arguments' => $call['arguments'] ?? $call['parameters'] ?? []]];
+                }
+            }
+            if (!empty($m['tool_calls'])) {
+                $content = preg_replace('~<tool_call>.*?</tool_call>~su', '', $content) ?? $content;
+            }
+        }
+        $msg = ['role' => 'assistant', 'content' => trim($content)];
         if (isset($m['model']) && is_string($m['model'])) {
             $msg['model'] = mb_substr($m['model'], 0, 100); // UI label only; stripped before the provider call
         }
