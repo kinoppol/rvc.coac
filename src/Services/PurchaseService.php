@@ -227,67 +227,21 @@ class PurchaseService
 
         $this->db->beginTransaction();
         try {
-            $stmt = $this->db->prepare('SELECT * FROM purchase_documents WHERE id = ? FOR UPDATE');
-            $stmt->execute([$id]);
-            $doc = $stmt->fetch();
-            if (!$doc) {
-                throw new \RuntimeException('ไม่พบใบซื้อ');
-            }
-            $old = $this->find($id);
+            [$doc, $old] = $this->lockActive($id, 'แก้ไข');
 
-            // 1) Undo the old lines.
-            $createdHere = [];
-            foreach ($old['items'] as $it) {
-                if ($it['item_type'] !== 'stock' || !$it['product_id']) {
-                    continue;
-                }
-                $productId = (int) $it['product_id'];
-                if ((int) $it['is_new_product']) {
-                    $createdHere[$productId] = true;
-                }
-                $p = $this->products->find($productId);
-                $units = (int) $it['units'];
-                $left = (int) $p['qty_stock'] - $units;
-                $cost = $left > 0
-                    ? max(0, round(((int) $p['qty_stock'] * (float) $p['cost_price'] - $units * (float) $it['piece_cost']) / $left, 2))
-                    : (float) $p['cost_price'];
-                $this->products->addStock($productId, -$units, $userId, $ip);
-                $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
-            }
+            // 1) Undo the old lines, 2) apply the edited ones.
+            $createdHere = $this->reverseLines($old['items'], $userId, $ip);
             $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
-
-            // 2) Apply the edited lines.
             $result = $this->applyLines($id, $lines, $createdHere, $userId, $ip);
 
             // 3) No product may end up below zero (its goods were already sold).
-            $touched = array_unique(array_merge(
-                array_map('intval', array_filter(array_column($old['items'], 'product_id'))),
-                array_map('intval', array_filter(array_column($result, 'product_id')))
-            ));
-            foreach ($touched as $productId) {
-                $p = $this->products->find($productId);
-                if ($p && (int) $p['qty_stock'] < 0) {
-                    throw new \RuntimeException(sprintf(
-                        'แก้ไขไม่ได้: "%s" ขายหรือนำออกไปแล้ว สต๊อกจะติดลบ %d ชิ้น — ลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก',
-                        $p['name'], abs((int) $p['qty_stock'])
-                    ));
-                }
-            }
+            $this->assertNoNegativeStock(
+                array_merge(array_column($old['items'], 'product_id'), array_column($result, 'product_id')),
+                'แก้ไขไม่ได้: "%s" ขายหรือนำออกไปแล้ว สต๊อกจะติดลบ %d ชิ้น — ลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก'
+            );
 
             // 4) Products this purchase created that are no longer on it and never moved are removed.
-            $stillUsed = array_flip(array_map('intval', array_filter(array_column($result, 'product_id'))));
-            foreach (array_keys($createdHere) as $productId) {
-                $p = isset($stillUsed[$productId]) ? null : $this->products->find($productId);
-                if ($p && (int) $p['qty_stock'] === 0 && (int) $p['qty_received'] === 0 && (int) $p['qty_sold'] === 0) {
-                    try {
-                        $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ?')->execute([$productId]);
-                        $this->db->prepare('DELETE FROM products WHERE id = ?')->execute([$productId]);
-                        $this->audit->log('products', $productId, 'delete', $p, null, $userId, $ip);
-                    } catch (\PDOException $e) {
-                        // Still referenced elsewhere: keep it with zero stock.
-                    }
-                }
-            }
+            $this->removeUnusedCreated($createdHere, array_column($result, 'product_id'), $userId, $ip);
 
             // 5) Header, totals and photos.
             $this->db->prepare(
@@ -317,6 +271,120 @@ class PurchaseService
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
+        }
+    }
+
+    /**
+     * Cancels a purchase: its goods go back out of stock (and out of the
+     * moving-average cost) and its lines stop counting in reports and totals.
+     * The document stays, marked cancelled, with a snapshot of its lines.
+     * Refused if some of the goods were already sold.
+     */
+    public function cancel(int $id, string $reason, int $userId, ?string $ip): array
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่ยกเลิก');
+        }
+        $this->db->beginTransaction();
+        try {
+            [$doc, $old] = $this->lockActive($id, 'ยกเลิก');
+            $createdHere = $this->reverseLines($old['items'], $userId, $ip);
+            $this->assertNoNegativeStock(
+                array_column($old['items'], 'product_id'),
+                'ยกเลิกไม่ได้: "%s" ขายหรือนำออกไปแล้ว คงเหลือไม่พอให้หักออก (ขาด %d ชิ้น) — ให้แก้ไขใบซื้อลดเฉพาะส่วนที่ยังเหลือแทน'
+            );
+            $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
+                'product_id', 'product_name', 'item_type', 'receipt_name', 'barcode', 'qty', 'unit_cost', 'pack_size', 'units',
+                'piece_cost', 'line_total', 'sale_price', 'is_new_product',
+            ])), $old['items']);
+            $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
+            $this->removeUnusedCreated($createdHere, [], $userId, $ip);
+            $this->db->prepare(
+                'UPDATE purchase_documents SET status = ?, cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ?, cancelled_items = ? WHERE id = ?'
+            )->execute(['cancelled', $userId, mb_substr($reason, 0, 255), json_encode($snapshot, JSON_UNESCAPED_UNICODE), $id]);
+            $this->audit->log('purchase_documents', $id, 'cancel',
+                ['doc_no' => $doc['doc_no'], 'total' => (float) $doc['total'], 'items' => count($old['items'])],
+                ['status' => 'cancelled', 'reason' => $reason], $userId, $ip);
+            $this->db->commit();
+            return ['id' => $id, 'doc_no' => $doc['doc_no'], 'items' => count($old['items']), 'units' => array_sum(array_map(
+                fn ($it) => $it['item_type'] === 'stock' ? (int) $it['units'] : 0, $old['items']
+            ))];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** @return array{0:array,1:array} [locked document row, find() result]; only active purchases can change. */
+    private function lockActive(int $id, string $action): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM purchase_documents WHERE id = ? FOR UPDATE');
+        $stmt->execute([$id]);
+        $doc = $stmt->fetch();
+        if (!$doc) {
+            throw new \RuntimeException('ไม่พบใบซื้อ');
+        }
+        if (($doc['status'] ?? 'active') === 'cancelled') {
+            throw new \RuntimeException("ใบซื้อ {$doc['doc_no']} ถูกยกเลิกแล้ว {$action}ไม่ได้");
+        }
+        return [$doc, $this->find($id)];
+    }
+
+    /**
+     * Takes a purchase's stock lines back out of stock and out of the
+     * moving-average cost. Returns the products this purchase created.
+     * @return array<int,true>
+     */
+    private function reverseLines(array $items, int $userId, ?string $ip): array
+    {
+        $createdHere = [];
+        foreach ($items as $it) {
+            if ($it['item_type'] !== 'stock' || !$it['product_id']) {
+                continue;
+            }
+            $productId = (int) $it['product_id'];
+            if ((int) $it['is_new_product']) {
+                $createdHere[$productId] = true;
+            }
+            $p = $this->products->find($productId);
+            $units = (int) $it['units'];
+            $left = (int) $p['qty_stock'] - $units;
+            $cost = $left > 0
+                ? max(0, round(((int) $p['qty_stock'] * (float) $p['cost_price'] - $units * (float) $it['piece_cost']) / $left, 2))
+                : (float) $p['cost_price'];
+            $this->products->addStock($productId, -$units, $userId, $ip);
+            $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
+        }
+        return $createdHere;
+    }
+
+    /** @param string $message sprintf format with the product name and the missing pieces */
+    private function assertNoNegativeStock(array $productIds, string $message): void
+    {
+        foreach (array_unique(array_map('intval', array_filter($productIds))) as $productId) {
+            $p = $this->products->find($productId);
+            if ($p && (int) $p['qty_stock'] < 0) {
+                throw new \RuntimeException(sprintf($message, $p['name'], abs((int) $p['qty_stock'])));
+            }
+        }
+    }
+
+    /** Deletes products this purchase created that it no longer uses, if nothing else ever touched them. */
+    private function removeUnusedCreated(array $createdHere, array $stillUsedIds, int $userId, ?string $ip): void
+    {
+        $stillUsed = array_flip(array_map('intval', array_filter($stillUsedIds)));
+        foreach (array_keys($createdHere) as $productId) {
+            $p = isset($stillUsed[$productId]) ? null : $this->products->find($productId);
+            if ($p && (int) $p['qty_stock'] === 0 && (int) $p['qty_received'] === 0 && (int) $p['qty_sold'] === 0) {
+                try {
+                    // Its pack barcodes go with it (ON DELETE CASCADE).
+                    $this->db->prepare('DELETE FROM products WHERE id = ?')->execute([$productId]);
+                    $this->audit->log('products', $productId, 'delete', $p, null, $userId, $ip);
+                } catch (\PDOException $e) {
+                    // Still referenced elsewhere (e.g. another purchase): keep it with zero stock.
+                }
+            }
         }
     }
 
@@ -457,7 +525,16 @@ class PurchaseService
         );
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
         $stmt->execute();
-        return $stmt->fetchAll();
+        return array_map(function ($d) {
+            // A cancelled purchase has no lines left; show the counts from its snapshot.
+            if (($d['status'] ?? 'active') === 'cancelled') {
+                $items = json_decode((string) $d['cancelled_items'], true) ?: [];
+                $d['item_count'] = count($items);
+                $d['supply_total'] = round(array_sum(array_map(fn ($i) => $i['item_type'] === 'supply' ? (float) $i['line_total'] : 0, $items)), 2);
+            }
+            unset($d['cancelled_items']);
+            return $d;
+        }, $stmt->fetchAll());
     }
 
     public function find(int $id): ?array
@@ -474,6 +551,13 @@ class PurchaseService
         );
         $items->execute([$id]);
         $doc['items'] = $items->fetchAll();
+        if (($doc['status'] ?? 'active') === 'cancelled') {
+            $doc['items'] = json_decode((string) $doc['cancelled_items'], true) ?: [];
+            $by = $this->db->prepare('SELECT full_name FROM users WHERE id = ?');
+            $by->execute([(int) $doc['cancelled_by']]);
+            $doc['cancelled_by_name'] = $by->fetchColumn() ?: null;
+        }
+        unset($doc['cancelled_items']);
         $doc['images'] = array_map([$this->attachments, 'publicInfo'], $this->attachments->forPurchase($id));
         return $doc;
     }

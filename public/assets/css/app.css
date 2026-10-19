@@ -280,4 +280,14 @@ label.ai-icon-btn { cursor: pointer; }
 .ai-price { width: 70px; border: 1px solid var(--border); background: var(--surface2); color: inherit; border-radius: 7px; padding: 4px 6px; text-align: right; }
 .pc-type { border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 7px; padding: 5px 6px; font-size: 13px; }
 .pc-type.supply { border-color: var(--warn); color: var(--warn); }
+.pc-price.same { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); font-weight: 600; }
+.pc-price.up { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); font-weight: 700; }
+.pc-price.down { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); font-weight: 700; }
+.pc-price-tag { font-size: 11px; font-weight: 600; margin-top: 2px; white-space: nowrap; }
+.pc-price-tag.same { color: var(--warn); }
+.pc-price-tag.up { color: var(--ok); }
+.pc-price-tag.down { color: var(--bad); }
+.pc-cancelled td { color: var(--muted); }
+.pc-cancelled .pc-total { text-decoration: line-through; }
+.pc-cancel-btn { color: var(--bad); }
 .ai-supply { font-size: 10.5px; color: var(--muted); }

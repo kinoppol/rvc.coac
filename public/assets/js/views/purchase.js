@@ -220,7 +220,8 @@ export async function render(container) {
                   <td class="num" data-piece>${money(pieceCost(it))}</td>
                   <td>${it.item_type === 'supply'
                     ? '<span class="muted" title="ใช้ในกิจการ ไม่มีราคาขาย">—</span>'
-                    : `<input data-f="sale_price" type="number" min="0" step="0.25" value="${it.sale_price || ''}" placeholder="${it.suggested || ''}" class="num" style="width:85px">`}</td>
+                    : `<input data-f="sale_price" type="number" min="0" step="0.25" value="${it.sale_price || ''}" placeholder="${it.suggested || ''}" class="num ${priceClass(it)}" style="width:85px">
+                       <div data-price-tag>${priceTagHtml(it)}</div>`}</td>
                   <td data-status>${statusHtml(it)}</td>
                   <td><button type="button" class="btn secondary sm" data-remove-row="${i}" title="ลบรายการ">✕</button></td>
                 </tr>`).join('')}
@@ -243,23 +244,29 @@ export async function render(container) {
             <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th>รูป</th><th>บันทึกโดย</th><th></th></tr></thead>
             <tbody>
               ${docs.map((d) => `
-                <tr>
-                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}</td>
+                <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
+                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}
+                    ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}</td>
                   <td>${d.receipt_date ? fmtDate(d.receipt_date) : '-'}</td>
                   <td>${escapeHtml(d.supplier_name)}${d.receipt_no ? `<div class="muted" style="font-size:12px">${escapeHtml(d.receipt_no)}</div>` : ''}</td>
                   <td class="num">${d.item_count}</td>
-                  <td class="num">${money(d.total)}</td>
+                  <td class="num"><span class="pc-total">${money(d.total)}</span></td>
                   <td class="num muted">${Number(d.supply_total) ? money(d.supply_total) : '-'}</td>
                   <td>${Number(d.image_count) ? `🖼 ${d.image_count}` : ''}</td>
                   <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div></td>
                   <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
-                    <button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button></td>
+                    ${isCancelled(d) ? '' : `<button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button>
+                    <button type="button" class="btn secondary sm pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิก</button>`}</td>
                 </tr>`).join('') || '<tr><td colspan="9" class="empty">ยังไม่มีใบซื้อ</td></tr>'}
             </tbody>
           </table></div>
         </section>
         ${viewing ? viewHtml(viewing) : ''}`;
         bind();
+    }
+
+    function isCancelled(d) {
+        return d.status === 'cancelled';
     }
 
     function unitsOf(it) {
@@ -273,6 +280,36 @@ export async function render(container) {
         const pack = Math.max(1, Number(it.pack_size) || 1);
         if (it.item_type === 'supply') return '<span class="muted" style="font-size:12px">ไม่เข้าสต๊อก</span>';
         return pack > 1 ? `<b>${unitsOf(it)}</b> <span class="muted" style="font-size:11.5px">ชิ้น</span>` : `${unitsOf(it)}`;
+    }
+
+    /** Restock lines compare the new selling price with the product's current one. */
+    function priceDir(it) {
+        if (it.item_type !== 'stock' || !it.match) return null;
+        const old = Number(it.match.sale_price) || 0;
+        const cur = Number(it.sale_price) || old;
+        return cur > old + 0.004 ? 'up' : cur < old - 0.004 ? 'down' : 'same';
+    }
+    function priceClass(it) {
+        const dir = priceDir(it);
+        return dir ? `pc-price ${dir}` : '';
+    }
+    function priceTagHtml(it) {
+        const dir = priceDir(it);
+        if (!dir) return '';
+        const old = Number(it.match.sale_price) || 0;
+        const diff = round2(Math.abs((Number(it.sale_price) || old) - old));
+        if (dir === 'same') return `<div class="pc-price-tag same" title="ราคาขายปัจจุบันของสินค้านี้">ราคาเดิม ${money(old)}</div>`;
+        return dir === 'up'
+            ? `<div class="pc-price-tag up" title="ปรับราคาขึ้นจากราคาเดิม ${money(old)}">↑ ${money(diff)} (เดิม ${money(old)})</div>`
+            : `<div class="pc-price-tag down" title="ปรับราคาลงจากราคาเดิม ${money(old)}">↓ ${money(diff)} (เดิม ${money(old)})</div>`;
+    }
+    function updatePriceCell(it, tr) {
+        const sp = tr?.querySelector('[data-f="sale_price"]');
+        if (!sp) return;
+        sp.classList.remove('pc-price', 'same', 'up', 'down');
+        const cls = priceClass(it);
+        if (cls) sp.classList.add(...cls.split(' '));
+        tr.querySelector('[data-price-tag]').innerHTML = priceTagHtml(it);
     }
 
     function statusHtml(it) {
@@ -312,6 +349,10 @@ export async function render(container) {
               <button type="button" class="modal-close" data-close-view title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
+              ${isCancelled(d) ? `<div class="error-box" style="margin-bottom:12px">
+                <b>ใบซื้อนี้ถูกยกเลิกแล้ว</b> เมื่อ ${fmtDateTime(d.cancelled_at)}${d.cancelled_by_name ? ` โดย ${escapeHtml(d.cancelled_by_name)}` : ''}
+                <div>เหตุผล: ${escapeHtml(d.cancel_reason || '-')}</div>
+                <div style="font-size:12.5px">สินค้าตามรายการด้านล่างถูกหักออกจากสต๊อกแล้ว และไม่นับรวมในรายงาน</div></div>` : ''}
               <div class="stat-row" style="margin-bottom:14px;font-size:13.5px">
                 <div><div class="muted">ร้าน/ผู้ขาย</div><b>${escapeHtml(d.supplier_name)}</b>${d.supplier_tax_id ? `<div class="muted">${escapeHtml(d.supplier_tax_id)}</div>` : ''}</div>
                 <div><div class="muted">เลขที่ / วันที่ใบเสร็จ</div><b>${escapeHtml(d.receipt_no || '-')}</b><div>${d.receipt_date ? fmtDate(d.receipt_date) : '-'}</div></div>
@@ -330,8 +371,8 @@ export async function render(container) {
                 <div class="pc-photos">${d.images.map((im, i) => `<a class="pc-photo" href="${escapeHtml(attachmentUrl(im.token))}" target="_blank" rel="noopener"><img src="${escapeHtml(attachmentUrl(im.token))}" alt="รูปที่ ${i + 1}"><span class="pc-photo-no">${i + 1}</span></a>`).join('')}</div>` : ''}
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
-            <div class="modal-foot"><span></span><div class="actions-row">
-              <button type="button" class="btn" data-edit="${d.id}">แก้ไขใบซื้อนี้</button>
+            <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">
+              ${isCancelled(d) ? '' : `<button type="button" class="btn" data-edit="${d.id}">แก้ไขใบซื้อนี้</button>`}
               <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
         </div>`;
@@ -424,6 +465,7 @@ export async function render(container) {
             } catch (e) { alert(e.message); }
         }));
         container.querySelector('#pc-save').addEventListener('click', save);
+        container.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => cancelDoc(Number(b.dataset.cancel), b.dataset.doc)));
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', async () => {
             try {
                 viewing = (await api.get(`/purchases/${b.dataset.view}`)).data;
@@ -462,6 +504,7 @@ export async function render(container) {
         }
         tr.querySelector('[data-units]').innerHTML = unitsHtml(it);
         tr.querySelector('[data-piece]').textContent = money(pieceCost(it));
+        updatePriceCell(it, tr);
         redrawSummary();
     }
 
@@ -486,6 +529,7 @@ export async function render(container) {
                     const sp = tr.querySelector('[data-f="sale_price"]');
                     sp.placeholder = it.suggested || '';
                     if (!it.priceTouched && document.activeElement !== sp) sp.value = it.sale_price || '';
+                    updatePriceCell(it, tr);
                 });
                 // A line remembered as a business supply switches its row layout.
                 if (typeChanged) draw();
@@ -539,6 +583,26 @@ export async function render(container) {
     /** While editing, a line keeps its product unless it was renamed or switched to a business supply. */
     function keptProductId(it) {
         return it.product_id && it.item_type === 'stock' && it.name.trim() === it.origName ? it.product_id : null;
+    }
+
+    async function cancelDoc(id, docNo) {
+        const reason = prompt(`ยกเลิกใบซื้อ ${docNo}
+
+สินค้าตามใบนี้จะถูกหักออกจากสต๊อก และไม่นับรวมในรายงาน (ยกเลิกแล้วกู้คืนไม่ได้)
+กรุณาระบุเหตุผลที่ยกเลิก:`);
+        if (reason === null) return;
+        if (!reason.trim()) { alert('กรุณาระบุเหตุผลที่ยกเลิก'); return; }
+        try {
+            const res = await api.post(`/purchases/${id}/cancel`, { reason: reason.trim() });
+            success = `ยกเลิกใบซื้อ ${res.data.doc_no} แล้ว — หักสินค้าออกจากสต๊อก ${res.data.units} ชิ้น`;
+            error = null;
+            if (editing?.id === id) clearForm();
+            viewing = null;
+            await loadDocs();
+            draw();
+        } catch (e) {
+            alert(e.message);
+        }
     }
 
     async function save() {

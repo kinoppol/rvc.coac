@@ -102,6 +102,25 @@ class PurchaseController
         return $this->json($response, ['data' => $result]);
     }
 
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        try {
+            $result = self::service()->cancel(
+                (int) $args['id'],
+                (string) ($body['reason'] ?? ''),
+                (int) $request->getAttribute('user')['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            $missingColumn = $e instanceof \PDOException && ($e->errorInfo[0] ?? '') === '42S22';
+            return $this->error($response, $missingColumn
+                ? 'ฐานข้อมูลยังไม่ได้อัปเดต — ผู้ดูแลระบบต้องรัน Migration ที่ค้างอยู่ (เมนู ระบบ > Migrations) ก่อนจึงจะยกเลิกใบซื้อได้'
+                : $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
     /** Reads receipt photos with a vision model and returns a draft for the form. */
     public function extract(Request $request, Response $response): Response
     {
