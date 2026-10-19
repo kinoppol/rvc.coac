@@ -290,4 +290,6 @@ label.ai-icon-btn { cursor: pointer; }
 .pc-cancelled td { color: var(--muted); }
 .pc-cancelled .pc-total { text-decoration: line-through; }
 .pc-cancel-btn { color: var(--bad); }
+.pc-modal { width: 1320px; height: calc(100vh - 32px); }
+.pc-modal-body { display: flex; flex-direction: column; gap: 16px; background: var(--bg); }
 .ai-supply { font-size: 10.5px; color: var(--muted); }

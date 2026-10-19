@@ -37,6 +37,7 @@ export async function render(container) {
     let markup = 20;
     let viewing = null; // purchase doc shown in the modal
     let editing = null; // { id, doc_no } while the form holds a saved purchase
+    let formOpen = false; // the purchase form modal
     let previewTimer = null;
 
     /** Applies a server preview to an item; returns true if the row needs redrawing. */
@@ -75,7 +76,10 @@ export async function render(container) {
             draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || 'null');
             sessionStorage.removeItem(DRAFT_KEY);
         } catch (e) { draft = null; }
-        if (draft) applyDraft(draft, (draft.attachments || []).map((token) => ({ token, preview: attachmentUrl(token) })));
+        if (draft) {
+            applyDraft(draft, (draft.attachments || []).map((token) => ({ token, preview: attachmentUrl(token) })));
+            formOpen = true;
+        }
     }
 
     function applyDraft(d, newPhotos) {
@@ -120,8 +124,8 @@ export async function render(container) {
         viewing = null;
         error = null;
         success = null;
+        formOpen = true;
         draw();
-        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
         refreshPreview();
     }
 
@@ -137,20 +141,21 @@ export async function render(container) {
 
     // ---------------- Rendering ----------------
 
-    function draw() {
+    /** The purchase form, shown on a modal from «+ ซื้อสินค้าเข้าร้าน» or «แก้ไข». */
+    function formHtml() {
         const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
-        container.innerHTML = `
-        ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
-        ${editing ? `<div class="pc-warn" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <div style="flex:1;min-width:220px"><b>กำลังแก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}</b><br>
+        return `
+        <div class="modal-backdrop">
+          <div class="modal pc-modal" role="dialog" aria-modal="true" aria-labelledby="pc-form-title">
+            <div class="modal-head">
+              <h2 id="pc-form-title">${editing ? `แก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}` : 'ซื้อสินค้าเข้าร้าน'}</h2>
+              <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button>
+            </div>
+            <div class="modal-body pc-modal-body">
+        ${editing ? `<div class="pc-warn" style="margin:0">
+          <div><b>กำลังแก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}</b><br>
             <span style="font-size:12.5px">เมื่อบันทึก ระบบจะหักสต๊อกตามใบเดิมออกแล้วรับเข้าตามรายการใหม่ (เลขที่ใบซื้อเดิม) — สินค้าที่ขายไปแล้วจะลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก</span></div>
-          <button type="button" class="btn secondary sm" id="pc-cancel-edit">ยกเลิกการแก้ไข</button>
         </div>` : ''}
-        <div class="hint"><div class="dot">i</div><div>
-          บันทึกการซื้อสินค้าเข้าร้าน (สินค้าของร้านเอง ไม่ใช่ฝากขาย) — ถ่ายรูปใบเสร็จอย่างย่อแล้วให้ AI อ่านรายการให้ ตรวจแก้แล้วกดบันทึก
-          ใบเสร็จยาวถ่ายต่อกันได้หลายรูป (เรียงจากบนลงล่าง ให้ขอบภาพซ้อนกันเล็กน้อย) ราคาในใบเสร็จคือ<b>ราคาทุน</b>
-          ระบบตั้งราคาขายเริ่มต้นเป็นทุน + ${escapeHtml(markup)}% แก้ได้ทุกรายการ
-        </div></div>
 
         <section class="card card-pad">
           <div class="step-title"><span class="step-num">1</span><h2>รูปใบเสร็จ</h2>
@@ -232,15 +237,31 @@ export async function render(container) {
           <div style="padding:0 18px 18px">
             ${warnings.length ? `<div class="pc-warn"><b>ข้อสังเกตจาก AI</b><ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>` : ''}
             ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
-            <div class="actions-row" style="justify-content:flex-end">
+          </div>
+        </section>
+
+            </div>
+            <div class="modal-foot">
               <button type="button" class="btn secondary" id="pc-reset">${editing ? 'ยกเลิกการแก้ไข' : 'ล้างฟอร์ม'}</button>
               <button type="button" class="btn" id="pc-save" ${busy ? 'disabled' : ''}>${busy === 'save' ? 'กำลังบันทึก...' : editing ? `บันทึกการแก้ไข ${escapeHtml(editing.doc_no)}` : 'บันทึกใบซื้อ'}</button>
             </div>
           </div>
-        </section>
+        </div>`;
+    }
 
+    function draw() {
+        container.innerHTML = `
+        ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
+        <div class="hint"><div class="dot">i</div><div>
+          บันทึกการซื้อสินค้าเข้าร้าน (สินค้าของร้านเอง ไม่ใช่ฝากขาย) — ถ่ายรูปใบเสร็จอย่างย่อแล้วให้ AI อ่านรายการให้ ตรวจแก้แล้วกดบันทึก
+          ใบเสร็จยาวถ่ายต่อกันได้หลายรูป (เรียงจากบนลงล่าง ให้ขอบภาพซ้อนกันเล็กน้อย) ราคาในใบเสร็จคือ<b>ราคาทุน</b>
+          ระบบตั้งราคาขายเริ่มต้นเป็นทุน + ${escapeHtml(markup)}% แก้ได้ทุกรายการ
+        </div></div>
+        <div class="actions-row" style="justify-content:space-between">
+          <h2 style="font-size:15px;margin:0">ใบซื้อล่าสุด</h2>
+          <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
+        </div>
         <section class="card">
-          <div class="card-head"><h2>ใบซื้อล่าสุด</h2></div>
           <div class="table-wrap"><table>
             <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th>รูป</th><th>บันทึกโดย</th><th></th></tr></thead>
             <tbody>
@@ -262,6 +283,7 @@ export async function render(container) {
             </tbody>
           </table></div>
         </section>
+        ${formOpen ? formHtml() : ''}
         ${viewing ? viewHtml(viewing) : ''}`;
         bind();
     }
@@ -444,7 +466,7 @@ export async function render(container) {
             if (!items.length) items = [emptyItem()];
             draw();
         }));
-        container.querySelector('#pc-add-row').addEventListener('click', () => {
+        container.querySelector('#pc-add-row')?.addEventListener('click', () => {
             items.push(emptyItem());
             draw();
             const rows = container.querySelectorAll('tr[data-row] [data-f="name"]');
@@ -456,16 +478,32 @@ export async function render(container) {
             error = null; success = null;
             draw();
         };
-        container.querySelector('#pc-reset').addEventListener('click', resetForm);
-        container.querySelector('#pc-cancel-edit')?.addEventListener('click', resetForm);
+        container.querySelector('#pc-reset')?.addEventListener('click', resetForm);
+        container.querySelector('#pc-open').addEventListener('click', () => {
+            formOpen = true;
+            error = null;
+            success = null;
+            draw();
+            container.querySelector('[data-h="supplier_name"]')?.focus();
+        });
+        // Closing keeps a new purchase's data for later; closing an edit discards it.
+        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => {
+            if (editing) {
+                if (!confirm(`ปิดและยกเลิกการแก้ไข ${editing.doc_no}? (ใบซื้อเดิมไม่เปลี่ยนแปลง)`)) return;
+                clearForm();
+            }
+            formOpen = false;
+            error = null;
+            draw();
+        }));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
-            const formUsed = !editing && items.some((i) => i.name);
+            const formUsed = !editing && items.some((i) => i.name.trim());
             if ((formUsed || editing) && !confirm('ข้อมูลที่กรอกค้างไว้ในฟอร์มจะถูกแทนที่ด้วยใบซื้อที่เลือก ดำเนินการต่อ?')) return;
             try {
                 startEdit((await api.get(`/purchases/${b.dataset.edit}`)).data);
             } catch (e) { alert(e.message); }
         }));
-        container.querySelector('#pc-save').addEventListener('click', save);
+        container.querySelector('#pc-save')?.addEventListener('click', save);
         container.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => cancelDoc(Number(b.dataset.cancel), b.dataset.doc)));
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', async () => {
             try {
@@ -597,7 +635,10 @@ export async function render(container) {
             const res = await api.post(`/purchases/${id}/cancel`, { reason: reason.trim() });
             success = `ยกเลิกใบซื้อ ${res.data.doc_no} แล้ว — หักสินค้าออกจากสต๊อก ${res.data.units} ชิ้น`;
             error = null;
-            if (editing?.id === id) clearForm();
+            if (editing?.id === id) {
+                clearForm();
+                formOpen = false;
+            }
             viewing = null;
             await loadDocs();
             draw();
@@ -641,6 +682,7 @@ export async function render(container) {
             const unitsIn = d.items.filter((i) => i.type !== 'supply').reduce((n, i) => n + Number(i.units || 0), 0);
             success = `${editing ? 'บันทึกการแก้ไขใบซื้อ' : 'บันทึกใบซื้อ'} ${d.doc_no} แล้ว: สินค้าใหม่ ${newCount} รายการ เติมสต๊อก ${d.items.length - newCount - supplyCount} รายการ (เข้าสต๊อกรวม ${unitsIn} ชิ้น)${supplyCount ? ` ใช้ในกิจการ ${supplyCount} รายการ ฿${money(d.supply_total)}` : ''} ยอด ฿${money(d.total)}`;
             clearForm();
+            formOpen = false;
             await loadDocs();
         } catch (e) {
             error = e.message;
