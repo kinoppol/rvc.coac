@@ -174,6 +174,81 @@ class DashboardService
         return $alerts;
     }
 
+    /**
+     * Sales per day (week: Mon–Sun, month: every day) or per month (year) for
+     * the period containing $date, plus the previous period's total.
+     *
+     * @return array{period:string, start:string, end:string, prev_date:string, next_date:?string,
+     *               buckets:array<int,array{key:string,value:float,store:float,consign:float,qty:int,bills:int}>,
+     *               total:float, qty:int, bills:int, prev_total:float}
+     */
+    public function salesSeries(string $period, string $date): array
+    {
+        $period = in_array($period, ['week', 'month', 'year'], true) ? $period : 'week';
+        $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $date) ?: new \DateTimeImmutable('today');
+        [$start, $end, $step, $prev] = match ($period) {
+            'week' => [$d->modify('monday this week'), $d->modify('monday this week')->modify('+7 days'), '+1 day', '-7 days'],
+            'month' => [$d->modify('first day of this month'), $d->modify('first day of next month'), '+1 day', '-1 month'],
+            'year' => [$d->setDate((int) $d->format('Y'), 1, 1), $d->setDate((int) $d->format('Y') + 1, 1, 1), '+1 month', '-1 year'],
+        };
+        $keyFormat = $period === 'year' ? 'Y-m' : 'Y-m-d';
+        $sqlKey = $period === 'year' ? "DATE_FORMAT(s.sale_datetime, '%Y-%m')" : 'DATE(s.sale_datetime)';
+
+        $stmt = $this->db->prepare(
+            "SELECT {$sqlKey} AS k,
+                    COALESCE(SUM(si.qty * si.unit_price), 0) AS value,
+                    COALESCE(SUM(CASE WHEN si.consignor_id IS NULL THEN si.qty * si.unit_price ELSE 0 END), 0) AS store,
+                    COALESCE(SUM(si.qty), 0) AS qty,
+                    COUNT(DISTINCT s.id) AS bills
+             FROM sale_items si JOIN sales s ON s.id = si.sale_id
+             WHERE s.sale_datetime >= ? AND s.sale_datetime < ?
+             GROUP BY k"
+        );
+        $stmt->execute([$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 00:00:00')]);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rows[(string) $r['k']] = $r;
+        }
+
+        $buckets = [];
+        for ($t = $start; $t < $end; $t = $t->modify($step)) {
+            $k = $t->format($keyFormat);
+            $r = $rows[$k] ?? null;
+            $value = round((float) ($r['value'] ?? 0), 2);
+            $store = round((float) ($r['store'] ?? 0), 2);
+            $buckets[] = [
+                'key' => $k,
+                'value' => $value,
+                'store' => $store,
+                'consign' => round($value - $store, 2),
+                'qty' => (int) ($r['qty'] ?? 0),
+                'bills' => (int) ($r['bills'] ?? 0),
+            ];
+        }
+
+        $prevStart = $start->modify($prev);
+        $prevTotal = $this->db->prepare(
+            'SELECT COALESCE(SUM(si.qty * si.unit_price), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+             WHERE s.sale_datetime >= ? AND s.sale_datetime < ?'
+        );
+        $prevTotal->execute([$prevStart->format('Y-m-d 00:00:00'), $start->format('Y-m-d 00:00:00')]);
+
+        $today = new \DateTimeImmutable('today');
+        return [
+            'period' => $period,
+            'start' => $start->format('Y-m-d'),
+            'end' => $end->modify('-1 day')->format('Y-m-d'),
+            'prev_date' => $prevStart->format('Y-m-d'),
+            // No browsing into the future.
+            'next_date' => $end <= $today ? $end->format('Y-m-d') : null,
+            'buckets' => $buckets,
+            'total' => round(array_sum(array_column($buckets, 'value')), 2),
+            'qty' => array_sum(array_column($buckets, 'qty')),
+            'bills' => array_sum(array_column($buckets, 'bills')),
+            'prev_total' => round((float) $prevTotal->fetchColumn(), 2),
+        ];
+    }
+
     public function topSellers7Days(int $limit = 5): array
     {
         $stmt = $this->db->prepare(

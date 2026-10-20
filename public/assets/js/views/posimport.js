@@ -35,6 +35,7 @@ export async function render(container) {
     let consignors = [];
     let editing = null; // row index shown in the pairing modal
     let modalTab = 'pick';
+    let viewing = null; // an earlier import opened from the "นำเข้าล่าสุด" list
     let mappings = [];
     let mapQ = '';
 
@@ -173,7 +174,7 @@ export async function render(container) {
               <thead><tr><th>วันที่ขาย</th><th>เลขที่</th><th class="num">รายการ</th><th class="num">ยอดขาย</th></tr></thead>
               <tbody>
                 ${recent.map((r) => `
-                  <tr>
+                  <tr data-open="${r.id}" style="cursor:pointer" title="ดูรายการที่นำเข้า">
                     <td>${escapeHtml(fmtDate(r.sale_date))}<div class="pos-sub">${escapeHtml(r.user_name || '')} · ${escapeHtml(fmtDateTime(r.created_at))}</div></td>
                     <td>${escapeHtml(r.doc_no || '-')}${r.new_products > 0 ? `<div class="pos-sub">สินค้าใหม่ ${count(r.new_products)}</div>` : ''}</td>
                     <td class="num">${count(r.line_count)}${r.skipped_count > 0 ? `<div class="pos-sub">ข้าม ${count(r.skipped_count)}</div>` : ''}</td>
@@ -196,6 +197,7 @@ export async function render(container) {
             draw();
         });
         body.querySelector('#pos-analyze').addEventListener('click', analyze);
+        body.querySelectorAll('[data-open]').forEach((tr) => tr.addEventListener('click', () => openImport(Number(tr.dataset.open))));
     }
 
     function drawReview(body) {
@@ -384,9 +386,68 @@ export async function render(container) {
         </button>`;
     }
 
+    async function openImport(id) {
+        viewing = { id, loading: true };
+        drawModal();
+        try {
+            viewing = (await api.get(`/pos-import/${id}`)).data;
+        } catch (e) {
+            viewing = { id, error: e.message };
+        }
+        drawModal();
+    }
+
+    function importHtml() {
+        const v = viewing;
+        const items = v.items || [];
+        const fee = items.reduce((s, it) => s + Number(it.fee_amount || 0), 0);
+        return `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" style="width:960px">
+            <div class="modal-head">
+              <h2>${v.loading ? 'กำลังโหลด…' : `นำเข้ายอดขายวันที่ ${escapeHtml(fmtDate(v.sale_date || ''))}${v.doc_no ? ` · ${escapeHtml(v.doc_no)}` : ''}`}</h2>
+              <button type="button" class="modal-close" data-close-view title="ปิด" aria-label="ปิด">✕</button>
+            </div>
+            <div class="modal-body">
+              ${v.error ? `<div class="error-box">${escapeHtml(v.error)}</div>` : ''}
+              ${v.loading || v.error ? '' : `
+                <div class="muted" style="font-size:13px;margin-bottom:12px">
+                  นำเข้าโดย ${escapeHtml(v.user_name || '-')} เมื่อ ${escapeHtml(fmtDateTime(v.created_at))}${v.source_label ? ` · ไฟล์ ${escapeHtml(v.source_label)}` : ''}
+                  · ${count(v.line_count)} รายการ${Number(v.skipped_count) ? ` · ไม่นำเข้า ${count(v.skipped_count)} รายการ` : ''}${Number(v.new_products) ? ` · สร้างสินค้าใหม่ ${count(v.new_products)}` : ''}
+                </div>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>#</th><th>สินค้าในระบบ</th><th>ชื่อใน POS</th><th>เจ้าของ</th><th class="num">จำนวน</th><th class="num">ราคา/ชิ้น</th><th class="num">รวม</th><th class="num">ค่าฝาก/กำไร</th></tr></thead>
+                  <tbody>${items.map((it, i) => `
+                    <tr>
+                      <td class="muted">${i + 1}</td>
+                      <td><span class="pos-prod">${escapeHtml(it.product_name)}</span>${Number(it.is_new) ? ' <span class="pill warn">สร้างใหม่ตอนนำเข้า</span>' : ''}</td>
+                      <td class="muted">${escapeHtml(it.pos_names || '-')}</td>
+                      <td class="muted">${escapeHtml(it.owner)}</td>
+                      <td class="num">${count(it.qty)}</td>
+                      <td class="num">${money(it.unit_price)}</td>
+                      <td class="num">${money(it.line_total)}</td>
+                      <td class="num">${money(it.fee_amount)}</td>
+                    </tr>`).join('') || '<tr><td colspan="8" class="empty">ไม่มีรายการขาย (อาจถูกลบไปแล้ว)</td></tr>'}
+                  </tbody>
+                  <tfoot><tr style="font-weight:700"><td colspan="4">รวม</td><td class="num">${count(v.total_qty)}</td><td></td>
+                    <td class="num">${money(v.total_value)}</td><td class="num">${money(fee)}</td></tr></tfoot>
+                </table></div>
+                <p class="muted" style="font-size:12px;margin:10px 0 0">ค่าฝาก/กำไร: สินค้าฝากขาย = ค่าฝากที่ร้านได้ · สินค้าของร้าน = กำไรขั้นต้น ·
+                  ชื่อใน POS มาจากคู่สินค้าที่จับไว้ (แก้ได้ที่แท็บ คู่สินค้าที่จับไว้)</p>`}
+            </div>
+            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-close-view>ปิด</button></div>
+          </div>
+        </div>`;
+    }
+
     function drawModal() {
         const host = container.querySelector('#pos-modal');
         if (!host) return;
+        if (viewing && tab === 'import' && step === 'input') {
+            host.innerHTML = importHtml();
+            host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; drawModal(); }));
+            return;
+        }
         if (editing === null || tab !== 'import' || step !== 'review') { host.innerHTML = ''; return; }
         const r = rows[editing];
         const np = r.newProduct || {

@@ -158,6 +158,12 @@ class PosImportController
         return $this->json($response, ['data' => $result], 201);
     }
 
+    public function show(Request $request, Response $response, array $args): Response
+    {
+        $import = self::service()->find((int) $args['id']);
+        return $import ? $this->json($response, ['data' => $import]) : $this->error($response, 'ไม่พบรายการนำเข้า', 404);
+    }
+
     public function mappings(Request $request, Response $response): Response
     {
         $q = trim((string) ($request->getQueryParams()['q'] ?? ''));

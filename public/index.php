@@ -108,6 +108,7 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('consignor.portal'));
 
     $group->get('/dashboard', [DashboardController::class, 'index']);
+    $group->get('/dashboard/sales-chart', [DashboardController::class, 'salesChart']);
 
     $group->get('/consignors', [ConsignorController::class, 'index']);
     $group->get('/consignors/options', [ConsignorController::class, 'options']);
@@ -140,6 +141,8 @@ $app->group('/api', function ($group) {
     $group->get('/pos-import', [PosImportController::class, 'index'])
         ->add(new RoleGuard('sales.import'));
     $group->post('/pos-import', [PosImportController::class, 'store'])
+        ->add(new RoleGuard('sales.import'));
+    $group->get('/pos-import/{id:[0-9]+}', [PosImportController::class, 'show'])
         ->add(new RoleGuard('sales.import'));
     $group->post('/pos-import/analyze', [PosImportController::class, 'analyze'])
         ->add(new RoleGuard('sales.import'));

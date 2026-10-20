@@ -197,6 +197,41 @@ class PosImportService
         return $stmt->fetchAll();
     }
 
+    /**
+     * One import with the sale lines it recorded. The POS names come from the
+     * saved pairs; is_new = the product was created by this import.
+     */
+    public function find(int $id): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT pi.*, s.doc_no, s.sale_datetime, u.full_name AS user_name
+             FROM pos_imports pi LEFT JOIN sales s ON s.id = pi.sale_id LEFT JOIN users u ON u.id = pi.user_id
+             WHERE pi.id = ?'
+        );
+        $stmt->execute([$id]);
+        $import = $stmt->fetch();
+        if (!$import) {
+            return null;
+        }
+        $import['items'] = [];
+        if ($import['sale_id'] !== null) {
+            $items = $this->db->prepare(
+                "SELECT si.id, si.product_id, si.qty, si.unit_price, si.fee_amount, si.cost_amount,
+                        p.name AS product_name, p.qty_stock, COALESCE(c.name, 'สินค้าของร้าน') AS owner,
+                        (SELECT GROUP_CONCAT(m.pos_name ORDER BY m.pos_name SEPARATOR ', ')
+                         FROM pos_item_mappings m WHERE m.product_id = si.product_id AND m.action = 'product') AS pos_names,
+                        (ABS(TIMESTAMPDIFF(SECOND, p.created_at, ?)) <= 300) AS is_new
+                 FROM sale_items si JOIN products p ON p.id = si.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
+                 WHERE si.sale_id = ? ORDER BY si.id ASC"
+            );
+            $items->execute([$import['created_at'], $import['sale_id']]);
+            $import['items'] = array_map(fn ($r) => $r + [
+                'line_total' => round((float) $r['unit_price'] * (int) $r['qty'], 2),
+            ], $items->fetchAll());
+        }
+        return $import;
+    }
+
     /** Earlier imports of the same day, so the user is warned before importing it twice. */
     public function forDate(string $date): array
     {

@@ -27,4 +27,16 @@ class DashboardController
             'top_sellers' => $service->topSellers7Days(),
         ]);
     }
+
+    /** ?period=week|month|year&date=Y-m-d (any day inside the period; default today). */
+    public function salesChart(Request $request, Response $response): Response
+    {
+        $q = $request->getQueryParams();
+        $date = (string) ($q['date'] ?? '');
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            $date = date('Y-m-d');
+        }
+        $service = new DashboardService(Db::connection());
+        return $this->json($response, ['data' => $service->salesSeries((string) ($q['period'] ?? 'week'), $date)]);
+    }
 }

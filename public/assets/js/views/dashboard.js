@@ -44,6 +44,8 @@ export async function render(container, { navigate }) {
       </div>
     </div>
 
+    <section class="card card-pad" id="sales-chart"></section>
+
     <div class="two-col">
       <section class="card">
         <div class="card-head"><h2>เรื่องที่ต้องจัดการ</h2></div>
@@ -89,9 +91,226 @@ export async function render(container, { navigate }) {
     container.querySelectorAll('[data-go]').forEach((btn) => {
         btn.addEventListener('click', () => navigate(btn.dataset.go));
     });
+    mountSalesChart(container.querySelector('#sales-chart'));
     container.querySelectorAll('[data-alert-go]').forEach((btn) => {
         btn.addEventListener('click', () => navigate(btn.dataset.alertGo));
     });
+}
+
+// ---------- ยอดขายรายวัน / รายเดือน ----------
+
+const PERIODS = [['week', 'สัปดาห์'], ['month', 'เดือน'], ['year', 'ปี']];
+const PERIOD_KEY = 'dashboard.salesPeriod';
+const PREV_LABEL = { week: 'สัปดาห์ก่อน', month: 'เดือนก่อน', year: 'ปีก่อน' };
+
+const asDate = (ymd) => new Date(`${ymd}T00:00:00`);
+const thDate = (ymd, opts) => asDate(ymd).toLocaleDateString('th-TH', opts);
+
+/** 1,284 → "1.3K": y-axis ticks and the cap label stay short. */
+function compact(v) {
+    if (Math.abs(v) >= 1e6) return `${+(v / 1e6).toFixed(1)}M`;
+    if (Math.abs(v) >= 1e3) return `${+(v / 1e3).toFixed(1)}K`;
+    return String(Math.round(v));
+}
+
+/** Clean axis top and step (1/2/2.5/5 × 10^k) for about four gridlines. */
+function niceScale(max) {
+    if (max <= 0) return { top: 100, step: 25 };
+    const raw = max / 4;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    return { top: Math.ceil(max / step) * step, step };
+}
+
+function bucketLabel(period, key, { long = false } = {}) {
+    if (period === 'year') return thDate(`${key}-01`, { month: long ? 'long' : 'short', ...(long ? { year: 'numeric' } : {}) });
+    if (period === 'week') return long ? thDate(key, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }) : thDate(key, { weekday: 'short' });
+    return long ? thDate(key, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : String(asDate(key).getDate());
+}
+
+function periodLabel(d) {
+    if (d.period === 'year') return `ปี ${thDate(d.start, { year: 'numeric' })}`;
+    if (d.period === 'month') return thDate(d.start, { month: 'long', year: 'numeric' });
+    return `${thDate(d.start, { day: 'numeric', month: 'short' })} – ${thDate(d.end, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
+function mountSalesChart(el) {
+    if (!el) return;
+    let period = 'week';
+    try { period = PERIODS.some(([k]) => k === localStorage.getItem(PERIOD_KEY)) ? localStorage.getItem(PERIOD_KEY) : 'week'; } catch (e) { /* private mode */ }
+    let date = '';
+    let data = null;
+    let error = null;
+    let asTable = false;
+    let loading = false;
+
+    async function load() {
+        loading = true;
+        draw();
+        try {
+            data = (await api.get(`/dashboard/sales-chart?period=${period}${date ? `&date=${date}` : ''}`)).data;
+            error = null;
+        } catch (e) {
+            error = e.message;
+        }
+        loading = false;
+        draw();
+    }
+
+    function deltaHtml() {
+        if (!data.prev_total && !data.total) return '';
+        if (!data.prev_total) return `<span class="muted">${PREV_LABEL[data.period]}ไม่มียอดขาย</span>`;
+        const pct = ((data.total - data.prev_total) / data.prev_total) * 100;
+        const up = pct >= 0;
+        // Status color with an arrow and words, never color alone.
+        return `<span style="color:var(${up ? '--ok' : '--bad'});font-weight:600">${up ? '▲' : '▼'} ${up ? 'เพิ่มขึ้น' : 'ลดลง'} ${Math.abs(pct).toFixed(1)}%</span>
+          <span class="muted">จาก${PREV_LABEL[data.period]} (฿ ${money(data.prev_total)})</span>`;
+    }
+
+    function draw() {
+        el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0 0 2px">ยอดขาย${data ? ` ${escapeHtml(periodLabel(data))}` : ''}</h2>
+            ${data ? `<div style="font-size:24px;font-weight:700;letter-spacing:-.4px">฿ ${money(data.total)}</div>
+              <div style="font-size:12.5px;display:flex;gap:8px;flex-wrap:wrap">
+                <span class="muted">${count(data.qty)} ชิ้น · ${count(data.bills)} บิล</span>${deltaHtml()}
+              </div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <div class="tabs">${PERIODS.map(([k, l]) => `<button type="button" class="tab-btn ${k === period ? 'active' : ''}" data-period="${k}">${l}</button>`).join('')}</div>
+            <button type="button" class="btn secondary sm" data-nav="prev" title="ช่วงก่อนหน้า" aria-label="ช่วงก่อนหน้า" ${data && !loading ? '' : 'disabled'}>←</button>
+            <button type="button" class="btn secondary sm" data-nav="next" title="ช่วงถัดไป" aria-label="ช่วงถัดไป" ${data?.next_date && !loading ? '' : 'disabled'}>→</button>
+            <button type="button" class="btn secondary sm" data-nav="today" ${date ? '' : 'disabled'}>ปัจจุบัน</button>
+            <button type="button" class="btn secondary sm" data-table>${asTable ? 'ดูเป็นกราฟ' : 'ดูเป็นตาราง'}</button>
+          </div>
+        </div>
+        ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
+        <div class="sales-chart-body" style="position:relative;min-height:240px;${loading ? 'opacity:.5' : ''}">
+          ${data ? (asTable ? tableHtml() : '') : '<div class="empty">กำลังโหลด...</div>'}
+        </div>`;
+
+        el.querySelectorAll('[data-period]').forEach((b) => b.addEventListener('click', () => {
+            period = b.dataset.period;
+            date = '';
+            try { localStorage.setItem(PERIOD_KEY, period); } catch (e) { /* private mode */ }
+            load();
+        }));
+        el.querySelector('[data-nav="prev"]').addEventListener('click', () => { date = data.prev_date; load(); });
+        el.querySelector('[data-nav="next"]').addEventListener('click', () => { date = data.next_date; load(); });
+        el.querySelector('[data-nav="today"]').addEventListener('click', () => { date = ''; load(); });
+        el.querySelector('[data-table]').addEventListener('click', () => { asTable = !asTable; draw(); });
+        if (data && !asTable) chart(el.querySelector('.sales-chart-body'));
+    }
+
+    function tableHtml() {
+        return `<div class="table-wrap" style="max-height:340px"><table>
+          <thead><tr><th>${data.period === 'year' ? 'เดือน' : 'วันที่'}</th><th class="num">ยอดขาย</th><th class="num">ฝากขาย</th><th class="num">สินค้าของร้าน</th><th class="num">ชิ้น</th><th class="num">บิล</th></tr></thead>
+          <tbody>${data.buckets.map((b) => `
+            <tr><td>${escapeHtml(bucketLabel(data.period, b.key, { long: true }))}</td><td class="num">${money(b.value)}</td>
+                <td class="num">${money(b.consign)}</td><td class="num">${money(b.store)}</td><td class="num">${count(b.qty)}</td><td class="num">${count(b.bills)}</td></tr>`).join('')}
+          </tbody>
+          <tfoot><tr style="font-weight:700"><td>รวม</td><td class="num">${money(data.total)}</td>
+            <td class="num">${money(data.buckets.reduce((s, b) => s + b.consign, 0))}</td><td class="num">${money(data.buckets.reduce((s, b) => s + b.store, 0))}</td>
+            <td class="num">${count(data.qty)}</td><td class="num">${count(data.bills)}</td></tr></tfoot>
+        </table></div>`;
+    }
+
+    /** Single-series column chart: thin columns, rounded caps, hairline grid, one tooltip per column. */
+    function chart(host) {
+        const W = Math.max(host.clientWidth, 280);
+        const H = 240;
+        const m = { l: 44, r: 8, t: 22, b: 26 };
+        const pw = W - m.l - m.r;
+        const ph = H - m.t - m.b;
+        const bs = data.buckets;
+        const max = Math.max(0, ...bs.map((b) => b.value));
+        const { top, step } = niceScale(max);
+        const band = pw / bs.length;
+        const bw = Math.max(2, Math.min(24, band * 0.62, band - 2));
+        const y = (v) => m.t + ph - (v / top) * ph;
+        const base = m.t + ph;
+        const today = new Date();
+        const todayKey = data.period === 'year'
+            ? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
+            : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        // Month view: label every k-th day so the numbers never collide.
+        const every = Math.max(1, Math.ceil(26 / band));
+        const maxIdx = max > 0 ? bs.findIndex((b) => b.value === max) : -1;
+
+        const grid = [];
+        for (let v = 0; v <= top + 1e-9; v += step) {
+            grid.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>
+              <text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${compact(v)}</text>`);
+        }
+        const bars = bs.map((b, i) => {
+            const cx = m.l + band * i + band / 2;
+            const x = cx - bw / 2;
+            const label = (i % every === 0 || i === bs.length - 1 && data.period !== 'month')
+                ? `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="11" fill="${b.key === todayKey ? 'var(--text)' : 'var(--muted)'}" font-weight="${b.key === todayKey ? 700 : 400}">${escapeHtml(bucketLabel(data.period, b.key))}</text>`
+                : '';
+            let col = '';
+            if (b.value > 0) {
+                const h = Math.max(1, base - y(b.value));
+                const r = Math.min(4, bw / 2, h);
+                const yt = base - h;
+                col = `<path class="sc-bar" data-i="${i}" fill="var(--pri)" d="M${x},${base} V${yt + r} Q${x},${yt} ${x + r},${yt} H${x + bw - r} Q${x + bw},${yt} ${x + bw},${yt + r} V${base} Z"/>`;
+            }
+            const cap = i === maxIdx
+                ? `<text x="${cx}" y="${y(b.value) - 6}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--text)">${compact(b.value)}</text>`
+                : '';
+            return `<rect class="sc-hit" data-i="${i}" x="${m.l + band * i}" y="${m.t}" width="${band}" height="${ph}" fill="transparent"/>${col}${cap}${label}`;
+        }).join('');
+
+        host.innerHTML = `
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="กราฟยอดขาย ${escapeHtml(periodLabel(data))}" style="display:block;overflow:visible">
+            ${grid.join('')}
+            <rect class="sc-hover" x="0" y="${m.t}" width="0" height="${ph}" fill="var(--hover)" pointer-events="none"/>
+            ${bars}
+            <line x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}" stroke="var(--border)" stroke-width="1"/>
+          </svg>
+          ${max === 0 ? '<div class="muted" style="position:absolute;inset:0;display:grid;place-items:center;font-size:13px;pointer-events:none">ไม่มียอดขายในช่วงนี้</div>' : ''}
+          <div class="sc-tip" role="tooltip" style="position:absolute;pointer-events:none;display:none;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 11px;font-size:12.5px;box-shadow:0 8px 24px rgba(16,24,40,.18);white-space:nowrap;z-index:2"></div>`;
+
+        const tip = host.querySelector('.sc-tip');
+        const hover = host.querySelector('.sc-hover');
+        const svg = host.querySelector('svg');
+        // The band behind each column is the hit target, so even a short column is easy to hover.
+        const show = (i) => {
+            const b = bs[i];
+            hover.setAttribute('x', m.l + band * i);
+            hover.setAttribute('width', band);
+            tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${escapeHtml(bucketLabel(data.period, b.key, { long: true }))}</div>
+              <div style="display:flex;justify-content:space-between;gap:16px"><span class="muted">ยอดขาย</span><b>฿ ${money(b.value)}</b></div>
+              ${b.value > 0 ? `
+              <div style="display:flex;justify-content:space-between;gap:16px"><span class="muted">ฝากขาย</span><span>฿ ${money(b.consign)}</span></div>
+              <div style="display:flex;justify-content:space-between;gap:16px"><span class="muted">สินค้าของร้าน</span><span>฿ ${money(b.store)}</span></div>
+              <div class="muted" style="margin-top:3px">${count(b.qty)} ชิ้น · ${count(b.bills)} บิล</div>` : ''}`;
+            tip.style.display = 'block';
+            const cx = m.l + band * i + band / 2;
+            const left = Math.min(Math.max(cx - tip.offsetWidth / 2, 0), W - tip.offsetWidth);
+            tip.style.left = `${left}px`;
+            tip.style.top = `${Math.max(y(b.value) - tip.offsetHeight - 10, 0)}px`;
+        };
+        const hide = () => { tip.style.display = 'none'; hover.setAttribute('width', 0); };
+        host.querySelectorAll('[data-i]').forEach((n) => {
+            n.addEventListener('mouseenter', () => show(Number(n.dataset.i)));
+            n.addEventListener('click', () => show(Number(n.dataset.i)));
+        });
+        svg.addEventListener('mouseleave', hide);
+    }
+
+    // Redraw at the new width when the layout changes (sidebar, window, phone rotation).
+    let lastW = 0;
+    const ro = new ResizeObserver(() => {
+        const w = el.clientWidth;
+        if (data && !asTable && Math.abs(w - lastW) > 4) {
+            lastW = w;
+            chart(el.querySelector('.sales-chart-body'));
+        }
+    });
+    ro.observe(el);
+    load();
 }
 
 function renderAlerts(alerts) {

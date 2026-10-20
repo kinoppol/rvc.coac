@@ -1,12 +1,65 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 
+/** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
+const COLUMNS = [
+    ['name', 'สินค้า', '', 'text'],
+    ['barcode', 'บาร์โค้ดชิ้น', 'บาร์โค้ดบนตัวสินค้า 1 ชิ้น ใช้สแกนตอนขาย', 'text'],
+    ['packs', 'บาร์โค้ดแพ็ค', 'บาร์โค้ดของแพ็ค/ลังที่ซื้อเข้า สินค้าเดียวกันมีได้หลายขนาดแพ็ค', 'text'],
+    ['qty_received', 'รับเข้า', '', 'num'],
+    ['qty_sold', 'ขายแล้ว', '', 'num'],
+    ['qty_stock', 'คงเหลือ', '', 'num'],
+    ['cost_price', 'ต้นทุน/ชิ้น', '', 'num'],
+    ['sale_price', 'ราคาขาย', '', 'num'],
+    ['margin_percent', 'กำไร %', '', 'num'],
+    ['stock_cost_value', 'มูลค่าทุนคงเหลือ', '', 'num'],
+    ['profit_total', 'กำไรสะสม', '', 'num'],
+    ['last_purchase', 'ซื้อล่าสุด', '', 'date'],
+];
+const SORT_KEY = 'inventory.sort';
+const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
+
 export async function render(container, { navigate, permissions }) {
     let search = '';
     let res = null;
     // Barcode editor: piece barcode (scanned at the POS) + any number of pack barcodes.
     let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], error, busy }
     const canEdit = permissions.includes('purchase.create');
+    let sort = { key: 'name', dir: 'asc' };
+    try {
+        const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
+        if (saved && COLUMNS.some(([k]) => k === saved.key) && ['asc', 'desc'].includes(saved.dir)) sort = saved;
+    } catch (e) { /* private mode / bad value */ }
+
+    function sortValue(p, key) {
+        if (key === 'packs') return p.pack_barcodes[0]?.barcode ?? '';
+        return p[key];
+    }
+
+    /** Sorted copy; empty values (no barcode, never bought) always go last. */
+    function sorted(list) {
+        const [, , , type] = COLUMNS.find(([k]) => k === sort.key);
+        const sign = sort.dir === 'asc' ? 1 : -1;
+        return [...list].sort((a, b) => {
+            const va = sortValue(a, sort.key);
+            const vb = sortValue(b, sort.key);
+            const ea = va === null || va === undefined || va === '';
+            const eb = vb === null || vb === undefined || vb === '';
+            if (ea || eb) return ea === eb ? thCollator.compare(a.name, b.name) : (ea ? 1 : -1);
+            let c = type === 'num' ? Number(va) - Number(vb) : thCollator.compare(String(va), String(vb));
+            if (c === 0) c = thCollator.compare(a.name, b.name) * sign;
+            return c * sign;
+        });
+    }
+
+    function headHtml() {
+        return COLUMNS.map(([key, label, title, type]) => {
+            const on = sort.key === key;
+            const aria = on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
+            return `<th aria-sort="${aria}" class="${type === 'num' ? 'num' : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>
+              <button type="button" class="th-sort ${on ? 'on' : ''}" data-sort="${key}">${escapeHtml(label)}<span class="th-arrow" aria-hidden="true">${on ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span></button></th>`;
+        }).join('');
+    }
 
     async function load() {
         const q = search ? `?q=${encodeURIComponent(search)}` : '';
@@ -36,16 +89,22 @@ export async function render(container, { navigate, permissions }) {
         </section>
         <section class="card">
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th title="บาร์โค้ดบนตัวสินค้า 1 ชิ้น ใช้สแกนตอนขาย">บาร์โค้ดชิ้น</th>
-              <th title="บาร์โค้ดของแพ็ค/ลังที่ซื้อเข้า สินค้าเดียวกันมีได้หลายขนาดแพ็ค">บาร์โค้ดแพ็ค</th><th>รับเข้า</th><th>ขายแล้ว</th><th>คงเหลือ</th>
-              <th>ต้นทุน/ชิ้น</th><th>ราคาขาย</th><th>กำไร %</th><th>มูลค่าทุนคงเหลือ</th><th>กำไรสะสม</th><th>ซื้อล่าสุด</th></tr></thead>
-            <tbody>${res.data.map(row).join('') || `<tr><td colspan="12" class="empty">ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน</td></tr>`}</tbody>
+            <thead><tr>${headHtml()}</tr></thead>
+            <tbody>${sorted(res.data).map(row).join('') || `<tr><td colspan="12" class="empty">ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน</td></tr>`}</tbody>
           </table></div>
         </section>
         ${editing ? editHtml() : ''}`;
 
         const input = container.querySelector('#q');
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { search = input.value.trim(); load(); } });
+        container.querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+            const key = b.dataset.sort;
+            const [, , , type] = COLUMNS.find(([k]) => k === key);
+            // Same column flips; a new column starts A→ก for text, biggest/newest first for numbers and dates.
+            sort = sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: type === 'text' ? 'asc' : 'desc' };
+            try { localStorage.setItem(SORT_KEY, JSON.stringify(sort)); } catch (e) { /* private mode */ }
+            draw();
+        }));
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {

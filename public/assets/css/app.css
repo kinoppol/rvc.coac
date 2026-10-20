@@ -316,3 +316,10 @@ tr.pos-saved .pos-reason { color: var(--ok); }
 .pos-tags .pill { font-size: 10.5px; padding: 1px 7px; }
 .pos-qty { width: 72px; text-align: right; }
 .pos-qty.missing { border-color: var(--bad) !important; }
+
+/* Sortable table headers: the whole header is the button. */
+.th-sort { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; }
+.th-sort:hover, .th-sort.on { color: var(--text); }
+.th-sort:focus-visible { outline: 2px solid var(--pri); outline-offset: 2px; border-radius: 4px; }
+.th-arrow { font-size: 10px; opacity: .45; }
+.th-sort.on .th-arrow { opacity: 1; color: var(--pri); }
