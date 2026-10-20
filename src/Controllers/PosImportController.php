@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\ProductRepo;
+use App\Repositories\AiProviderRepo;
 use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
@@ -80,6 +81,24 @@ class PosImportController
                 'previous_imports' => $date ? self::service()->forDate($date) : [],
             ],
         ]);
+    }
+
+    /** Models the user may pick for pairing; tool-capable ones can search the product database. */
+    public function models(Request $request, Response $response): Response
+    {
+        try {
+            $rows = (new AiProviderRepo(Db::connection()))->enabledModels($request->getAttribute('user')['role']);
+        } catch (\PDOException $e) {
+            $rows = [];
+        }
+        return $this->json($response, ['data' => array_map(fn ($m) => [
+            'id' => (int) $m['id'],
+            'label' => $m['display_name'] ?: $m['model_id'],
+            'provider_name' => $m['provider_name'],
+            'supports_tools' => (bool) $m['supports_tools'],
+            'price_in' => $m['price_in'] !== null ? (float) $m['price_in'] : null,
+            'price_out' => $m['price_out'] !== null ? (float) $m['price_out'] : null,
+        ], $rows)]);
     }
 
     /** AI pairing for a few lines (the page sends the pending lines batch by batch). */

@@ -26,6 +26,9 @@ export async function render(container) {
     // AI pairing runs a few lines per request after the table is shown.
     let aiRun = { running: false, done: 0, total: 0, searches: 0, stopped: false, error: null };
     const AI_BATCH = 10;
+    const MODEL_KEY = 'posimport.model';
+    let models = [];
+    let modelId = null;
     let error = null;
     let success = null;
     let recent = [];
@@ -39,6 +42,17 @@ export async function render(container) {
         try { recent = (await api.get('/pos-import')).data; } catch (e) { recent = []; }
     }
     try { consignors = (await api.get('/consignors/options')).data; } catch (e) { consignors = []; }
+    try {
+        // Tool-capable first (they can search the product database), then cheapest; unpriced last.
+        const price = (m) => (m.price_in == null || m.price_out == null ? 1e9 : m.price_in + m.price_out);
+        models = (await api.get('/pos-import/models')).data
+            .sort((a, b) => (b.supports_tools - a.supports_tools) || (price(a) - price(b)));
+    } catch (e) { models = []; }
+    try {
+        const saved = Number(localStorage.getItem(MODEL_KEY));
+        modelId = models.some((m) => m.id === saved) ? saved : (models[0]?.id ?? null);
+    } catch (e) { modelId = models[0]?.id ?? null; }
+    const currentModel = () => models.find((m) => m.id === modelId) || null;
     await loadRecent();
 
     // ---------- row helpers ----------
@@ -219,7 +233,7 @@ export async function render(container) {
           ${warnings.map((w) => `<div class="pc-warn">${escapeHtml(w)}</div>`).join('')}
           <div class="pos-legend">
             <span><i class="saved"></i>เขียว = คู่ที่เคยจับคู่ไว้แล้ว (ใช้คู่เดิม)</span>
-            <span><i class="fresh"></i>เหลือง = คู่ใหม่ ${ai?.available ? `(ผู้ช่วย AI แนะนำ · ${escapeHtml(ai.model || '')})` : ''} — ตรวจแล้วกด «ยืนยัน» หรือ «เปลี่ยน»</span>
+            <span><i class="fresh"></i>เหลือง = คู่ใหม่ ${models.length ? '(ผู้ช่วย AI หรือระบบแนะนำ)' : ''} — ตรวจแล้วกด «ยืนยัน» หรือ «เปลี่ยน»</span>
             <span><i></i>ไม่มีสี = ยังไม่ได้จับคู่</span>
           </div>
           <div class="tabs">
@@ -256,7 +270,13 @@ export async function render(container) {
         });
         body.querySelector('#pos-save').addEventListener('click', save);
         body.querySelector('#ai-stop')?.addEventListener('click', () => { aiRun.stopped = true; draw(); });
+        body.querySelector('#ai-run')?.addEventListener('click', () => startAi());
         body.querySelector('#ai-retry')?.addEventListener('click', () => runAi());
+        body.querySelector('#ai-model')?.addEventListener('change', (e) => {
+            modelId = Number(e.target.value);
+            try { localStorage.setItem(MODEL_KEY, String(modelId)); } catch (err) { /* private mode */ }
+            draw();
+        });
         body.querySelector('#pos-short')?.addEventListener('change', (e) => { allowShort = e.target.checked; draw(); });
         body.querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', () => { filter = b.dataset.filter; draw(); }));
         body.querySelectorAll('[data-confirm]').forEach((b) => b.addEventListener('click', () => {
@@ -394,7 +414,7 @@ export async function render(container) {
                   <div style="display:flex;flex-direction:column;gap:6px">${r.candidates.map((c) => candHtml(c, r)).join('')}</div>` : ''}
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                   <div class="search-box" style="flex:1">🔍 <input id="pos-search" placeholder="ค้นหาสินค้าอื่นจากชื่อ หรือบาร์โค้ด"></div>
-                  ${ai?.available ? `<button type="button" class="btn secondary" id="pos-ai-one" ${aiRun.running ? 'disabled' : ''}>✨ ให้ผู้ช่วย AI ค้นหาให้</button>` : ''}
+                  ${currentModel() ? `<button type="button" class="btn secondary" id="pos-ai-one" ${aiRun.running ? 'disabled' : ''}>✨ ให้ผู้ช่วย AI ค้นหาให้</button>` : ''}
                 </div>
                 ${r.ai_note ? `<div class="pos-sub">AI: ${escapeHtml(r.ai_note)}</div>` : ''}
                 <div id="pos-search-results" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -428,7 +448,7 @@ export async function render(container) {
             e.target.disabled = true;
             e.target.textContent = 'ผู้ช่วย AI กำลังค้นหา…';
             try {
-                const res = (await api.post('/pos-import/suggest', { lines: [aiLine(rows[i], i)] })).data;
+                const res = (await api.post('/pos-import/suggest', { lines: [aiLine(rows[i], i)], model: modelId })).data;
                 rows[i].confirmed = false;
                 (res.matches || []).forEach((m) => applyAi(m, true));
                 if (!res.matches?.length) rows[i].ai_note = 'AI ไม่ได้ตอบรายการนี้';
@@ -542,35 +562,60 @@ export async function render(container) {
     // ---------- actions ----------
 
     function aiStatusHtml() {
-        if (!ai) return '';
-        if (!ai.available) {
-            return '<div class="pc-warn">ยังไม่มีโมเดลผู้ช่วย AI ที่เปิดให้บทบาทของคุณใช้ — แนะนำคู่จากชื่อและราคาทุนเท่านั้น</div>';
+        if (!models.length) {
+            return '<div class="pc-warn">ยังไม่มีโมเดลผู้ช่วย AI ที่เปิดให้บทบาทของคุณใช้ (ตั้งค่าได้ที่ ตั้งค่าผู้ช่วย AI) — ตอนนี้แนะนำคู่จากชื่อและราคาทุนเท่านั้น</div>';
         }
+        const m = currentModel();
+        // Every open line, so the button can run again (e.g. with another model).
+        const todo = rows.filter(aiCandidateRow).length;
         const pct = aiRun.total ? Math.round((aiRun.done / aiRun.total) * 100) : 0;
-        const tools = ai.tools ? '' : ' (โมเดลนี้ค้นฐานข้อมูลเองไม่ได้ เลือกได้เฉพาะจากสินค้าที่ใกล้เคียง)';
+        const price = (x) => (x.price_in != null && x.price_out != null ? ` · $${(x.price_in + x.price_out).toFixed(2)}/1M` : '');
+        const picker = `
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;font-weight:600">โมเดล
+            <select id="ai-model" ${aiRun.running ? 'disabled' : ''} style="border:1px solid var(--border);background:var(--surface2);color:inherit;border-radius:8px;padding:6px 8px;max-width:340px">
+              ${models.map((x) => `<option value="${x.id}" ${x.id === modelId ? 'selected' : ''}>${escapeHtml(x.label)} · ${escapeHtml(x.provider_name)}${x.supports_tools ? ' · 🔎 ค้นฐานข้อมูลได้' : ''}${price(x)}</option>`).join('')}
+            </select>
+          </label>`;
+        const note = m && !m.supports_tools
+            ? '<div class="pos-sub">โมเดลนี้ไม่รองรับ tools จึงค้นฐานข้อมูลเองไม่ได้ เลือกได้เฉพาะจากสินค้าที่ใกล้เคียงที่ระบบคัดให้ (เลือกโมเดลที่มี 🔎 จะแม่นกว่า)</div>'
+            : '';
+        let status = '';
         if (aiRun.running) {
-            return `<div class="pc-warn" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-              <span style="flex:1;min-width:220px">✨ ผู้ช่วย AI (${escapeHtml(ai.model || '')}) กำลังไล่หาสินค้าในฐานข้อมูล ${count(aiRun.done)}/${count(aiRun.total)} รายการ${aiRun.searches ? ` · ค้นแล้ว ${count(aiRun.searches)} ครั้ง` : ''}${tools}
-                <div style="height:6px;background:var(--surface2);border-radius:99px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--warn)"></div></div>
-              </span>
-              <button type="button" class="btn secondary sm" id="ai-stop" ${aiRun.stopped ? 'disabled' : ''}>${aiRun.stopped ? 'กำลังหยุด…' : 'หยุด'}</button>
-            </div>`;
+            status = `<div style="flex-basis:100%;font-size:13px">✨ กำลังไล่หาสินค้าในฐานข้อมูล ${count(aiRun.done)}/${count(aiRun.total)} รายการ${aiRun.searches ? ` · ค้นแล้ว ${count(aiRun.searches)} ครั้ง` : ''}
+              <div style="height:6px;background:var(--surface2);border-radius:99px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--warn)"></div></div></div>`;
+        } else if (aiRun.error) {
+            status = `<div style="flex-basis:100%;font-size:13px;color:var(--bad)">ผู้ช่วย AI ขัดข้อง: ${escapeHtml(aiRun.error)} (ไล่หาไปแล้ว ${count(aiRun.done)}/${count(aiRun.total)})
+              ${aiTargets().length ? '<button type="button" class="btn secondary sm" id="ai-retry" style="margin-left:8px">ลองต่อ</button>' : ''}</div>`;
+        } else if (aiRun.total) {
+            status = `<div style="flex-basis:100%;font-size:13px">✨ ผู้ช่วย AI ไล่หาแล้ว ${count(aiRun.done)} รายการ${aiRun.searches ? ` (ค้นฐานข้อมูล ${count(aiRun.searches)} ครั้ง)` : ''} — ตรวจแถวสีเหลืองแล้วกด «ยืนยัน»</div>`;
         }
-        const left = pendingAi().length;
-        if (aiRun.error) {
-            return `<div class="pc-warn">ผู้ช่วย AI ขัดข้อง: ${escapeHtml(aiRun.error)} (ไล่หาไปแล้ว ${count(aiRun.done)}/${count(aiRun.total)})
-              ${left ? `<button type="button" class="btn secondary sm" id="ai-retry" style="margin-left:8px">ลองต่อ</button>` : ''}</div>`;
-        }
-        if (aiRun.total) {
-            return `<div class="pc-warn">✨ ผู้ช่วย AI ไล่หาแล้ว ${count(aiRun.done)} รายการ${aiRun.searches ? ` (ค้นฐานข้อมูล ${count(aiRun.searches)} ครั้ง)` : ''}${tools}
-              ${left ? `<button type="button" class="btn secondary sm" id="ai-retry" style="margin-left:8px">ให้ AI หาต่ออีก ${count(left)} รายการ</button>` : ''}</div>`;
-        }
-        return '';
+        return `
+        <div class="pc-warn" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0">
+          ${picker}
+          ${aiRun.running
+              ? `<button type="button" class="btn secondary sm" id="ai-stop" ${aiRun.stopped ? 'disabled' : ''}>${aiRun.stopped ? 'กำลังหยุด…' : '■ หยุด'}</button>`
+              : `<button type="button" class="btn sm" id="ai-run" ${todo ? '' : 'disabled'}>✨ จับคู่ด้วยผู้ช่วย AI${todo ? ` (${count(todo)} รายการ)` : ''}</button>`}
+          <span class="pos-sub" style="margin:0">ส่งเฉพาะรายการที่ยังไม่ได้ยืนยันและไม่ใช่คู่เดิม ทีละ ${AI_BATCH} รายการ</span>
+          ${note ? `<div style="flex-basis:100%">${note}</div>` : ''}
+          ${status}
+        </div>`;
     }
 
-    /** Lines still waiting for the AI: not confirmed by the user, not answered yet. */
-    const pendingAi = () => rows.map((r, i) => [r, i]).filter(([r]) => r.ai_pending && !r.aiDone && !r.confirmed);
+    /**
+     * Lines the AI button works on: not confirmed by the user, not a saved
+     * pair, and not an exact-name match; aiDone = answered in this run.
+     */
+    const aiCandidateRow = (r) => !r.confirmed && r.decision?.origin !== 'saved' && (r.ai_pending || !r.decision);
+    const aiTargets = () => rows.map((r, i) => [r, i]).filter(([r]) => aiCandidateRow(r) && !r.aiDone);
+    const pendingAi = aiTargets;
     const aiLine = (r, i) => ({ i, pos_name: r.pos_name, pos_category: r.pos_category, qty: r.qty, net: r.net, cost: r.cost });
+
+    /** The button: (re)asks the AI about every line still open, with the chosen model. */
+    function startAi() {
+        rows.forEach((r) => { if (aiCandidateRow(r)) r.aiDone = false; });
+        aiRun = { running: false, done: 0, total: 0, searches: 0, stopped: false, error: null };
+        runAi();
+    }
 
     /** One AI answer onto its row, unless the user has decided that row meanwhile. */
     function applyAi(m, force = false) {
@@ -598,7 +643,7 @@ export async function render(container) {
     }
 
     async function runAi() {
-        if (!ai?.available || aiRun.running) return;
+        if (!currentModel() || aiRun.running) return;
         const todo = pendingAi();
         if (!todo.length) return;
         const before = aiRun.done;
@@ -608,7 +653,7 @@ export async function render(container) {
             const batch = pendingAi().slice(0, AI_BATCH);
             if (!batch.length) break;
             try {
-                const res = (await api.post('/pos-import/suggest', { lines: batch.map(([r, i]) => aiLine(r, i)) })).data;
+                const res = (await api.post('/pos-import/suggest', { lines: batch.map(([r, i]) => aiLine(r, i)), model: modelId })).data;
                 (res.matches || []).forEach((m) => applyAi(m));
                 aiRun.searches += res.searches || 0;
             } catch (e) {
@@ -647,7 +692,6 @@ export async function render(container) {
         }
         busy = null;
         draw();
-        if (step === 'review') runAi();
     }
 
     async function save() {
