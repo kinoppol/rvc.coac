@@ -122,18 +122,18 @@ class PosMatcher
      */
     public function analyze(array $lines, array $user): array
     {
-        $saved = $this->savedMappings(array_map(fn ($l) => self::key($l['pos_name']), $lines));
+        $saved = $this->savedMappings($lines);
         $out = [];
         foreach ($lines as $i => $l) {
             $row = self::withUnits($l) + ['status' => 'none', 'match' => null, 'candidates' => [], 'ai_pending' => false];
-            $map = $saved[self::key($l['pos_name'])] ?? null;
+            $map = self::savedFor($saved, $row);
             if ($map && ($map['action'] === 'skip' || $map['product'])) {
                 $row['status'] = 'saved';
                 $row['match'] = [
                     'action' => $map['action'],
                     'product' => $map['product'],
                     'by' => 'saved',
-                    'reason' => 'จับคู่ไว้แล้ว (ใช้มา ' . (int) $map['times_used'] . ' ครั้ง)',
+                    'reason' => ($map['by_sku'] ? 'จับคู่ไว้แล้วตาม SKU' : 'จับคู่ไว้แล้ว') . ' (ใช้มา ' . (int) $map['times_used'] . ' ครั้ง)',
                 ];
                 $out[] = $row;
                 continue;
@@ -168,6 +168,7 @@ class PosMatcher
         $cost = isset($l['cost']) && $l['cost'] !== null && $l['cost'] !== '' ? (float) $l['cost'] : null;
         return [
             'pos_name' => trim((string) $l['pos_name']),
+            'pos_sku' => isset($l['pos_sku']) && trim((string) $l['pos_sku']) !== '' ? trim((string) $l['pos_sku']) : null,
             'pos_category' => isset($l['pos_category']) && $l['pos_category'] !== '' ? (string) $l['pos_category'] : null,
             'qty' => $qty > 0 ? $qty : null,
             'net' => round((float) ($l['net'] ?? 0), 2),
@@ -577,22 +578,58 @@ class PosMatcher
         return array_filter($data['matches'], 'is_array');
     }
 
-    /** @return array<string,array> saved pairs by POS key, with the paired product */
-    public function savedMappings(array $keys): array
+    /**
+     * Saved pairs for these report lines, by SKU and by POS name key, each with the paired product.
+     * @return array{sku:array<string,array>, key:array<string,array>}
+     */
+    public function savedMappings(array $lines): array
     {
-        $keys = array_values(array_unique(array_filter($keys)));
-        if (!$keys) {
-            return [];
+        $skus = array_values(array_unique(array_filter(array_map(fn ($l) => self::skuKey($l['pos_sku'] ?? null), $lines))));
+        $keys = array_values(array_unique(array_filter(array_map(fn ($l) => self::key((string) $l['pos_name']), $lines))));
+        $out = ['sku' => [], 'key' => []];
+        if (!$skus && !$keys) {
+            return $out;
         }
-        $in = implode(',', array_fill(0, count($keys), '?'));
-        $stmt = $this->db->prepare("SELECT * FROM pos_item_mappings WHERE pos_key IN ($in)");
-        $stmt->execute($keys);
-        $out = [];
+        $where = [];
+        if ($keys) {
+            $where[] = 'pos_key IN (' . implode(',', array_fill(0, count($keys), '?')) . ')';
+        }
+        if ($skus) {
+            $where[] = 'pos_sku IN (' . implode(',', array_fill(0, count($skus), '?')) . ')';
+        }
+        $stmt = $this->db->prepare('SELECT * FROM pos_item_mappings WHERE ' . implode(' OR ', $where) . ' ORDER BY id ASC');
+        $stmt->execute(array_merge($keys, $skus));
         foreach ($stmt->fetchAll() as $m) {
             $m['product'] = $m['product_id'] !== null ? $this->product((int) $m['product_id']) : null;
-            $out[$m['pos_key']] = $m;
+            if ($m['pos_sku'] !== null) {
+                $out['sku'][self::skuKey($m['pos_sku'])] ??= $m;
+            }
+            $out['key'][$m['pos_key']] = $m;
         }
         return $out;
+    }
+
+    /**
+     * The saved pair of one line: by SKU first (the POS name may have changed),
+     * else by name — unless that pair belongs to another SKU (same name, different item).
+     */
+    private static function savedFor(array $saved, array $line): ?array
+    {
+        $sku = self::skuKey($line['pos_sku'] ?? null);
+        if ($sku !== null && isset($saved['sku'][$sku])) {
+            return $saved['sku'][$sku] + ['by_sku' => true];
+        }
+        $m = $saved['key'][self::key($line['pos_name'])] ?? null;
+        if (!$m || ($sku !== null && $m['pos_sku'] !== null && self::skuKey($m['pos_sku']) !== $sku)) {
+            return null;
+        }
+        return $m + ['by_sku' => false];
+    }
+
+    public static function skuKey(?string $sku): ?string
+    {
+        $sku = mb_strtolower(trim((string) $sku));
+        return $sku === '' || $sku === '-' ? null : $sku;
     }
 
     public function product(int $id): ?array

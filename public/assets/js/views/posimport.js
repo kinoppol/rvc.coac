@@ -2,14 +2,16 @@ import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 
 /**
- * นำเข้ายอดขายจากระบบ POS ภายนอก: the report has item names only (no barcode
- * or code), so each name is paired with a product here. Pairs saved from an
+ * นำเข้ายอดขายจากระบบ POS ภายนอก: the report has item names (and, in newer
+ * reports, the POS's own SKU) but no barcode known here, so each item is paired
+ * with a product; a saved pair is found by SKU first, then by name. Pairs saved from an
  * earlier import come back green; new pairs (AI or name/cost suggestions, or
  * picked by hand) are yellow until the import is saved and they are remembered.
  */
 const OWNER_STORE = 'สินค้าของร้าน';
 
-export async function render(container) {
+export async function render(container, { permissions = [] } = {}) {
+    const canCancel = permissions.includes('sales.import.cancel');
     let tab = 'import';
     let step = 'input'; // input | review
     let text = '';
@@ -151,7 +153,7 @@ export async function render(container) {
             <div>
               <h2 style="margin-bottom:4px">รายงานยอดขายจาก POS</h2>
               <p class="muted" style="margin:0;font-size:13px">วางตารางรายงานยอดขายแยกตามสินค้า (Markdown, หรือคัดลอกจาก Excel) หรือเลือกไฟล์ .md / .csv / .txt
-              ระบบจะใช้คู่สินค้าที่เคยจับไว้ก่อน แล้วให้ผู้ช่วย AI แนะนำคู่ของรายการที่เหลือจากชื่อที่คล้ายกันและราคาทุนที่เท่ากัน</p>
+              ระบบจะใช้คู่สินค้าที่เคยจับไว้ก่อน (ตาม SKU ถ้ารายงานมี ไม่งั้นตามชื่อ) แล้วให้ผู้ช่วย AI แนะนำคู่ของรายการที่เหลือจากชื่อที่คล้ายกันและราคาทุนที่เท่ากัน</p>
             </div>
             ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
             <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
@@ -163,9 +165,9 @@ export async function render(container) {
               </label>
             </div>
             <label class="field">หรือวางรายงานที่นี่
-              <textarea id="pos-text" rows="14" style="font-family:ui-monospace,monospace;font-size:12.5px" placeholder="| รายการสินค้า | หมวดหมู่ | จำนวนที่ขาย | ยอดขายสุทธิ (บาท) | ต้นทุนสินค้า (บาท) |&#10;| 7up | น้ำอัดลม | 4 | 34.00 | 18.00 |">${escapeHtml(text)}</textarea>
+              <textarea id="pos-text" rows="14" style="font-family:ui-monospace,monospace;font-size:12.5px" placeholder="| # | สินค้า | SKU | สินค้าที่ขาย | ยอดขายสุทธิ (฿) |&#10;| 1 | 7up | 10386 | 4 | 52.00 |&#10;&#10;หรือรูปแบบเดิม&#10;| รายการสินค้า | หมวดหมู่ | จำนวนที่ขาย | ยอดขายสุทธิ (บาท) | ต้นทุนสินค้า (บาท) |">${escapeHtml(text)}</textarea>
             </label>
-            <p class="muted" style="margin:-6px 0 0;font-size:12px">ต้องมีคอลัมน์ชื่อสินค้าและยอดขาย ส่วนจำนวน ต้นทุน และหมวดหมู่ช่วยให้จับคู่ได้แม่นขึ้น — ถ้ารายงานระบุวันที่ ระบบจะใช้วันที่นั้นให้อัตโนมัติ (ถ้ายังไม่ได้เลือกเอง)</p>
+            <p class="muted" style="margin:-6px 0 0;font-size:12px">ต้องมีคอลัมน์ชื่อสินค้าและยอดขาย ส่วน SKU จำนวน ต้นทุน และหมวดหมู่ช่วยให้จับคู่ได้แม่นขึ้น (SKU ใช้เป็นรหัสอ้างอิงในการนำเข้าครั้งถัดไป แม้ชื่อใน POS จะเปลี่ยน) — ถ้ารายงานระบุวันที่ ระบบจะใช้วันที่นั้นให้อัตโนมัติ (ถ้ายังไม่ได้เลือกเอง)</p>
             <div><button type="button" class="btn" id="pos-analyze" ${busy ? 'disabled' : ''}>${busy === 'analyze' ? 'กำลังอ่านรายงานและจับคู่สินค้า…' : 'อ่านรายงานและจับคู่สินค้า'}</button></div>
           </section>
           <section class="card">
@@ -174,11 +176,11 @@ export async function render(container) {
               <thead><tr><th>วันที่ขาย</th><th>เลขที่</th><th class="num">รายการ</th><th class="num">ยอดขาย</th></tr></thead>
               <tbody>
                 ${recent.map((r) => `
-                  <tr data-open="${r.id}" style="cursor:pointer" title="ดูรายการที่นำเข้า">
-                    <td>${escapeHtml(fmtDate(r.sale_date))}<div class="pos-sub">${escapeHtml(r.user_name || '')} · ${escapeHtml(fmtDateTime(r.created_at))}</div></td>
+                  <tr data-open="${r.id}" class="${r.status === 'cancelled' ? 'pc-cancelled' : ''}" style="cursor:pointer" title="ดูรายการที่นำเข้า">
+                    <td>${escapeHtml(fmtDate(r.sale_date))}${r.status === 'cancelled' ? ` <span class="pill bad" title="${escapeHtml(r.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}<div class="pos-sub">${escapeHtml(r.user_name || '')} · ${escapeHtml(fmtDateTime(r.created_at))}</div></td>
                     <td>${escapeHtml(r.doc_no || '-')}${r.new_products > 0 ? `<div class="pos-sub">สินค้าใหม่ ${count(r.new_products)}</div>` : ''}</td>
                     <td class="num">${count(r.line_count)}${r.skipped_count > 0 ? `<div class="pos-sub">ข้าม ${count(r.skipped_count)}</div>` : ''}</td>
-                    <td class="num">${money(r.total_value)}</td>
+                    <td class="num"><span class="${r.status === 'cancelled' ? 'pc-total' : ''}">${money(r.total_value)}</span></td>
                   </tr>`).join('') || `<tr><td colspan="4" class="empty">ยังไม่เคยนำเข้า</td></tr>`}
               </tbody>
             </table></div>
@@ -338,7 +340,8 @@ export async function render(container) {
         return `
         <tr class="${colorOf(r)} ${isSkip(r) ? 'pos-skip' : ''}">
           <td class="muted">${i + 1}</td>
-          <td><div class="pos-prod">${escapeHtml(r.pos_name)}</div>${r.pos_category ? `<div class="pos-sub">${escapeHtml(r.pos_category)}</div>` : ''}</td>
+          <td><div class="pos-prod">${escapeHtml(r.pos_name)}</div>${r.pos_sku || r.pos_category
+              ? `<div class="pos-sub">${[r.pos_sku ? `SKU ${escapeHtml(r.pos_sku)}` : '', escapeHtml(r.pos_category || '')].filter(Boolean).join(' · ')}</div>` : ''}</td>
           <td class="num">
             <input type="number" min="1" step="1" class="pos-qty ${needsQty ? 'missing' : ''}" data-qty="${i}" value="${r.qty ?? ''}" ${isSkip(r) ? 'disabled' : ''}>
             ${r.qtyGuessed ? '<div class="pos-sub">คำนวณจากราคาขาย</div>' : ''}
@@ -397,10 +400,31 @@ export async function render(container) {
         drawModal();
     }
 
+    async function cancelImport(v) {
+        const reason = prompt(`ยกเลิกการนำเข้ายอดขายวันที่ ${fmtDate(v.sale_date)}${v.doc_no ? ` (${v.doc_no})` : ''}
+
+ยอดขายนี้จะถูกลบออก สินค้าคืนเข้าสต๊อก ${count(v.total_qty)} ชิ้น รายการในสมุดบัญชีผู้ฝากของการขายนี้ถูกถอนออก
+และสินค้าที่สร้างใหม่ตอนนำเข้า (ถ้ายังไม่ถูกใช้ที่อื่น) จะถูกลบ — คู่สินค้าที่จับไว้ยังเก็บไว้ใช้ต่อ (ยกเลิกแล้วกู้คืนไม่ได้)
+กรุณาระบุเหตุผลที่ยกเลิก:`);
+        if (reason === null) return;
+        if (!reason.trim()) { alert('กรุณาระบุเหตุผลที่ยกเลิก'); return; }
+        try {
+            const res = (await api.post(`/pos-import/${v.id}/cancel`, { reason: reason.trim() })).data;
+            success = `ยกเลิกการนำเข้า${res.doc_no ? ` ${res.doc_no}` : ''} แล้ว — คืนสินค้าเข้าสต๊อก ${count(res.units)} ชิ้น`
+                + (res.removed_products ? ` · ลบสินค้าที่สร้างตอนนำเข้า ${count(res.removed_products)} รายการ` : '');
+            viewing = null;
+            await loadRecent();
+            draw();
+        } catch (e) {
+            alert(e.message);
+        }
+    }
+
     function importHtml() {
         const v = viewing;
         const items = v.items || [];
         const fee = items.reduce((s, it) => s + Number(it.fee_amount || 0), 0);
+        const cancelled = v.status === 'cancelled';
         return `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:960px">
@@ -415,13 +439,16 @@ export async function render(container) {
                   นำเข้าโดย ${escapeHtml(v.user_name || '-')} เมื่อ ${escapeHtml(fmtDateTime(v.created_at))}${v.source_label ? ` · ไฟล์ ${escapeHtml(v.source_label)}` : ''}
                   · ${count(v.line_count)} รายการ${Number(v.skipped_count) ? ` · ไม่นำเข้า ${count(v.skipped_count)} รายการ` : ''}${Number(v.new_products) ? ` · สร้างสินค้าใหม่ ${count(v.new_products)}` : ''}
                 </div>
+                ${cancelled ? `<div class="error-box" style="margin-bottom:12px">
+                  <b>การนำเข้านี้ถูกยกเลิกแล้ว</b> เมื่อ ${escapeHtml(fmtDateTime(v.cancelled_at))}${v.cancelled_by_name ? ` โดย ${escapeHtml(v.cancelled_by_name)}` : ''}
+                  <div>เหตุผล: ${escapeHtml(v.cancel_reason || '-')} — รายการด้านล่างเป็นข้อมูล ณ ตอนยกเลิก ไม่นับรวมในยอดขายและสต๊อกแล้ว</div></div>` : ''}
                 <div class="table-wrap"><table>
-                  <thead><tr><th>#</th><th>สินค้าในระบบ</th><th>ชื่อใน POS</th><th>เจ้าของ</th><th class="num">จำนวน</th><th class="num">ราคา/ชิ้น</th><th class="num">รวม</th><th class="num">ค่าฝาก/กำไร</th></tr></thead>
+                  <thead><tr><th>#</th><th>สินค้าในระบบ</th><th>ชื่อใน POS / SKU</th><th>เจ้าของ</th><th class="num">จำนวน</th><th class="num">ราคา/ชิ้น</th><th class="num">รวม</th><th class="num">ค่าฝาก/กำไร</th></tr></thead>
                   <tbody>${items.map((it, i) => `
                     <tr>
                       <td class="muted">${i + 1}</td>
                       <td><span class="pos-prod">${escapeHtml(it.product_name)}</span>${Number(it.is_new) ? ' <span class="pill warn">สร้างใหม่ตอนนำเข้า</span>' : ''}</td>
-                      <td class="muted">${escapeHtml(it.pos_names || '-')}</td>
+                      <td class="muted">${escapeHtml(it.pos_names || '-')}${it.pos_skus ? `<div class="pos-sub">SKU ${escapeHtml(it.pos_skus)}</div>` : ''}</td>
                       <td class="muted">${escapeHtml(it.owner)}</td>
                       <td class="num">${count(it.qty)}</td>
                       <td class="num">${money(it.unit_price)}</td>
@@ -435,7 +462,9 @@ export async function render(container) {
                 <p class="muted" style="font-size:12px;margin:10px 0 0">ค่าฝาก/กำไร: สินค้าฝากขาย = ค่าฝากที่ร้านได้ · สินค้าของร้าน = กำไรขั้นต้น ·
                   ชื่อใน POS มาจากคู่สินค้าที่จับไว้ (แก้ได้ที่แท็บ คู่สินค้าที่จับไว้)</p>`}
             </div>
-            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-close-view>ปิด</button></div>
+            <div class="modal-foot">${canCancel && !cancelled && !v.loading && !v.error
+                ? '<button type="button" class="btn secondary pc-cancel-btn" data-cancel-import>ยกเลิกการนำเข้านี้</button>' : '<span></span>'}
+              <button type="button" class="btn secondary" data-close-view>ปิด</button></div>
           </div>
         </div>`;
     }
@@ -446,6 +475,7 @@ export async function render(container) {
         if (viewing && tab === 'import' && step === 'input') {
             host.innerHTML = importHtml();
             host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; drawModal(); }));
+            host.querySelector('[data-cancel-import]')?.addEventListener('click', () => cancelImport(viewing));
             return;
         }
         if (editing === null || tab !== 'import' || step !== 'review') { host.innerHTML = ''; return; }
@@ -465,7 +495,7 @@ export async function render(container) {
             </div>
             <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
               <div class="muted" style="font-size:13px">
-                จาก POS: ${r.pos_category ? `หมวด ${escapeHtml(r.pos_category)} · ` : ''}จำนวน ${r.qty ?? '-'} · ยอดขาย ${money(r.net)}
+                จาก POS: ${r.pos_sku ? `SKU ${escapeHtml(r.pos_sku)} · ` : ''}${r.pos_category ? `หมวด ${escapeHtml(r.pos_category)} · ` : ''}จำนวน ${r.qty ?? '-'} · ยอดขาย ${money(r.net)}
                 · ราคา/ชิ้น ${r.unit_price != null ? money(r.unit_price) : '-'} · ทุน/ชิ้น ${r.unit_cost != null ? money(r.unit_cost) : '-'}
               </div>
               <div class="tabs">
@@ -580,7 +610,7 @@ export async function render(container) {
         <section class="card">
           <div class="card-head" style="gap:12px;flex-wrap:wrap">
             <h2>คู่สินค้าที่จับไว้ (${count(mappings.length)})</h2>
-            <div class="search-box" style="max-width:320px">🔍 <input id="map-q" placeholder="ชื่อใน POS หรือชื่อสินค้า" value="${escapeHtml(mapQ)}"></div>
+            <div class="search-box" style="max-width:320px">🔍 <input id="map-q" placeholder="ชื่อใน POS, SKU หรือชื่อสินค้า" value="${escapeHtml(mapQ)}"></div>
           </div>
           <p class="muted" style="margin:12px 18px 0;font-size:12.5px">ทุกครั้งที่นำเข้า ระบบจะใช้คู่เหล่านี้ให้ทันที (แสดงเป็นสีเขียว) ลบคู่ที่ผิดออกได้ แล้วจับคู่ใหม่ในการนำเข้าครั้งถัดไป</p>
           <div class="table-wrap"><table>
@@ -588,7 +618,8 @@ export async function render(container) {
             <tbody>
               ${mappings.map((m) => `
                 <tr class="pos-saved">
-                  <td><div class="pos-prod">${escapeHtml(m.pos_name)}</div>${m.pos_category ? `<div class="pos-sub">${escapeHtml(m.pos_category)}</div>` : ''}</td>
+                  <td><div class="pos-prod">${escapeHtml(m.pos_name)}</div>${m.pos_sku || m.pos_category
+                    ? `<div class="pos-sub">${[m.pos_sku ? `SKU ${escapeHtml(m.pos_sku)}` : '', escapeHtml(m.pos_category || '')].filter(Boolean).join(' · ')}</div>` : ''}</td>
                   <td>${m.action === 'skip' ? '<span class="muted">ไม่นำเข้า</span>' : `${escapeHtml(m.product_name || '-')}<div class="pos-sub">${escapeHtml(m.consignor_name || '')}</div>`}</td>
                   <td>${escapeHtml(SRC[m.source] || m.source)}</td>
                   <td class="num">${count(m.times_used)}</td>
@@ -768,6 +799,7 @@ export async function render(container) {
                 allow_short_stock: allowShort,
                 lines: rows.map((r) => ({
                     pos_name: r.pos_name,
+                    pos_sku: r.pos_sku,
                     pos_category: r.pos_category,
                     qty: r.qty,
                     net: r.net,

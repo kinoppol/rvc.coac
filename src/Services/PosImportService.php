@@ -55,10 +55,12 @@ class PosImportService
                 $label .= " «{$posName}»";
                 $action = (string) ($line['action'] ?? '');
                 $category = trim((string) ($line['pos_category'] ?? '')) ?: null;
+                $sku = PosMatcher::skuKey(isset($line['pos_sku']) ? (string) $line['pos_sku'] : null) !== null
+                    ? mb_substr(trim((string) $line['pos_sku']), 0, 64) : null;
                 $origin = (string) ($line['origin'] ?? 'manual');
 
                 if ($action === 'skip') {
-                    $this->remember($posName, $category, null, 'skip', $origin, $userId);
+                    $this->remember($posName, $sku, $category, null, 'skip', $origin, $userId);
                     $skipped++;
                     continue;
                 }
@@ -86,7 +88,7 @@ class PosImportService
                     throw new \RuntimeException("{$label}: ยังไม่ได้เลือกว่าจะจับคู่ เพิ่มเป็นสินค้าใหม่ หรือไม่นำเข้า");
                 }
 
-                $this->remember($posName, $category, $productId, 'product', $origin, $userId);
+                $this->remember($posName, $sku, $category, $productId, 'product', $origin, $userId);
                 $items[] = ['product_id' => $productId, 'qty' => $qty, 'unit_price' => $unitPrice];
             }
 
@@ -164,31 +166,219 @@ class PosImportService
         ], $userId, $ip);
     }
 
-    /** Saves (or updates) the pair so the next import of this name reuses it. */
-    private function remember(string $posName, ?string $category, ?int $productId, string $action, string $origin, int $userId): void
+    /**
+     * Saves (or updates) the pair so the next import reuses it: the pair of the
+     * same SKU, else the pair of the same name (an older name-only pair gets the
+     * SKU), else a new one.
+     */
+    private function remember(string $posName, ?string $sku, ?string $category, ?int $productId, string $action, string $origin, int $userId): void
     {
         $source = in_array($origin, self::ORIGINS, true) ? $origin : 'manual';
-        // `source` is assigned first: MySQL evaluates the update list left to right,
-        // and an unchanged pair keeps how it was first made.
+        $key = PosMatcher::key($posName);
+        $existing = null;
+        if ($sku !== null) {
+            $stmt = $this->db->prepare('SELECT * FROM pos_item_mappings WHERE pos_sku = ? ORDER BY id ASC LIMIT 1');
+            $stmt->execute([$sku]);
+            $existing = $stmt->fetch() ?: null;
+        }
+        if (!$existing) {
+            $stmt = $this->db->prepare('SELECT * FROM pos_item_mappings WHERE pos_key = ?');
+            $stmt->execute([$key]);
+            $byName = $stmt->fetch() ?: null;
+            if ($byName && ($sku === null || $byName['pos_sku'] === null || PosMatcher::skuKey($byName['pos_sku']) === PosMatcher::skuKey($sku))) {
+                $existing = $byName;
+            } elseif ($byName) {
+                // Same name, another SKU: a different item, kept as its own pair.
+                $key = mb_substr($key, 0, 120) . '#' . PosMatcher::skuKey($sku);
+            }
+        }
+        $category = $category !== null ? mb_substr($category, 0, 191) : null;
+        if ($existing) {
+            // An unchanged pair keeps how it was first made.
+            $same = (int) $existing['product_id'] === (int) $productId && $existing['action'] === $action;
+            $this->db->prepare(
+                'UPDATE pos_item_mappings SET pos_sku = COALESCE(?, pos_sku), pos_name = ?, pos_category = ?, product_id = ?, action = ?,
+                    source = ?, times_used = times_used + 1, last_used_at = NOW() WHERE id = ?'
+            )->execute([$sku, mb_substr($posName, 0, 191), $category, $productId, $action, $same ? $existing['source'] : $source, $existing['id']]);
+            return;
+        }
         $this->db->prepare(
             'INSERT INTO pos_item_mappings
-                (pos_key, pos_name, pos_category, product_id, action, source, times_used, created_by, created_at, updated_at, last_used_at)
-             VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW(), NOW())
-             ON DUPLICATE KEY UPDATE
-                source = IF(product_id <=> VALUES(product_id) AND action = VALUES(action), source, VALUES(source)),
-                pos_name = VALUES(pos_name), pos_category = VALUES(pos_category),
-                product_id = VALUES(product_id), action = VALUES(action),
-                times_used = times_used + 1, last_used_at = NOW()'
-        )->execute([
-            PosMatcher::key($posName), mb_substr($posName, 0, 191), $category !== null ? mb_substr($category, 0, 191) : null,
-            $productId, $action, $source, $userId,
-        ]);
+                (pos_key, pos_sku, pos_name, pos_category, product_id, action, source, times_used, created_by, created_at, updated_at, last_used_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW(), NOW())'
+        )->execute([$key, $sku, mb_substr($posName, 0, 191), $category, $productId, $action, $source, $userId]);
+    }
+
+    /**
+     * Cancels an import: its sale is removed, the goods go back into stock,
+     * the consignors' passbook entries of that sale are taken out (later
+     * balances recomputed), and products it created are deleted if nothing
+     * else used them. The import row stays, marked cancelled, with a snapshot
+     * of its lines. Saved pairs are kept (a pair of a deleted product goes with it).
+     */
+    public function cancel(int $id, string $reason, int $userId, ?string $ip): array
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่ยกเลิก');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM pos_imports WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $import = $stmt->fetch();
+            if (!$import) {
+                throw new \RuntimeException('ไม่พบรายการนำเข้า');
+            }
+            if ($import['status'] === 'cancelled') {
+                throw new \RuntimeException('การนำเข้านี้ถูกยกเลิกไปแล้ว');
+            }
+            $items = $this->find($id)['items'];
+            $sale = null;
+            if ($import['sale_id'] !== null) {
+                $stmt = $this->db->prepare('SELECT * FROM sales WHERE id = ? FOR UPDATE');
+                $stmt->execute([$import['sale_id']]);
+                $sale = $stmt->fetch() ?: null;
+            }
+
+            $created = [];
+            if ($sale) {
+                $this->removeLedgerEntries($sale, $items);
+                foreach ($items as $it) {
+                    $productId = (int) $it['product_id'];
+                    $old = $this->products->find($productId);
+                    $this->db->prepare(
+                        'UPDATE products SET qty_sold = qty_sold - ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?'
+                    )->execute([(int) $it['qty'], (int) $it['qty'], $productId]);
+                    $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
+                    if ((int) $it['is_new']) {
+                        $created[$productId] = true;
+                    }
+                }
+                $this->db->prepare('DELETE FROM sale_items WHERE sale_id = ?')->execute([$sale['id']]);
+                $this->db->prepare('DELETE FROM sales WHERE id = ?')->execute([$sale['id']]);
+                $this->audit->log('sales', (int) $sale['id'], 'delete',
+                    ['doc_no' => $sale['doc_no'], 'total_qty' => (int) $sale['total_qty'], 'total_value' => (float) $sale['total_value']],
+                    ['reason' => 'ยกเลิกการนำเข้ายอดขายจาก POS: ' . $reason], $userId, $ip);
+            }
+            $removed = $this->removeCreatedProducts(array_keys($created), $userId, $ip);
+
+            $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
+                'product_id', 'product_name', 'pos_names', 'pos_skus', 'owner', 'qty', 'unit_price', 'line_total', 'fee_amount', 'is_new',
+            ])), $items);
+            $this->db->prepare(
+                "UPDATE pos_imports SET status = 'cancelled', sale_id = NULL, cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ?,
+                    cancelled_items = ?, cancelled_doc_no = ? WHERE id = ?"
+            )->execute([$userId, mb_substr($reason, 0, 255), json_encode($snapshot, JSON_UNESCAPED_UNICODE), $sale['doc_no'] ?? null, $id]);
+            $this->audit->log('pos_imports', $id, 'cancel',
+                ['sale_date' => $import['sale_date'], 'doc_no' => $sale['doc_no'] ?? null, 'total_value' => (float) $import['total_value']],
+                ['status' => 'cancelled', 'reason' => $reason, 'removed_products' => $removed], $userId, $ip);
+            $this->db->commit();
+            return [
+                'id' => $id, 'doc_no' => $sale['doc_no'] ?? null, 'lines' => count($items),
+                'units' => array_sum(array_map(fn ($it) => (int) $it['qty'], $items)), 'removed_products' => $removed,
+            ];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Takes out the passbook entries a sale posted: per consignor the sale
+     * entry (ref = the sale's doc no), the fee entry right after it, and a
+     * listing-fee refund that the sale triggered for one of its products.
+     * The later balances of those consignors are then recomputed.
+     */
+    private function removeLedgerEntries(array $sale, array $items): void
+    {
+        $stmt = $this->db->prepare("SELECT * FROM ledger_entries WHERE ref_no = ? AND type = 'sale' ORDER BY id ASC");
+        $stmt->execute([$sale['doc_no']]);
+        $remove = [];
+        $from = [];
+        $fee = $this->db->prepare(
+            "SELECT id FROM ledger_entries WHERE consignor_id = ? AND id > ? AND type = 'fee' AND description LIKE 'หักค่าฝากขาย%'
+             AND created_by <=> ? AND created_at BETWEEN ? AND DATE_ADD(?, INTERVAL 10 SECOND) ORDER BY id ASC LIMIT 1"
+        );
+        foreach ($stmt->fetchAll() as $e) {
+            $cid = (int) $e['consignor_id'];
+            $this->db->prepare('SELECT id FROM consignors WHERE id = ? FOR UPDATE')->execute([$cid]);
+            $remove[] = (int) $e['id'];
+            $from[$cid] = min($from[$cid] ?? PHP_INT_MAX, (int) $e['id']);
+            $fee->execute([$cid, $e['id'], $e['created_by'], $e['created_at'], $e['created_at']]);
+            if ($feeId = $fee->fetchColumn()) {
+                $remove[] = (int) $feeId;
+            }
+        }
+
+        // Listing-fee refunds are posted while the sale is written, before its sale entries.
+        $waive = (int) ((new SettingsService($this->db))->get('waive_qty') ?? 20);
+        $lfr = $this->db->prepare(
+            "SELECT id FROM ledger_entries WHERE consignor_id = ? AND type = 'listing_fee_refund' AND description LIKE ?
+             AND created_at BETWEEN ? AND DATE_ADD(?, INTERVAL 10 SECOND) ORDER BY id DESC LIMIT 1"
+        );
+        foreach ($items as $it) {
+            $p = $this->products->find((int) $it['product_id']);
+            if (!$p || $p['consignor_id'] === null || !(int) $p['listing_fee_refunded'] || (int) $p['qty_sold'] - (int) $it['qty'] > $waive) {
+                continue;
+            }
+            $lfr->execute([$p['consignor_id'], '%- ' . $p['name'], $sale['created_at'], $sale['created_at']]);
+            if ($lfrId = $lfr->fetchColumn()) {
+                $cid = (int) $p['consignor_id'];
+                $remove[] = (int) $lfrId;
+                $from[$cid] = min($from[$cid] ?? PHP_INT_MAX, (int) $lfrId);
+                $this->db->prepare('UPDATE products SET listing_fee_refunded = 0 WHERE id = ?')->execute([$p['id']]);
+            }
+        }
+        if (!$remove) {
+            return;
+        }
+        $this->db->prepare('DELETE FROM ledger_entries WHERE id IN (' . implode(',', array_fill(0, count($remove), '?')) . ')')->execute($remove);
+
+        $prev = $this->db->prepare('SELECT balance_after FROM ledger_entries WHERE consignor_id = ? AND id < ? ORDER BY id DESC LIMIT 1');
+        $later = $this->db->prepare('SELECT id, amount_in, amount_out FROM ledger_entries WHERE consignor_id = ? AND id > ? ORDER BY id ASC');
+        $upd = $this->db->prepare('UPDATE ledger_entries SET balance_after = ? WHERE id = ?');
+        foreach ($from as $cid => $firstId) {
+            $prev->execute([$cid, $firstId]);
+            $balance = (float) ($prev->fetchColumn() ?: 0);
+            $later->execute([$cid, $firstId]);
+            foreach ($later->fetchAll() as $e) {
+                $balance = round($balance + (float) $e['amount_in'] - (float) $e['amount_out'], 2);
+                $upd->execute([$balance, $e['id']]);
+            }
+        }
+    }
+
+    /** Products the import created, deleted when nothing else sold, received or returned them. */
+    private function removeCreatedProducts(array $productIds, int $userId, ?string $ip): int
+    {
+        $removed = 0;
+        $used = $this->db->prepare('SELECT COUNT(*) FROM sale_items WHERE product_id = ?');
+        foreach ($productIds as $productId) {
+            $p = $this->products->find((int) $productId);
+            $used->execute([$productId]);
+            if (!$p || (int) $used->fetchColumn() > 0 || (int) $p['qty_sold'] !== 0 || (int) $p['qty_returned'] !== 0
+                || (int) $p['qty_stock'] !== (int) $p['qty_received']) {
+                continue;
+            }
+            try {
+                $this->db->exec('SAVEPOINT pos_remove_product');
+                $this->db->prepare('DELETE FROM products WHERE id = ?')->execute([$productId]);
+                $this->db->exec('RELEASE SAVEPOINT pos_remove_product');
+                $this->audit->log('products', (int) $productId, 'delete', $p, null, $userId, $ip);
+                $removed++;
+            } catch (\PDOException $e) {
+                // Referenced elsewhere (e.g. a stock count): keep the product.
+                $this->db->exec('ROLLBACK TO SAVEPOINT pos_remove_product');
+            }
+        }
+        return $removed;
     }
 
     public function recent(int $limit = 30): array
     {
         $stmt = $this->db->prepare(
-            'SELECT pi.*, s.doc_no, u.full_name AS user_name
+            'SELECT pi.*, COALESCE(s.doc_no, pi.cancelled_doc_no) AS doc_no, u.full_name AS user_name
              FROM pos_imports pi LEFT JOIN sales s ON s.id = pi.sale_id LEFT JOIN users u ON u.id = pi.user_id
              ORDER BY pi.id DESC LIMIT ?'
         );
@@ -204,8 +394,10 @@ class PosImportService
     public function find(int $id): ?array
     {
         $stmt = $this->db->prepare(
-            'SELECT pi.*, s.doc_no, s.sale_datetime, u.full_name AS user_name
+            'SELECT pi.*, COALESCE(s.doc_no, pi.cancelled_doc_no) AS doc_no, s.sale_datetime, u.full_name AS user_name,
+                    cu.full_name AS cancelled_by_name
              FROM pos_imports pi LEFT JOIN sales s ON s.id = pi.sale_id LEFT JOIN users u ON u.id = pi.user_id
+             LEFT JOIN users cu ON cu.id = pi.cancelled_by
              WHERE pi.id = ?'
         );
         $stmt->execute([$id]);
@@ -214,12 +406,16 @@ class PosImportService
             return null;
         }
         $import['items'] = [];
-        if ($import['sale_id'] !== null) {
+        if ($import['status'] === 'cancelled') {
+            $import['items'] = json_decode((string) $import['cancelled_items'], true) ?: [];
+        } elseif ($import['sale_id'] !== null) {
             $items = $this->db->prepare(
                 "SELECT si.id, si.product_id, si.qty, si.unit_price, si.fee_amount, si.cost_amount,
                         p.name AS product_name, p.qty_stock, COALESCE(c.name, 'สินค้าของร้าน') AS owner,
                         (SELECT GROUP_CONCAT(m.pos_name ORDER BY m.pos_name SEPARATOR ', ')
                          FROM pos_item_mappings m WHERE m.product_id = si.product_id AND m.action = 'product') AS pos_names,
+                        (SELECT GROUP_CONCAT(DISTINCT m.pos_sku ORDER BY m.pos_sku SEPARATOR ', ')
+                         FROM pos_item_mappings m WHERE m.product_id = si.product_id AND m.action = 'product' AND m.pos_sku IS NOT NULL) AS pos_skus,
                         (ABS(TIMESTAMPDIFF(SECOND, p.created_at, ?)) <= 300) AS is_new
                  FROM sale_items si JOIN products p ON p.id = si.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
                  WHERE si.sale_id = ? ORDER BY si.id ASC"
@@ -236,9 +432,9 @@ class PosImportService
     public function forDate(string $date): array
     {
         $stmt = $this->db->prepare(
-            'SELECT pi.id, pi.created_at, pi.line_count, pi.total_value, s.doc_no, u.full_name AS user_name
+            "SELECT pi.id, pi.created_at, pi.line_count, pi.total_value, s.doc_no, u.full_name AS user_name
              FROM pos_imports pi LEFT JOIN sales s ON s.id = pi.sale_id LEFT JOIN users u ON u.id = pi.user_id
-             WHERE pi.sale_date = ? ORDER BY pi.id ASC'
+             WHERE pi.sale_date = ? AND pi.status = 'active' ORDER BY pi.id ASC"
         );
         $stmt->execute([$date]);
         return $stmt->fetchAll();
@@ -247,15 +443,15 @@ class PosImportService
     public function mappings(string $q = ''): array
     {
         $stmt = $this->db->prepare(
-            "SELECT m.id, m.pos_name, m.pos_category, m.action, m.source, m.times_used, m.last_used_at, m.updated_at,
+            "SELECT m.id, m.pos_name, m.pos_sku, m.pos_category, m.action, m.source, m.times_used, m.last_used_at, m.updated_at,
                     p.id AS product_id, p.name AS product_name, COALESCE(c.name, IF(p.id IS NULL, NULL, 'สินค้าของร้าน')) AS consignor_name
              FROM pos_item_mappings m
              LEFT JOIN products p ON p.id = m.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
-             WHERE ? = '' OR m.pos_name LIKE ? OR p.name LIKE ?
+             WHERE ? = '' OR m.pos_name LIKE ? OR p.name LIKE ? OR m.pos_sku LIKE ?
              ORDER BY m.pos_name ASC LIMIT 500"
         );
         $like = '%' . $q . '%';
-        $stmt->execute([$q, $like, $like]);
+        $stmt->execute([$q, $like, $like, $like]);
         return $stmt->fetchAll();
     }
 

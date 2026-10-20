@@ -164,6 +164,24 @@ class PosImportController
         return $import ? $this->json($response, ['data' => $import]) : $this->error($response, 'ไม่พบรายการนำเข้า', 404);
     }
 
+    /** Admin only (sales.import.cancel): undoes an import's sale, stock and passbook entries. */
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        try {
+            $result = self::service()->cancel(
+                (int) $args['id'],
+                (string) ($body['reason'] ?? ''),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
     public function mappings(Request $request, Response $response): Response
     {
         $q = trim((string) ($request->getQueryParams()['q'] ?? ''));

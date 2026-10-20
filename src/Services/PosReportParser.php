@@ -17,7 +17,8 @@ class PosReportParser
     private const COLUMNS = [
         'profit' => '/กำไร|profit|margin/iu',
         'cost' => '/ต้นทุน|cost/iu',
-        'qty' => '/จำนวน|qty|quantity|ชิ้น/iu',
+        'sku' => '/^(sku|plu|รหัส|code|item code|บาร์โค้ด|barcode)/iu',
+        'qty' => '/จำนวน|ที่ขาย|qty|quantity|sold|ชิ้น/iu',
         'net' => '/ยอดขาย|สุทธิ|รายได้|net|sales|amount|total/iu',
         'category' => '/หมวด|ประเภท|กลุ่ม|category|group/iu',
         'name' => '/รายการ|สินค้า|ชื่อ|item|product|name/iu',
@@ -31,7 +32,10 @@ class PosReportParser
     ];
 
     /**
-     * @return array{date:?string, lines:array<int,array{pos_name:string,pos_category:?string,qty:?int,net:float,cost:?float}>, warnings:string[]}
+     * A report may hold several tables (e.g. "top 5" then "all items"); a table
+     * whose items all appear in a larger one is a summary and is left out.
+     *
+     * @return array{date:?string, lines:array<int,array{pos_name:string,pos_sku:?string,pos_category:?string,qty:?int,net:float,cost:?float}>, warnings:string[]}
      */
     public static function parse(string $text): array
     {
@@ -48,6 +52,7 @@ class PosReportParser
         $delimiter = null;
         $lines = [];
         $warnings = [];
+        $table = -1;
         foreach ($rows as [$delim, $cells]) {
             if (self::isSeparator($cells)) {
                 continue;
@@ -56,6 +61,7 @@ class PosReportParser
             if ($header !== null) {
                 $map = $header;
                 $delimiter = $delim;
+                $table++;
                 continue;
             }
             // Only rows of the same table as the header (not bullet text with commas around it).
@@ -70,6 +76,7 @@ class PosReportParser
             $qty = isset($map['qty']) ? self::number($cells[$map['qty']] ?? null) : null;
             $cost = isset($map['cost']) ? self::number($cells[$map['cost']] ?? null) : null;
             $category = isset($map['category']) ? trim($cells[$map['category']] ?? '') : '';
+            $sku = isset($map['sku']) ? trim(str_replace(['**', '__'], '', $cells[$map['sku']] ?? '')) : '';
             if ($net === null && $qty === null) {
                 continue;
             }
@@ -77,7 +84,9 @@ class PosReportParser
                 $warnings[] = "«{$name}» จำนวน {$qty} ไม่ใช่จำนวนเต็ม ปัดเป็น " . (int) round($qty);
             }
             $lines[] = [
+                'table' => $table,
                 'pos_name' => mb_substr($name, 0, 191),
+                'pos_sku' => $sku !== '' && $sku !== '-' ? mb_substr($sku, 0, 64) : null,
                 'pos_category' => $category !== '' && $category !== '-' ? mb_substr($category, 0, 191) : null,
                 'qty' => $qty !== null ? (int) round($qty) : null,
                 'net' => round((float) $net, 2),
@@ -85,10 +94,13 @@ class PosReportParser
             ];
         }
 
+        $lines = self::dropSummaryTables($lines);
+
         // The same item printed twice (e.g. split by price) is one line here.
         $merged = [];
         foreach ($lines as $l) {
-            $key = PosMatcher::key($l['pos_name']);
+            unset($l['table']);
+            $key = self::lineKey($l);
             if (!isset($merged[$key])) {
                 $merged[$key] = $l;
                 continue;
@@ -105,6 +117,33 @@ class PosReportParser
         }
 
         return ['date' => self::findDate($text), 'lines' => $lines, 'warnings' => $warnings];
+    }
+
+    private static function lineKey(array $l): string
+    {
+        return $l['pos_sku'] !== null ? 'sku:' . mb_strtolower($l['pos_sku']) : PosMatcher::key($l['pos_name']);
+    }
+
+    /** Keeps only tables that are not a subset of a larger table in the same report. */
+    private static function dropSummaryTables(array $lines): array
+    {
+        $keys = [];
+        foreach ($lines as $l) {
+            $keys[$l['table']][self::lineKey($l)] = true;
+        }
+        if (count($keys) < 2) {
+            return $lines;
+        }
+        $drop = [];
+        foreach ($keys as $t => $ks) {
+            foreach ($keys as $u => $other) {
+                if ($t !== $u && !isset($drop[$u]) && count($other) > count($ks) && !array_diff_key($ks, $other)) {
+                    $drop[$t] = true;
+                    break;
+                }
+            }
+        }
+        return array_values(array_filter($lines, fn ($l) => !isset($drop[$l['table']])));
     }
 
     /** Splits a table row into [delimiter, cells], or null when the line is not a row. */
