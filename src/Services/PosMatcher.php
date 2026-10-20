@@ -310,7 +310,7 @@ class PosMatcher
                 'parameters' => [
                     'type' => 'object',
                     'properties' => [
-                        'query' => ['type' => 'string', 'description' => 'คำค้น เช่น ยี่ห้อ หรือชื่อสินค้า เช่น "กาโตะ", "เบอร์ดี้ กาแฟ"'],
+                        'query' => ['type' => 'string', 'description' => 'คำค้นจากชื่อ POS ของรายการนั้น เช่น ยี่ห้อ หรือคำหลักของสินค้า'],
                         'cost' => ['type' => 'number', 'description' => 'ราคาทุนต่อชิ้น (ไม่บังคับ)'],
                         'price' => ['type' => 'number', 'description' => 'ราคาขายต่อชิ้น (ไม่บังคับ)'],
                     ],
@@ -377,12 +377,19 @@ class PosMatcher
         return $msg;
     }
 
+    /**
+     * Turns the model's answer into matches the system has checked itself.
+     * Small models mix up line numbers, reuse one product for many lines and
+     * claim "same cost" when it isn't, so: the echoed pos_name decides which
+     * line an answer is for, every pick is re-scored on name/cost/price and
+     * dropped when nothing supports it, and a product goes to one line only.
+     */
     private function readMatches(string $text, array $rows, bool $anyProduct): array
     {
         $out = [];
         foreach (self::parseReply($text) as $m) {
-            $i = (int) ($m['i'] ?? -1);
-            if (!isset($rows[$i]) || isset($out[$i])) {
+            $i = $this->lineOf($m, $rows);
+            if ($i === null || isset($out[$i])) {
                 continue;
             }
             $pid = isset($m['product_id']) && is_numeric($m['product_id']) ? (int) $m['product_id'] : null;
@@ -391,17 +398,104 @@ class PosMatcher
             if ($product && !$anyProduct && !in_array($pid, array_map(fn ($c) => $c['product']['id'], $rows[$i]['candidates']), true)) {
                 $product = null;
             }
-            if ($pid !== null && !$product) {
+            $reason = mb_substr(trim((string) ($m['reason'] ?? '')), 0, 120);
+            $entry = ['i' => $i, 'product' => null, 'confidence' => 0.0, 'reason' => $reason, 'check' => null, 'rejected' => null];
+            if ($product) {
+                $v = self::verify($rows[$i], $product);
+                if ($v['ok']) {
+                    $entry['product'] = $product;
+                    $entry['confidence'] = round(min(max(0, min(1, (float) ($m['confidence'] ?? 0.5))), $v['cap']), 2);
+                    $entry['name_score'] = $v['name'];
+                } else {
+                    $entry['rejected'] = $product['name'];
+                    $entry['reason'] = 'AI เสนอ «' . $product['name'] . '» แต่ชื่อและราคาไม่สอดคล้องกัน ระบบจึงไม่ใช้';
+                }
+                $entry['check'] = $v['facts'];
+            } elseif ($pid !== null) {
+                $entry['reason'] = 'AI ตอบรหัสสินค้าที่ไม่มีอยู่จริง ระบบจึงไม่ใช้';
+            }
+            $out[$i] = $entry;
+        }
+
+        // One product, one line: keep the line whose name fits it best.
+        $byProduct = [];
+        foreach ($out as $i => $e) {
+            if ($e['product']) {
+                $byProduct[$e['product']['id']][] = $i;
+            }
+        }
+        foreach ($byProduct as $lines) {
+            if (count($lines) < 2) {
                 continue;
             }
-            $out[$i] = [
-                'i' => $i,
-                'product' => $product,
-                'confidence' => max(0, min(1, (float) ($m['confidence'] ?? 0.5))),
-                'reason' => mb_substr(trim((string) ($m['reason'] ?? '')), 0, 120),
-            ];
+            usort($lines, fn ($a, $b) => $out[$b]['name_score'] <=> $out[$a]['name_score']);
+            foreach (array_slice($lines, 1) as $i) {
+                // The same item printed twice under near-identical names is fine.
+                if ($out[$i]['name_score'] >= 0.6) {
+                    continue;
+                }
+                $out[$i]['rejected'] = $out[$i]['product']['name'];
+                $out[$i]['reason'] = 'AI เสนอ «' . $out[$i]['product']['name'] . '» ซ้ำกับรายการอื่นที่ชื่อตรงกว่า ระบบจึงไม่ใช้';
+                $out[$i]['product'] = null;
+                $out[$i]['confidence'] = 0.0;
+            }
         }
+        foreach ($out as &$e) {
+            unset($e['name_score']);
+        }
+        unset($e);
         return array_values($out);
+    }
+
+    /** Which line an answer is for: the pos_name it repeats wins over its line number. */
+    private function lineOf(array $m, array $rows): ?int
+    {
+        $i = isset($m['i']) && is_numeric($m['i']) ? (int) $m['i'] : null;
+        $name = trim((string) ($m['pos_name'] ?? ''));
+        if ($name === '') {
+            return $i !== null && isset($rows[$i]) ? $i : null;
+        }
+        if ($i !== null && isset($rows[$i]) && self::similarity($name, $rows[$i]['pos_name']) >= 0.8) {
+            return $i;
+        }
+        $best = null;
+        $bestScore = 0.8;
+        foreach ($rows as $j => $r) {
+            $s = self::similarity($name, $r['pos_name']);
+            if ($s >= $bestScore) {
+                [$best, $bestScore] = [$j, $s];
+            }
+        }
+        return $best;
+    }
+
+    /**
+     * Checks a pick against what the system can measure. A pick needs some
+     * name likeness, or matching cost and price; the confidence is capped
+     * by how much evidence there is.
+     *
+     * @return array{ok:bool, cap:float, name:float, facts:string}
+     */
+    public static function verify(array $row, array $product): array
+    {
+        $name = self::nameScore($row['pos_name'], $product['name']);
+        $costMatch = $row['unit_cost'] !== null && $row['unit_cost'] > 0 && abs($row['unit_cost'] - $product['cost_price']) < 0.01;
+        $priceMatch = $row['unit_price'] !== null && abs($row['unit_price'] - $product['sale_price']) < 0.01;
+        $ok = $name >= 0.25 || ($name >= 0.1 && ($costMatch || $priceMatch)) || ($costMatch && $priceMatch);
+        $cap = match (true) {
+            $name >= 0.6 => 1.0,
+            $name >= 0.4 => 0.85,
+            $name >= 0.25 => 0.7,
+            default => 0.5,
+        };
+        $facts = ['ชื่อคล้าย ' . (int) round($name * 100) . '%'];
+        if ($row['unit_cost'] !== null && $row['unit_cost'] > 0) {
+            $facts[] = $costMatch ? 'ทุนเท่ากัน' : 'ทุนต่างกัน';
+        }
+        if ($row['unit_price'] !== null) {
+            $facts[] = $priceMatch ? 'ราคาขายเท่ากัน' : 'ราคาขายต่างกัน';
+        }
+        return ['ok' => $ok, 'cap' => $cap, 'name' => $name, 'facts' => 'ระบบตรวจ: ' . implode(' · ', $facts)];
     }
 
     private function logUsage(AiUsageService $usage, array $user, array $model, array $provider, int $count, int $searches, int $chars, float $started, ?string $error): void
@@ -443,25 +537,27 @@ class PosMatcher
         $how = $useTools
             ? <<<TXT
             - candidates คือสินค้าที่ระบบคัดมาให้ด้วยความคล้ายของตัวอักษร อาจไม่ครบหรือผิด
-            - ถ้าไม่มี candidate ที่ใช่ ให้เรียก search_products ค้นเองจากฐานข้อมูล ลองหลายคำค้น เช่น ยี่ห้ออย่างเดียว ("กาโตะ"),
-              คำที่สะกดอีกแบบ ("กาโดะ"→"กาโตะ", "เบอร์ดี"→"เบอร์ดี้", "7up"→"เซเว่นอัพ"), ประเภทสินค้า ("กิ๊บ", "คลิป"), หรือระบุ cost/price
-              เรียกพร้อมกันหลายครั้งในรอบเดียวได้ ค้นได้หลายรอบ แต่ไม่เกิน 3 ครั้งต่อรายการ
-            - product_id ที่ตอบต้องมาจาก candidates หรือผลค้นหาเท่านั้น
+            - ถ้าไม่มี candidate ที่ใช่ ให้เรียก search_products ค้นเองจากฐานข้อมูล โดยใช้คำจากชื่อ POS ของรายการนั้นเอง
+              เช่น ยี่ห้อหรือคำหลักของรายการนั้น, คำเดียวกันที่สะกดอีกแบบ (ตัวสะกด/วรรณยุกต์ต่าง, อังกฤษ↔ไทย), ประเภทสินค้า หรือระบุ cost/price
+              เรียกพร้อมกันหลายครั้งในรอบเดียวได้ แต่ไม่เกิน 3 ครั้งต่อรายการ
+            - product_id ที่ตอบต้องมาจาก candidates หรือผลค้นหาของรายการนั้นเท่านั้น
             TXT
             : '- ให้เลือก product_id จาก candidates ของรายการนั้นเท่านั้น';
         return <<<TXT
         งาน: จับคู่ "รายการขายจากระบบ POS ภายนอก" ซึ่งไม่มีบาร์โค้ดหรือรหัสสินค้า กับสินค้าในฐานข้อมูลร้านค้าสหการ
         {$how}
         หลักการพิจารณา:
-        - ชื่อใน POS มักสั้นกว่า สะกดต่าง เรียงคำต่าง หรือพิมพ์ผิด (เช่น "กาโดะรสส้ม" = "กาโตะ น้ำส้ม 25% ผสมวุ้นมะพร้าว 250 มล.",
-          "กาแฟเบอร์ดีแดง" = "เบอร์ดี้ กาแฟปรุงสำเร็จพร้อมดื่ม โรบัสต้า 170 มล." ซึ่งเป็นกระป๋องสีแดง)
-        - รส สี ขนาด ปริมาณ ต้องไม่ขัดกัน ถ้าต่างกันชัดเจน (เช่น "มิรินด้า น้ำเขียว" กับ "มิรินด้า น้ำแดง") ห้ามจับคู่
+        - ชื่อใน POS มักสั้นกว่า สะกดต่าง เรียงคำต่าง หรือพิมพ์ผิด เช่น ชื่อ POS "ยี่ห้อXรสส้ม" อาจเป็นสินค้า "ยี่ห้อX น้ำส้ม 25% 250 มล."
+          แต่ต้องเป็นยี่ห้อ/ชนิดสินค้าเดียวกันจริง ห้ามจับคู่สินค้าคนละชนิด (เช่น น้ำอัดลม กับ อุปกรณ์การเรียน)
+        - รส สี ขนาด ปริมาณ ต้องไม่ขัดกัน ถ้าต่างกันชัดเจน (เช่น น้ำเขียว กับ น้ำแดง) ห้ามจับคู่
+        - สินค้าหนึ่งตัวมักตรงกับรายการเดียว อย่าใช้สินค้าเดียวกันกับหลายรายการ
+        - ไม่แน่ใจให้ตอบ product_id = null ดีกว่าเดา ระบบจะตรวจชื่อและราคาซ้ำ คำตอบที่ไม่สอดคล้องจะถูกทิ้ง
         - ราคาทุน/ราคาขายต่อชิ้นที่เท่ากันเป็นหลักฐานที่ดี แต่ราคาใน POS อาจไม่ได้อัปเดต ต่างกันเล็กน้อยไม่ถือว่าผิด
         - หมวดหมู่ที่มีคำว่า "ขายฝาก" และชื่อคน (เช่น "003 ขายฝาก ครูออย") ควรตรงกับ owner ของสินค้า
         - ถ้าหาไม่เจอจริง ๆ ให้ product_id = null (ผู้ใช้จะเพิ่มเป็นสินค้าใหม่)
-        - confidence 0–1 ตามความมั่นใจ, reason เหตุผลสั้น ๆ ภาษาไทยไม่เกิน 60 ตัวอักษร
-        คำตอบสุดท้ายเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตอบให้ครบทุกรายการ:
-        {"matches":[{"i":0,"product_id":123,"confidence":0.9,"reason":"ชื่อเดียวกัน ราคาทุนเท่ากัน"}]}
+        - confidence 0–1 ตามความมั่นใจ, reason เหตุผลสั้น ๆ ภาษาไทยไม่เกิน 60 ตัวอักษร ที่เป็นจริงของรายการนั้น
+        คำตอบสุดท้ายเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตอบให้ครบทุกรายการ ทุกคำตอบต้องมี i และ pos_name ของรายการนั้นตรงตามที่ให้ไป:
+        {"matches":[{"i":<เลข i ของรายการ>,"pos_name":"<ชื่อ POS ของรายการนั้น>","product_id":<รหัสสินค้า หรือ null>,"confidence":<0-1>,"reason":"<เหตุผล>"}]}
 
         รายการ (หนึ่งบรรทัดต่อหนึ่งรายการ):
         TXT . "\n" . implode("\n", $data);

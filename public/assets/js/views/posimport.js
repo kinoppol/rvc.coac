@@ -310,7 +310,9 @@ export async function render(container) {
             manual: '<span class="pill warn">เลือกเอง</span>',
             new: '<span class="pill warn">สินค้าใหม่</span>',
         }[d.origin] || '';
-        const reason = r.match && d.origin === r.match.by && r.match.reason ? `<div class="pos-reason">${escapeHtml(r.match.reason)}</div>` : '';
+        const own = r.match && d.origin === r.match.by;
+        const reason = (own && r.match.reason ? `<div class="pos-reason">${d.origin === 'ai' ? 'AI: ' : ''}${escapeHtml(r.match.reason)}</div>` : '')
+            + (own && r.match.check ? `<div class="pos-sub">${escapeHtml(r.match.check)}</div>` : '');
         if (d.action === 'skip') {
             return `${badge} <span class="muted">ไม่นำเข้ารายการนี้</span>${reason}`;
         }
@@ -624,14 +626,14 @@ export async function render(container) {
         r.aiDone = true;
         r.ai_note = null;
         if (m.product) {
-            r.match = { action: 'product', product: m.product, by: 'ai', reason: m.reason, confidence: m.confidence };
+            r.match = { action: 'product', product: m.product, by: 'ai', reason: m.reason, confidence: m.confidence, check: m.check };
             r.decision = { action: 'product', product: m.product, origin: 'ai' };
             r.status = 'suggested';
             if (!r.candidates.some((c) => c.product.id === m.product.id)) r.candidates.unshift({ product: m.product });
             if (r.qtyGuessed) { r.qty = null; r.qtyGuessed = false; perUnit(r); }
             guessQty(r);
         } else {
-            r.ai_note = m.reason || 'AI ไม่พบสินค้าที่ตรงกัน';
+            r.ai_note = (m.reason || 'AI ไม่พบสินค้าที่ตรงกัน') + (m.check ? ` (${m.check})` : '');
             // The AI looked through the database and found nothing: drop the weaker name-only guess.
             if (r.decision?.origin === 'rule') { r.decision = null; r.match = null; r.status = 'none'; }
         }
