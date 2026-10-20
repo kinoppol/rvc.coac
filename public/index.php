@@ -15,6 +15,7 @@ use App\Controllers\MigrationsController;
 use App\Controllers\MyConsignorController;
 use App\Controllers\OaAdminController;
 use App\Controllers\PortalController;
+use App\Controllers\PosImportController;
 use App\Controllers\PurchaseController;
 use App\Controllers\ReceiveController;
 use App\Controllers\ReportsController;
@@ -135,6 +136,21 @@ $app->group('/api', function ($group) {
     $group->get('/sales/products', [SalesController::class, 'searchProducts']);
     $group->post('/sales', [SalesController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
+
+    $group->get('/pos-import', [PosImportController::class, 'index'])
+        ->add(new RoleGuard('sales.import'));
+    $group->post('/pos-import', [PosImportController::class, 'store'])
+        ->add(new RoleGuard('sales.import'));
+    $group->post('/pos-import/analyze', [PosImportController::class, 'analyze'])
+        ->add(new RoleGuard('sales.import'));
+    $group->get('/pos-import/previous', [PosImportController::class, 'previous'])
+        ->add(new RoleGuard('sales.import'));
+    $group->get('/pos-import/products', [PosImportController::class, 'products'])
+        ->add(new RoleGuard('sales.import'));
+    $group->get('/pos-import/mappings', [PosImportController::class, 'mappings'])
+        ->add(new RoleGuard('sales.import'));
+    $group->delete('/pos-import/mappings/{id:[0-9]+}', [PosImportController::class, 'deleteMapping'])
+        ->add(new RoleGuard('sales.import'));
 
     $group->get('/withdrawals', [WithdrawController::class, 'index']);
     $group->post('/withdrawals', [WithdrawController::class, 'store'])

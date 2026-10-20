@@ -67,7 +67,7 @@ class AiUsageService
         );
         $stmt->execute([
             $entry['user_id'],
-            ($entry['channel'] ?? 'chat') === 'receipt_extract' ? 'receipt_extract' : 'chat',
+            in_array($entry['channel'] ?? 'chat', ['receipt_extract', 'pos_match'], true) ? $entry['channel'] : 'chat',
             $category,
             $cost,
             mb_substr((string) ($entry['prompt'] ?? ''), 0, 4000),

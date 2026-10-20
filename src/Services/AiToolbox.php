@@ -24,6 +24,7 @@ class AiToolbox
         'passbook' => 'passbook.view', 'withdraw' => 'withdraw.create', 'reports' => 'reports.view',
         'settings' => 'settings.view', 'migrations' => 'migrations.manage', 'audit' => 'audit.view',
         'ai' => 'ai.manage', 'purchase' => 'purchase.create', 'aiusage' => 'ai.usage',
+        'posimport' => 'sales.import',
     ];
 
     /** @var string[] */

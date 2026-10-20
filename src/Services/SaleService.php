@@ -25,15 +25,23 @@ class SaleService
     }
 
     /**
-     * @param array<int,array{product_id:int, qty:int}> $items
+     * @param array<int,array{product_id:int, qty:int, unit_price?:float}> $items unit_price defaults to the product's sale price
+     * @param array{sale_datetime?:string, allow_short_stock?:bool, note?:string} $opts sale_datetime for sales recorded
+     *        after the fact (imported from an external POS); allow_short_stock lets stock go below zero
      */
-    public function record(array $items, int $cashierId, ?string $ip): array
+    public function record(array $items, int $cashierId, ?string $ip, array $opts = []): array
     {
         if (empty($items)) {
             throw new \RuntimeException('ไม่มีรายการขาย');
         }
+        $saleAt = $opts['sale_datetime'] ?? date('Y-m-d H:i:s');
+        $note = isset($opts['note']) ? " ({$opts['note']})" : '';
 
-        $this->db->beginTransaction();
+        // Callers that also write other rows (e.g. a POS import) keep their own transaction.
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
         try {
             $docNo = $this->docs->next('SL', 'sales', 'doc_no');
             $totalQty = 0;
@@ -41,9 +49,9 @@ class SaleService
 
             $insSale = $this->db->prepare(
                 'INSERT INTO sales (doc_no, cashier_id, sale_datetime, total_qty, total_value, created_at)
-                 VALUES (?, ?, NOW(), 0, 0, NOW())'
+                 VALUES (?, ?, ?, 0, 0, NOW())'
             );
-            $insSale->execute([$docNo, $cashierId]);
+            $insSale->execute([$docNo, $cashierId, $saleAt]);
             $saleId = (int) $this->db->lastInsertId();
 
             $insItem = $this->db->prepare(
@@ -63,11 +71,11 @@ class SaleService
                     throw new \RuntimeException('ไม่พบสินค้า');
                 }
                 $qty = (int) $line['qty'];
-                if ($qty <= 0 || $qty > (int) $product['qty_stock']) {
+                if ($qty <= 0 || ($qty > (int) $product['qty_stock'] && empty($opts['allow_short_stock']))) {
                     throw new \RuntimeException('จำนวนขายเกินสต๊อกคงเหลือของ ' . $product['name']);
                 }
 
-                $unitPrice = (float) $product['sale_price'];
+                $unitPrice = isset($line['unit_price']) ? round((float) $line['unit_price'], 2) : (float) $product['sale_price'];
                 $isStoreOwned = $product['consignor_id'] === null;
 
                 if ($isStoreOwned) {
@@ -116,11 +124,12 @@ class SaleService
                 $this->ledger->append(
                     $consignorId,
                     'sale',
-                    "ขายสินค้า {$agg['lines']} รายการ {$agg['qty']} ชิ้น",
+                    "ขายสินค้า {$agg['lines']} รายการ {$agg['qty']} ชิ้น{$note}",
                     $docNo,
                     round($agg['sale_value'], 2),
                     0,
-                    $cashierId
+                    $cashierId,
+                    substr($saleAt, 0, 10)
                 );
                 if ($agg['fee_value'] > 0) {
                     $feeRef = $this->docs->next('FEE', 'ledger_entries', 'ref_no');
@@ -131,7 +140,8 @@ class SaleService
                         $feeRef,
                         0,
                         round($agg['fee_value'], 2),
-                        $cashierId
+                        $cashierId,
+                        substr($saleAt, 0, 10)
                     );
                 }
             }
@@ -143,10 +153,14 @@ class SaleService
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
             ], $cashierId, $ip);
 
-            $this->db->commit();
+            if ($own) {
+                $this->db->commit();
+            }
             return ['id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2)];
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($own) {
+                $this->db->rollBack();
+            }
             throw $e;
         }
     }

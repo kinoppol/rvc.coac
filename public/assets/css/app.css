@@ -293,3 +293,26 @@ label.ai-icon-btn { cursor: pointer; }
 .pc-modal { width: 1320px; height: calc(100vh - 32px); }
 .pc-modal-body { display: flex; flex-direction: column; gap: 16px; background: var(--bg); }
 .ai-supply { font-size: 10.5px; color: var(--muted); }
+
+/* นำเข้ายอดขายจาก POS: green = pair saved from an earlier import, yellow = new pair this time */
+tr.pos-saved td { background: var(--ok-bg); }
+tr.pos-fresh td { background: var(--warn-bg); }
+tr.pos-saved td:first-child { box-shadow: inset 4px 0 0 var(--ok); }
+tr.pos-fresh td:first-child { box-shadow: inset 4px 0 0 var(--warn); }
+tr.pos-skip td { color: var(--muted); }
+.pos-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.pos-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1px solid var(--border); }
+.pos-legend i.saved { background: var(--ok-bg); border-color: var(--ok); }
+.pos-legend i.fresh { background: var(--warn-bg); border-color: var(--warn); }
+.pos-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.pos-prod { font-weight: 600; }
+.pos-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.pos-reason { font-size: 11.5px; margin-top: 3px; color: var(--warn); }
+tr.pos-saved .pos-reason { color: var(--ok); }
+.pos-cand { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13.5px; }
+.pos-cand:hover { border-color: var(--pri); }
+.pos-cand.current { border-color: var(--pri); box-shadow: 0 0 0 2px color-mix(in srgb, var(--pri) 25%, transparent); }
+.pos-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.pos-tags .pill { font-size: 10.5px; padding: 1px 7px; }
+.pos-qty { width: 72px; text-align: right; }
+.pos-qty.missing { border-color: var(--bad) !important; }

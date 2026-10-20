@@ -24,6 +24,7 @@ const PAGES = [
     { group: 'งานประจำวัน', items: [
         { key: 'dashboard', label: 'แดชบอร์ด', perm: 'dashboard.view' },
         { key: 'sales', label: 'ขายสินค้า (POS)', perm: 'sales.create' },
+        { key: 'posimport', label: 'นำเข้ายอดขายจาก POS', perm: 'sales.import', icon: 'sales' },
         { key: 'purchase', label: 'ซื้อสินค้าเข้าร้าน', perm: 'purchase.create' },
         { key: 'inventory', label: 'สต๊อกสินค้าของร้าน', perm: 'reports.view' },
         { key: 'receive', label: 'รับฝากสินค้า', perm: 'receive.create' },
@@ -53,6 +54,7 @@ const PAGES = [
 const PAGE_TITLES = {
     dashboard: ['หน้าแรก', 'แดชบอร์ดภาพรวม'],
     sales: ['งานประจำวัน', 'ขายสินค้า (POS)'],
+    posimport: ['งานประจำวัน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
     purchase: ['งานประจำวัน', 'ซื้อสินค้าเข้าร้าน'],
     inventory: ['งานประจำวัน', 'สต๊อก ต้นทุน และกำไรสินค้าของร้าน'],
     receive: ['งานประจำวัน', 'รับฝากสินค้าเข้าร้าน'],
