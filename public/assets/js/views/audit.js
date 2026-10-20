@@ -36,7 +36,7 @@ export async function render(container) {
                   <td class="muted">${fmtDateTime(r.created_at)}</td>
                   <td style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px">${escapeHtml(r.table_name)}</td>
                   <td class="num">${r.record_id}</td>
-                  <td><span class="pill ${r.action === 'delete' ? 'bad' : r.action === 'update' ? 'warn' : 'ok'}">${escapeHtml(r.action)}</span></td>
+                  <td><span class="pill ${r.action === 'delete' || r.action === 'cancel' ? 'bad' : r.action === 'update' ? 'warn' : 'ok'}">${escapeHtml(r.action)}</span></td>
                   <td>${escapeHtml(r.user_name || '-')}</td>
                   <td class="muted" style="font-size:12px">${escapeHtml(r.ip_address || '')}</td>
                 </tr>
