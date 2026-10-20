@@ -587,9 +587,11 @@ export async function render(container, { permissions = [] } = {}) {
         } else {
             host.querySelector('#np-use').addEventListener('click', () => {
                 const name = host.querySelector('#np-name').value.trim();
-                const cost = Number(host.querySelector('#np-cost').value);
+                const costText = host.querySelector('#np-cost').value.trim();
+                const cost = Number(costText);
                 const price = Number(host.querySelector('#np-price').value);
-                if (!name || !(price > 0) || cost < 0) { alert('กรุณากรอกชื่อ ราคาทุน และราคาขายให้ถูกต้อง'); return; }
+                // Left blank when the POS has no cost: it must not silently become 0.
+                if (!name || !(price > 0) || costText === '' || !(cost >= 0)) { alert('กรุณากรอกชื่อ ราคาทุน และราคาขายให้ถูกต้อง'); return; }
                 setDecision(editing, { action: 'new', product: null, origin: 'new' }, {
                     name, consignor_id: host.querySelector('#np-owner').value || null, cost_price: cost, sale_price: price,
                 });

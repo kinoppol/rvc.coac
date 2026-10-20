@@ -90,16 +90,24 @@ class PosReportParser
                 'pos_category' => $category !== '' && $category !== '-' ? mb_substr($category, 0, 191) : null,
                 'qty' => $qty !== null ? (int) round($qty) : null,
                 'net' => round((float) $net, 2),
-                'cost' => $cost !== null ? round($cost, 2) : null,
+                // A cost of 0 for an item that sold for money means the POS has no cost recorded.
+                'cost' => $cost !== null && ($cost > 0 || (float) $net <= 0) ? round($cost, 2) : null,
+                'zero_cost' => $cost !== null && $cost <= 0 && (float) $net > 0,
             ];
         }
 
         $lines = self::dropSummaryTables($lines);
+        $zeroCost = array_values(array_filter($lines, fn ($l) => $l['zero_cost']));
+        if ($zeroCost) {
+            $names = array_map(fn ($l) => $l['pos_name'], array_slice($zeroCost, 0, 8));
+            $warnings[] = count($zeroCost) . ' รายการมีต้นทุนใน POS เป็น 0 (' . implode(', ', $names) . (count($zeroCost) > 8 ? ' …' : '')
+                . ') — ถือว่าไม่ทราบต้นทุน ถ้าเพิ่มเป็นสินค้าใหม่ กรุณากรอกราคาทุนเอง';
+        }
 
         // The same item printed twice (e.g. split by price) is one line here.
         $merged = [];
         foreach ($lines as $l) {
-            unset($l['table']);
+            unset($l['table'], $l['zero_cost']);
             $key = self::lineKey($l);
             if (!isset($merged[$key])) {
                 $merged[$key] = $l;
