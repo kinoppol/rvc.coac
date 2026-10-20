@@ -143,6 +143,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.import'));
     $group->post('/pos-import/analyze', [PosImportController::class, 'analyze'])
         ->add(new RoleGuard('sales.import'));
+    $group->post('/pos-import/suggest', [PosImportController::class, 'suggest'])
+        ->add(new RoleGuard('sales.import'));
     $group->get('/pos-import/previous', [PosImportController::class, 'previous'])
         ->add(new RoleGuard('sales.import'));
     $group->get('/pos-import/products', [PosImportController::class, 'products'])

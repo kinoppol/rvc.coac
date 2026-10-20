@@ -67,9 +67,7 @@ class PosImportController
             return $this->error($response, 'ไม่พบตารางรายการขายในรายงาน (ต้องมีหัวตารางคอลัมน์ชื่อสินค้า และยอดขาย)', 422);
         }
 
-        $user = $request->getAttribute('user');
-        $model = isset($body['model']) && (int) $body['model'] > 0 ? (int) $body['model'] : null;
-        $result = (new PosMatcher(Db::connection()))->analyze($parsed['lines'], $user, $model);
+        $result = (new PosMatcher(Db::connection()))->analyze($parsed['lines'], $request->getAttribute('user'));
 
         $date = (string) ($body['sale_date'] ?? '') ?: ($parsed['date'] ?? '');
         return $this->json($response, [
@@ -82,6 +80,32 @@ class PosImportController
                 'previous_imports' => $date ? self::service()->forDate($date) : [],
             ],
         ]);
+    }
+
+    /** AI pairing for a few lines (the page sends the pending lines batch by batch). */
+    public function suggest(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $lines = [];
+        foreach ((array) ($body['lines'] ?? []) as $l) {
+            $l = (array) $l;
+            if (isset($l['i']) && trim((string) ($l['pos_name'] ?? '')) !== '') {
+                $lines[] = $l;
+            }
+        }
+        if (!$lines) {
+            return $this->error($response, 'ไม่มีรายการให้จับคู่', 422);
+        }
+        if (count($lines) > PosMatcher::AI_BATCH) {
+            return $this->error($response, 'ส่งได้ครั้งละไม่เกิน ' . PosMatcher::AI_BATCH . ' รายการ', 422);
+        }
+        $model = isset($body['model']) && (int) $body['model'] > 0 ? (int) $body['model'] : null;
+        try {
+            $result = (new PosMatcher(Db::connection()))->suggest($lines, $request->getAttribute('user'), $model);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
     }
 
     public function previous(Request $request, Response $response): Response
