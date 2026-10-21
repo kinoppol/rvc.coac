@@ -365,7 +365,41 @@ export async function render(container) {
           <label>ยอดสุทธิตามใบเสร็จ <input data-h="total" type="number" min="0" step="0.01" value="${header.total}"></label>
           <div class="${mismatch ? 'pc-diff bad' : 'pc-diff'}">${printed > 0
             ? (mismatch ? `⚠ ยอดรายการหลังหักส่วนลด ฿${money(net)} ไม่ตรงกับใบเสร็จ (ต่าง ฿${money(net - printed)})` : '✓ ยอดตรงกับใบเสร็จ')
-            : `ยอดสุทธิ ฿${money(net)}`}</div>`;
+            : `ยอดสุทธิ ฿${money(net)}`}</div>
+          ${vatGap(subtotal) ? `<button type="button" class="btn sm" data-add-vat>บวก VAT ฿${money(vatGap(subtotal))} เข้าราคาทุกรายการ</button>` : ''}`;
+    }
+
+    /** Receipt prices are before VAT when lines − discount + VAT = printed total; returns that VAT, else 0. */
+    function vatGap(subtotal) {
+        const vat = Number(header.vat) || 0;
+        const net = round2(subtotal - (Number(header.discount) || 0));
+        const printed = Number(header.total) || 0;
+        const gap = round2(printed - net);
+        return vat > 0 && net > 0 && gap > 0.009 && Math.abs(gap - vat) <= 0.05 ? gap : 0;
+    }
+
+    /** Spreads the VAT over every line (and the bill discount) so costs include it and match the printed total. */
+    function addVatToLines() {
+        const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
+        const net = round2(subtotal - (Number(header.discount) || 0));
+        const printed = Number(header.total) || 0;
+        if (!vatGap(subtotal)) return;
+        const factor = printed / net;
+        let biggest = null;
+        items.forEach((it) => {
+            it.line_total = round2(Number(it.line_total || 0) * factor);
+            if (Number(it.qty) > 0) it.unit_cost = round2(it.line_total / Number(it.qty));
+            if (!biggest || it.line_total > biggest.line_total) biggest = it;
+        });
+        header.discount = round2((Number(header.discount) || 0) * factor);
+        // Rounding leftovers go to the largest line so the lines match the printed total exactly.
+        const diff = round2(printed - (items.reduce((s, i) => s + i.line_total, 0) - header.discount));
+        if (biggest && diff !== 0) {
+            biggest.line_total = round2(biggest.line_total + diff);
+            if (Number(biggest.qty) > 0) biggest.unit_cost = round2(biggest.line_total / Number(biggest.qty));
+        }
+        draw();
+        refreshPreview();
     }
 
     function viewHtml(d) {
@@ -428,6 +462,7 @@ export async function render(container) {
             header[inp.dataset.h] = inp.value;
             if (['discount', 'total', 'vat'].includes(inp.dataset.h)) redrawSummary();
         }));
+        root.querySelector('[data-add-vat]')?.addEventListener('click', addVatToLines);
     }
 
     function bind() {

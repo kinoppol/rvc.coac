@@ -28,6 +28,7 @@ class ReceiptExtractor
     - ปี พ.ศ. ให้แปลงเป็น ค.ศ. (ลบ 543) วันที่ใช้รูปแบบ YYYY-MM-DD
     - ตัวเลขที่อ่านไม่ชัดให้ใส่ค่าที่น่าจะถูกที่สุด และบันทึกไว้ใน warnings
     - ตรวจผลรวมราคาทุกบรรทัดเทียบกับยอดสุทธิที่พิมพ์ในใบเสร็จ ถ้าไม่ตรงให้แจ้งใน warnings
+    - unit_price/line_total ใส่ตามที่พิมพ์ (แม้ยังไม่รวม VAT) และใส่ยอด VAT ใน vat ระบบจะบวก VAT เข้าราคาทุนให้เอง
     TXT;
 
     private const FORMAT = <<<TXT
@@ -92,6 +93,46 @@ class ReceiptExtractor
         return [$name, 1];
     }
 
+    /**
+     * Receipts that print prices before VAT (lines + VAT = total): spreads the VAT
+     * over every line (and the bill discount) so costs include it and the lines
+     * add up to the printed total. Receipts whose lines already include VAT are
+     * left alone. Returns the VAT added, or 0.
+     */
+    private static function addVat(array &$items, float &$discount, float &$vat, float $total): float
+    {
+        $sum = round(array_sum(array_column($items, 'line_total')), 2);
+        $net = round($sum - $discount, 2);
+        if ($total <= 0 || $net <= 0 || abs($net - $total) <= 0.009) {
+            return 0;
+        }
+        $gap = round($total - $net, 2);
+        // VAT printed and the gap is that VAT, or no VAT read but the gap is 7%.
+        $isVat = $vat > 0 ? abs($gap - $vat) <= 0.05 : abs($gap - $net * 0.07) <= max(0.05, $net * 0.0005);
+        if (!$isVat) {
+            return 0;
+        }
+        $factor = $total / $net;
+        $biggest = 0;
+        foreach ($items as $i => &$it) {
+            $it['line_total'] = round($it['line_total'] * $factor, 2);
+            $it['unit_cost'] = round($it['line_total'] / $it['qty'], 2);
+            if ($it['line_total'] > $items[$biggest]['line_total']) {
+                $biggest = $i;
+            }
+        }
+        unset($it);
+        $discount = round($discount * $factor, 2);
+        // Rounding leftovers go to the largest line so the lines match the printed total exactly.
+        $diff = round($total - (array_sum(array_column($items, 'line_total')) - $discount), 2);
+        if ($diff != 0.0) {
+            $items[$biggest]['line_total'] = round($items[$biggest]['line_total'] + $diff, 2);
+            $items[$biggest]['unit_cost'] = round($items[$biggest]['line_total'] / $items[$biggest]['qty'], 2);
+        }
+        $vat = $gap;
+        return $gap;
+    }
+
     /** Cleans types/values so the purchase form can use them directly. */
     public static function normalize(array $d): array
     {
@@ -150,6 +191,11 @@ class ReceiptExtractor
         $sum = round(array_sum(array_column($items, 'line_total')), 2);
         $discount = round(abs($num($d['discount'] ?? 0)), 2);
         $total = round($num($d['total'] ?? 0), 2);
+        $vat = round($num($d['vat'] ?? 0), 2);
+        if ($added = self::addVat($items, $discount, $vat, $total)) {
+            $warnings[] = sprintf('ราคาสินค้าในใบเสร็จยังไม่รวม VAT ฿%s — บวก VAT เข้าในราคาทุนของทุกรายการแล้ว', number_format($added, 2));
+            $sum = round(array_sum(array_column($items, 'line_total')), 2);
+        }
         if ($total > 0 && abs(($sum - $discount) - $total) > 0.009) {
             $warnings[] = sprintf('ผลรวมรายการ ฿%s (หักส่วนลดแล้ว ฿%s) ไม่ตรงกับยอดสุทธิในใบเสร็จ ฿%s กรุณาตรวจสอบ',
                 number_format($sum, 2), number_format($sum - $discount, 2), number_format($total, 2));
@@ -162,7 +208,7 @@ class ReceiptExtractor
             'receipt_date' => $date,
             'items' => $items,
             'discount' => $discount,
-            'vat' => round($num($d['vat'] ?? 0), 2),
+            'vat' => $vat,
             'total' => $total,
             'warnings' => array_values(array_unique($warnings)),
         ];
