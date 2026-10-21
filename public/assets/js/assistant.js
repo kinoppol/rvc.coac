@@ -66,7 +66,7 @@ export async function mountAssistant({ user, navigate }) {
     ctx = {
         user, navigate, el,
         state: {
-            open: false, models: [], modelId: null, loading: false, error: null,
+            open: false, models: [], defaultId: null, modelId: null, loading: false, error: null,
             messages: [], pending: [], decisions: {}, listening: false, canManage: false,
             photos: [], documents: [], uploading: false, canPurchase: false, notice: null,
         },
@@ -91,11 +91,14 @@ export async function refreshAssistantModels() {
         const me = await api.get('/auth/me');
         s.canManage = (me.permissions || []).includes('ai.manage');
         s.canPurchase = (me.permissions || []).includes('purchase.create');
-        s.models = (await api.get('/ai/models')).data;
+        const res = await api.get('/ai/models');
+        s.models = res.data;
+        s.defaultId = res.default_id ?? null;
     } catch (e) {
         s.models = [];
+        s.defaultId = null;
     }
-    // 'auto' (default) lets the server pick the cheapest model that can handle each message.
+    // 'auto' (default) lets the server use the admin's default model, else the cheapest that can handle each message.
     const saved = load(localStorage, 'modelChoice', 'auto');
     s.modelId = saved === 'auto' || s.models.some((m) => m.id === saved) ? saved : 'auto';
     render();
@@ -295,7 +298,8 @@ function render() {
 }
 
 function groupedModelOptions(s) {
-    const auto = `<option value="auto" ${s.modelId === 'auto' ? 'selected' : ''}>อัตโนมัติ (ประหยัด)</option>`;
+    const def = s.models.find((m) => m.id === s.defaultId);
+    const auto = `<option value="auto" ${s.modelId === 'auto' ? 'selected' : ''}>${def ? `ค่าเริ่มต้น (${escapeHtml(def.label)})` : 'อัตโนมัติ (ประหยัด)'}</option>`;
     const groups = {};
     s.models.forEach((m) => { (groups[m.provider_name] ||= []).push(m); });
     return auto + Object.entries(groups).map(([provider, list]) => `
@@ -583,7 +587,8 @@ async function readRows(plan, from, to, total, prefix, step, done, warnings) {
 
 function modelLabel() {
     const m = currentModel();
-    return m?.auto ? 'อัตโนมัติ' : m?.label || '';
+    const def = ctx.state.models.find((x) => x.id === ctx.state.defaultId);
+    return m?.auto ? (def ? def.label : 'อัตโนมัติ') : m?.label || '';
 }
 
 /** Splits picked files: .md/.txt are read as text, images are uploaded. */

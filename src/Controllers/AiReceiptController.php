@@ -207,7 +207,7 @@ class AiReceiptController
         $repo = new AiProviderRepo(Db::connection());
         $role = $request->getAttribute('user')['role'];
         $choice = $body['model'] ?? 'auto';
-        $resolved = $choice === 'auto' ? $repo->pickCheapest(false, $role) : $repo->resolveEnabledModel((int) $choice, $role);
+        $resolved = $choice === 'auto' ? $repo->pickDefault(false, $role) : $repo->resolveEnabledModel((int) $choice, $role);
         if (!$resolved) {
             return [null, 'ไม่พบโมเดลที่เลือก หรือโมเดลถูกปิดใช้งาน / ไม่ได้เปิดให้บทบาทของคุณใช้', null, null];
         }

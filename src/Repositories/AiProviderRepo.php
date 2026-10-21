@@ -196,6 +196,38 @@ class AiProviderRepo
         return $model ? [$this->find((int) $model['provider_id']), $model] : null;
     }
 
+    /**
+     * The admin's default model (settings.ai_default_model, "<provider_id>:<model_id>")
+     * if it is enabled and open to the role. Stored by model_id so it survives
+     * saveModels() re-creating the rows.
+     */
+    public function defaultModel(string $role): ?array
+    {
+        $stmt = $this->db->prepare("SELECT setting_value FROM settings WHERE setting_key = 'ai_default_model'");
+        $stmt->execute();
+        $parts = explode(':', (string) $stmt->fetchColumn(), 2);
+        if (count($parts) !== 2 || !ctype_digit($parts[0]) || $parts[1] === '') {
+            return null;
+        }
+        $stmt = $this->db->prepare(
+            'SELECT m.* FROM ai_models m JOIN ai_providers p ON p.id = m.provider_id
+             WHERE m.provider_id = ? AND m.model_id = ? AND m.enabled = 1 AND p.enabled = 1 AND ' . self::ROLE_FILTER
+        );
+        $stmt->execute([(int) $parts[0], $parts[1], $role]);
+        $model = $stmt->fetch();
+        return $model ? [$this->find((int) $model['provider_id']), $model] : null;
+    }
+
+    /** No model chosen: the default model if it can do the job, else the cheapest one that can. */
+    public function pickDefault(bool $needVision, string $role): ?array
+    {
+        $default = $this->defaultModel($role);
+        if ($default && (!$needVision || $default[1]['supports_vision'])) {
+            return $default;
+        }
+        return $this->pickCheapest($needVision, $role);
+    }
+
     /** @return array{0:array,1:array}|null [provider row, model row] if both are enabled and open to the role */
     public function resolveEnabledModel(int $modelRowId, string $role): ?array
     {

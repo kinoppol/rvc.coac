@@ -58,7 +58,11 @@ export async function render(container) {
     try {
         // Cheapest vision model first (unpriced models last) so the default costs the least.
         const price = (m) => (m.price_in == null || m.price_out == null ? Infinity : m.price_in + m.price_out);
-        models = (await api.get('/ai/models')).data.filter((m) => m.supports_vision).sort((a, b) => price(a) - price(b));
+        const res = await api.get('/ai/models');
+        models = res.data.filter((m) => m.supports_vision).sort((a, b) => price(a) - price(b));
+        // The admin's default model goes first when it can read photos.
+        const def = models.find((m) => m.id === res.default_id);
+        if (def) models = [def, ...models.filter((m) => m !== def)];
     } catch (e) { models = []; }
     try {
         const saved = Number(localStorage.getItem('purchase.model'));

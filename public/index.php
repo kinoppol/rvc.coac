@@ -264,6 +264,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('ai.manage'));
     $group->post('/ai/providers', [AiController::class, 'storeProvider'])
         ->add(new RoleGuard('ai.manage'));
+    $group->put('/ai/default-model', [AiController::class, 'updateDefaultModel'])
+        ->add(new RoleGuard('ai.manage'));
     $group->post('/ai/providers/test', [AiController::class, 'testProvider'])
         ->add(new RoleGuard('ai.manage'));
     $group->put('/ai/providers/{id}', [AiController::class, 'updateProvider'])

@@ -42,8 +42,11 @@ class AiController
 
     public function models(Request $request, Response $response): Response
     {
-        $rows = $this->repo()->enabledModels($request->getAttribute('user')['role']);
-        return $this->json($response, ['data' => array_map(fn ($m) => [
+        $role = $request->getAttribute('user')['role'];
+        $repo = $this->repo();
+        $rows = $repo->enabledModels($role);
+        $default = $repo->defaultModel($role);
+        return $this->json($response, ['default_id' => $default ? (int) $default[1]['id'] : null, 'data' => array_map(fn ($m) => [
             'id' => (int) $m['id'],
             'model_id' => $m['model_id'],
             'label' => $m['display_name'] ?: $m['model_id'],
@@ -80,10 +83,10 @@ class AiController
         $withPhotos = array_values(array_filter($userMessages, fn ($m) => !empty($m['attachments'])));
         $latestPhotos = $withPhotos ? end($withPhotos)['attachments'] : [];
 
-        // "auto": photos in this turn → cheapest vision model; anything else → cheapest model overall.
+        // "auto": the admin's default model, or the cheapest one (a vision model when this turn has photos).
         $auto = ($body['model'] ?? 'auto') === 'auto';
         $needVision = !$approvals && !empty($lastUser['attachments']) && end($history)['role'] === 'user';
-        $resolved = $auto ? $repo->pickCheapest($needVision, $user['role']) : $repo->resolveEnabledModel((int) $body['model'], $user['role']);
+        $resolved = $auto ? $repo->pickDefault($needVision, $user['role']) : $repo->resolveEnabledModel((int) $body['model'], $user['role']);
         if (!$resolved) {
             return $this->error($response, $auto && $needVision
                 ? 'ยังไม่มีโมเดลที่อ่านรูปได้ — ผู้ดูแลระบบต้องเปิดโมเดลที่อ่านรูปได้และติ๊ก "อ่านรูป" ในหน้าตั้งค่าผู้ช่วย AI'
@@ -573,7 +576,25 @@ class AiController
         foreach (AiProviderRepo::PRESETS as $key => $p) {
             $presets[] = ['key' => $key] + $p;
         }
-        return $this->json($response, ['data' => $this->repo()->allForAdmin(), 'presets' => $presets]);
+        $default = (string) (new SettingsService(Db::connection()))->get('ai_default_model');
+        return $this->json($response, ['data' => $this->repo()->allForAdmin(), 'presets' => $presets, 'default_model' => $default]);
+    }
+
+    /** Sets the model used when the user hasn't picked one ("<provider_id>:<model_id>", '' = cheapest). */
+    public function updateDefaultModel(Request $request, Response $response): Response
+    {
+        $value = trim((string) (((array) $request->getParsedBody())['default_model'] ?? ''));
+        if ($value !== '') {
+            [$pid, $mid] = array_pad(explode(':', $value, 2), 2, '');
+            $stmt = Db::connection()->prepare('SELECT 1 FROM ai_models WHERE provider_id = ? AND model_id = ? AND enabled = 1');
+            $stmt->execute([(int) $pid, $mid]);
+            if (!ctype_digit($pid) || !$stmt->fetchColumn()) {
+                return $this->error($response, 'ไม่พบโมเดลที่เลือก หรือโมเดลถูกปิดใช้งาน', 422);
+            }
+        }
+        $user = $request->getAttribute('user');
+        (new SettingsService(Db::connection()))->update(['ai_default_model' => $value], (int) $user['id']);
+        return $this->json($response, ['ok' => true]);
     }
 
     public function storeProvider(Request $request, Response $response): Response

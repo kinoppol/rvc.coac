@@ -13,6 +13,7 @@ function rolesText(roles) {
 export async function render(container) {
     let providers = [];
     let presets = [];
+    let defaultModel = ''; // "<provider_id>:<model_id>", '' = cheapest (auto)
     let editing = null; // draft provider being edited (or null)
     let fetched = null; // models returned by the last connection test
     let status = null; // { type: 'ok'|'bad', text } shown inside the modal
@@ -24,6 +25,7 @@ export async function render(container) {
         const res = await api.get('/ai/providers');
         providers = res.data;
         presets = res.presets;
+        defaultModel = res.default_model || '';
         draw();
     }
 
@@ -227,11 +229,33 @@ export async function render(container) {
                 </tr>`).join('')}</tbody></table></div>`
             : '<div class="empty">ยังไม่มีผู้ให้บริการ — กด "เพิ่มผู้ให้บริการ" เพื่อเริ่มต้น</div>'}
         </section>
+        ${drawDefault()}
         ${editing ? drawEditor() : ''}`;
         // Redraws rebuild the modal; keep its scroll position so toggling a model doesn't jump to the top.
         const body = container.querySelector('.modal-body');
         if (body) body.scrollTop = modalScroll;
         bind();
+    }
+
+    function drawDefault() {
+        const options = providers.filter((p) => p.enabled).map((p) => {
+            const list = p.models.filter((m) => m.enabled);
+            return list.length ? `<optgroup label="${escapeHtml(p.name)}">${list.map((m) => {
+                const v = `${p.id}:${m.model_id}`;
+                return `<option value="${escapeHtml(v)}" ${v === defaultModel ? 'selected' : ''}>${escapeHtml(m.display_name || m.model_id)}${m.supports_vision ? ' 🖼' : ''}</option>`;
+            }).join('')}</optgroup>` : '';
+        }).join('');
+        return `
+        <section class="card">
+            <div class="card-head"><h2>ผู้ช่วย AI เริ่มต้น</h2></div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
+              <select id="default-model" style="max-width:480px">
+                <option value="" ${defaultModel === '' ? 'selected' : ''}>อัตโนมัติ (เลือกโมเดลที่ถูกที่สุด)</option>
+                ${options}
+              </select>
+              <div class="muted" style="font-size:12.5px">ใช้เป็นหลักเมื่อผู้ใช้ไม่ได้เลือกโมเดลเอง — หากโมเดลนี้ปิดใช้งาน ไม่ได้เปิดให้บทบาทของผู้ใช้ หรืออ่านรูปไม่ได้ขณะที่ส่งรูปมา ระบบจะเลือกโมเดลที่ถูกที่สุดแทน</div>
+            </div>
+        </section>`;
     }
 
     function findModel(id) {
@@ -243,6 +267,19 @@ export async function render(container) {
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
             startEdit(providers.find((p) => p.id === Number(b.dataset.edit)));
         }));
+        container.querySelector('#default-model')?.addEventListener('change', async (ev) => {
+            const prev = defaultModel;
+            defaultModel = ev.target.value;
+            try {
+                await api.put('/ai/default-model', { default_model: defaultModel });
+                listMessage = 'บันทึกผู้ช่วย AI เริ่มต้นแล้ว';
+                refreshAssistantModels();
+            } catch (e) {
+                defaultModel = prev;
+                alert(e.message || 'บันทึกไม่สำเร็จ');
+            }
+            draw();
+        });
         if (!editing) return;
 
         container.querySelector('#preset-select').addEventListener('change', (ev) => {
