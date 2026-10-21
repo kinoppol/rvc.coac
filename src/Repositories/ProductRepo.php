@@ -65,12 +65,18 @@ class ProductRepo
      *
      * @param array<int,array{barcode:string,pack_size:int}> $packs
      */
-    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip): void
+    /** Name (null = keep), piece barcode and pack barcodes of a store product. */
+    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null): void
     {
         $old = $this->find($productId);
         if (!$old || $old['consignor_id'] !== null) {
             throw new \RuntimeException('ไม่พบสินค้าของร้าน');
         }
+        $name = $name === null ? $old['name'] : trim(preg_replace('/\s+/u', ' ', $name));
+        if ($name === '') {
+            throw new \RuntimeException('กรุณากรอกชื่อสินค้า');
+        }
+        $name = mb_substr($name, 0, 191);
         $barcode = trim((string) $barcode) ?: null;
         $clean = [];
         foreach ($packs as $p) {
@@ -102,7 +108,7 @@ class ProductRepo
         }
 
         $oldPacks = $this->packBarcodes($productId);
-        $this->db->prepare('UPDATE products SET barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$barcode, $productId]);
+        $this->db->prepare('UPDATE products SET name = ?, barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$name, $barcode, $productId]);
         // Numeric barcodes become int array keys; compare as strings.
         $keep = array_map('strval', array_keys($clean));
         $del = $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode = ?');
@@ -120,8 +126,8 @@ class ProductRepo
         }
         $this->audit->log(
             'products', $productId, 'update',
-            ['barcode' => $old['barcode'], 'pack_barcodes' => $oldPacks],
-            ['barcode' => $barcode, 'pack_barcodes' => $this->packBarcodes($productId)],
+            ['name' => $old['name'], 'barcode' => $old['barcode'], 'pack_barcodes' => $oldPacks],
+            ['name' => $name, 'barcode' => $barcode, 'pack_barcodes' => $this->packBarcodes($productId)],
             $userId, $ip
         );
     }

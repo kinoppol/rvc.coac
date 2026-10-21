@@ -26,7 +26,7 @@ class InventoryController
         ]);
     }
 
-    /** Piece barcode (scanned at the POS) and the pack barcodes of one store product. */
+    /** Name, piece barcode (scanned at the POS) and the pack barcodes of one store product. */
     public function updateBarcodes(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
@@ -36,7 +36,7 @@ class InventoryController
         $id = (int) $args['id'];
         $db->beginTransaction();
         try {
-            $repo->updateBarcodes($id, $body['barcode'] ?? null, (array) ($body['pack_barcodes'] ?? []), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $repo->updateBarcodes($id, $body['barcode'] ?? null, (array) ($body['pack_barcodes'] ?? []), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, isset($body['name']) ? (string) $body['name'] : null);
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
@@ -46,6 +46,6 @@ class InventoryController
             throw $e;
         }
         $p = $repo->find($id);
-        return $this->json($response, ['data' => ['barcode' => $p['barcode'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
+        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
     }
 }

@@ -112,7 +112,7 @@ export async function render(container, { navigate, permissions }) {
             editing = { id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })), error: null, busy: false };
             if (!editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
             draw();
-            container.querySelector('#bc-piece')?.focus();
+            container.querySelector('#bc-name')?.focus();
         }));
         if (editing) bindEdit();
     }
@@ -124,7 +124,7 @@ export async function render(container, { navigate, permissions }) {
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span></div>`).join('')}
-            ${canEdit ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขบาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
+            ${canEdit ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
@@ -144,10 +144,13 @@ export async function render(container, { navigate, permissions }) {
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:560px">
             <div class="modal-head">
-              <h2>บาร์โค้ด · ${escapeHtml(e.name)}</h2>
+              <h2>แก้ไขสินค้า</h2>
               <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
+              <label class="field" style="display:block;margin-bottom:16px">ชื่อสินค้า (ชื่อที่ใช้ขายต่อชิ้น)
+                <input id="bc-name" value="${escapeHtml(e.name)}" maxlength="191" style="width:100%">
+              </label>
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
                 <input id="bc-piece" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
@@ -172,6 +175,7 @@ export async function render(container, { navigate, permissions }) {
 
     function bindEdit() {
         const e = editing;
+        container.querySelector('#bc-name').addEventListener('input', (ev) => { e.name = ev.target.value; });
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];
@@ -189,15 +193,18 @@ export async function render(container, { navigate, permissions }) {
         });
         container.querySelectorAll('[data-close-edit]').forEach((b) => b.addEventListener('click', () => { editing = null; draw(); }));
         container.querySelector('#bc-save').addEventListener('click', async () => {
+            if (!e.name.trim()) { e.error = 'กรุณากรอกชื่อสินค้า'; draw(); return; }
             e.busy = true; e.error = null; draw();
             try {
                 const out = await api.put(`/inventory/${e.id}/barcodes`, {
+                    name: e.name.trim(),
                     barcode: e.barcode.trim(),
                     pack_barcodes: e.packs
                         .filter((p) => String(p.barcode).trim())
                         .map((p) => ({ barcode: String(p.barcode).trim(), pack_size: Number(p.pack_size) })),
                 });
                 const p = res.data.find((x) => x.id === e.id);
+                p.name = out.data.name;
                 p.barcode = out.data.barcode;
                 p.pack_barcodes = out.data.pack_barcodes;
                 editing = null;
