@@ -173,6 +173,17 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id}/counts', [StockCountController::class, 'saveCounts'])
         ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/{id:[0-9]+}/search', [StockCountController::class, 'search'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/count', [StockCountController::class, 'countOne'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/barcode', [StockCountController::class, 'assignBarcode'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/products/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
     $group->post('/stockcounts/{id}/submit', [StockCountController::class, 'submit'])
         ->add(new RoleGuard('stockcount.submit'));
     $group->post('/stockcounts/{id}/approve', [StockCountController::class, 'approve'])

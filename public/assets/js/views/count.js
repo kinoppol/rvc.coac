@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, escapeHtml } from '../util.js';
+import { openMobileCount } from './count-mobile.js';
 
 export async function render(container, { permissions }) {
     let current = null;
@@ -57,6 +58,11 @@ export async function render(container, { permissions }) {
           <div class="kpi"><div class="lbl">มูลค่าผลต่างสุทธิ</div><div class="val">฿ ${money(diffValue)}</div></div>
         </div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
+        ${current.status === 'draft' ? `
+          <section class="card card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div><b>โหมดนับด้วยมือถือ</b><div class="muted" style="font-size:13px">สแกนบาร์โค้ดด้วยกล้อง ปุ่มกดตัวเลขขนาดใหญ่ ถ่ายภาพสินค้า และค้นหาสินค้าเพื่อผูกบาร์โค้ด — บันทึกทันทีทีละรายการ</div></div>
+            <button type="button" class="btn" id="btn-mobile" style="font-size:15px;padding:12px 18px">📱 เปิดโหมดนับด้วยมือถือ</button>
+          </section>` : ''}
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th></tr></thead>
@@ -85,6 +91,12 @@ export async function render(container, { permissions }) {
 
         container.querySelectorAll('[data-idx]').forEach((inp) => inp.addEventListener('change', (e) => {
             items[Number(e.target.dataset.idx)]._pendingCounted = e.target.value;
+        }));
+        const mobileBtn = container.querySelector('#btn-mobile');
+        if (mobileBtn) mobileBtn.addEventListener('click', () => openMobileCount({
+            stockCount: current,
+            items,
+            onClose: () => loadOne(current.id),
         }));
         const saveBtn = container.querySelector('#btn-save');
         if (saveBtn) saveBtn.addEventListener('click', () => saveCounts(false));

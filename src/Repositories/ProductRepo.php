@@ -132,6 +132,62 @@ class ProductRepo
         );
     }
 
+    /**
+     * Links one more barcode to a product: the piece barcode (pack size 1,
+     * replacing the old one) or, for store goods only, a pack barcode.
+     */
+    public function assignBarcode(int $productId, string $code, int $packSize, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        $code = trim($code);
+        if ($code === '' || mb_strlen($code) > 64) {
+            throw new \RuntimeException('บาร์โค้ดไม่ถูกต้อง');
+        }
+        if ($packSize === 1) {
+            if ($old['barcode'] === $code) {
+                return;
+            }
+            $packs = $old['consignor_id'] === null ? $this->packBarcodes($productId) : [];
+            $packs = array_values(array_filter($packs, fn ($p) => $p['barcode'] !== $code));
+        } else {
+            if ($old['consignor_id'] !== null) {
+                throw new \RuntimeException('สินค้าฝากขายใช้ได้เฉพาะบาร์โค้ดชิ้น');
+            }
+            $packs = array_values(array_filter($this->packBarcodes($productId), fn ($p) => $p['barcode'] !== $code));
+            $packs[] = ['barcode' => $code, 'pack_size' => $packSize];
+        }
+        $barcode = $packSize === 1 ? $code : ($old['barcode'] === $code ? null : $old['barcode']);
+        if ($old['consignor_id'] === null) {
+            $this->updateBarcodes($productId, $barcode, $packs, $userId, $ip);
+            return;
+        }
+        $stmt = $this->db->prepare(
+            'SELECT name FROM products WHERE barcode = ? AND id <> ?
+             UNION SELECT p.name FROM product_pack_barcodes b JOIN products p ON p.id = b.product_id WHERE b.barcode = ? LIMIT 1'
+        );
+        $stmt->execute([$code, $productId, $code]);
+        $owner = $stmt->fetchColumn();
+        if ($owner !== false) {
+            throw new \RuntimeException("บาร์โค้ด {$code} ใช้กับสินค้า \"{$owner}\" อยู่แล้ว");
+        }
+        $this->db->prepare('UPDATE products SET barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$code, $productId]);
+        $this->audit->log('products', $productId, 'update', ['barcode' => $old['barcode']], ['barcode' => $code], $userId, $ip);
+    }
+
+    /** Sets the product photo (an attachment token). */
+    public function setImage(int $productId, string $token, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        $this->db->prepare('UPDATE products SET image_token = ?, updated_at = NOW() WHERE id = ?')->execute([$token, $productId]);
+        $this->audit->log('products', $productId, 'update', ['image_token' => $old['image_token']], ['image_token' => $token], $userId, $ip);
+    }
+
     public function forConsignor(int $consignorId): array
     {
         $stmt = $this->db->prepare('SELECT * FROM products WHERE consignor_id = ? ORDER BY name ASC');

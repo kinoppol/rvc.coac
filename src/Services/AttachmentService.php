@@ -25,7 +25,7 @@ class AttachmentService
     }
 
     /** Saves a "data:image/...;base64,..." string and returns the attachment row. */
-    public function saveDataUrl(string $dataUrl, int $userId): array
+    public function saveDataUrl(string $dataUrl, int $userId, string $folder = 'receipts'): array
     {
         if (!preg_match('#^data:(image/[a-z]+);base64,(.+)$#s', $dataUrl, $m)) {
             throw new \RuntimeException('รูปแบบไฟล์รูปไม่ถูกต้อง');
@@ -45,7 +45,7 @@ class AttachmentService
         }
 
         $token = bin2hex(random_bytes(16));
-        $rel = 'receipts/' . date('Ym') . '/' . $token . '.' . self::MIME_EXT[$mime];
+        $rel = $folder . '/' . date('Ym') . '/' . $token . '.' . self::MIME_EXT[$mime];
         $abs = $this->baseDir() . '/' . $rel;
         if (!is_dir(dirname($abs)) && !mkdir(dirname($abs), 0775, true) && !is_dir(dirname($abs))) {
             throw new \RuntimeException('สร้างโฟลเดอร์เก็บไฟล์ไม่ได้');

@@ -57,7 +57,7 @@ class StockCountService
     public function diffSummary(int $stockCountId): array
     {
         $stmt = $this->db->prepare(
-            "SELECT sci.*, p.name, p.sale_price, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
+            "SELECT sci.*, p.name, p.sale_price, p.barcode, p.image_token, p.consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
              FROM stock_count_items sci
              JOIN products p ON p.id = sci.product_id
              LEFT JOIN consignors c ON c.id = p.consignor_id
@@ -77,6 +77,96 @@ class StockCountService
         }
 
         return ['items' => $items, 'diff_count' => $diffCount, 'diff_value' => round($diffValue, 2)];
+    }
+
+    /**
+     * Product matched by a scanned or typed code: its piece barcode first, then
+     * a store pack barcode (pack_size > 1), with its line in this count if any.
+     */
+    public function lookup(int $stockCountId, string $code): ?array
+    {
+        $code = trim($code);
+        if ($code === '') {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT id FROM products WHERE barcode = ? LIMIT 1');
+        $stmt->execute([$code]);
+        $id = $stmt->fetchColumn();
+        $packSize = 1;
+        if ($id === false) {
+            $stmt = $this->db->prepare(
+                'SELECT b.product_id, b.pack_size FROM product_pack_barcodes b JOIN products p ON p.id = b.product_id
+                 WHERE b.barcode = ? AND p.consignor_id IS NULL LIMIT 1'
+            );
+            $stmt->execute([$code]);
+            $row = $stmt->fetch();
+            if (!$row) {
+                return null;
+            }
+            $id = $row['product_id'];
+            $packSize = (int) $row['pack_size'];
+        }
+        return $this->productInfo($stockCountId, (int) $id) + ['scanned_pack_size' => $packSize];
+    }
+
+    /** Products by name or barcode, for counting goods without a barcode or linking one. */
+    public function search(int $stockCountId, string $q, int $limit = 30): array
+    {
+        $q = trim($q);
+        $stmt = $this->db->prepare(
+            "SELECT p.id FROM products p
+             WHERE p.name LIKE ? OR p.barcode = ?
+                OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?)
+             ORDER BY (p.qty_stock > 0) DESC, p.name ASC LIMIT " . (int) $limit
+        );
+        $stmt->execute(['%' . $q . '%', $q, $q]);
+        return array_map(fn ($id) => $this->productInfo($stockCountId, (int) $id), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /** One product with its pack barcodes and its line (item) in the given count. */
+    public function productInfo(int $stockCountId, int $productId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT p.id, p.name, p.barcode, p.image_token, p.consignor_id, p.qty_stock, p.sale_price,
+                    COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
+             FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id WHERE p.id = ?"
+        );
+        $stmt->execute([$productId]);
+        $product = $stmt->fetch();
+        if (!$product) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        $stmt = $this->db->prepare('SELECT barcode, pack_size FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
+        $stmt->execute([$productId]);
+        $product['pack_barcodes'] = array_map(fn ($r) => ['barcode' => $r['barcode'], 'pack_size' => (int) $r['pack_size']], $stmt->fetchAll());
+        $stmt = $this->db->prepare('SELECT * FROM stock_count_items WHERE stock_count_id = ? AND product_id = ? LIMIT 1');
+        $stmt->execute([$stockCountId, $productId]);
+        $product['item'] = $stmt->fetch() ?: null;
+        return $product;
+    }
+
+    /**
+     * Records the physical count of one product. A product the count did not
+     * list (system stock was 0) is added with its current system quantity.
+     */
+    public function setCount(int $stockCountId, int $productId, int $counted): array
+    {
+        $sc = $this->get($stockCountId);
+        if (!$sc || $sc['status'] !== 'draft') {
+            throw new \RuntimeException('รอบตรวจนับนี้ส่งรายงานแล้ว แก้ไขจำนวนไม่ได้');
+        }
+        if ($counted < 0 || $counted > 1000000) {
+            throw new \RuntimeException('จำนวนนับไม่ถูกต้อง');
+        }
+        $info = $this->productInfo($stockCountId, $productId);
+        if (!$info['item']) {
+            $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty) VALUES (?, ?, ?)')
+                ->execute([$stockCountId, $productId, (int) $info['qty_stock']]);
+        }
+        $this->db->prepare(
+            'UPDATE stock_count_items SET counted_qty = ?, diff_qty = ? - system_qty WHERE stock_count_id = ? AND product_id = ?'
+        )->execute([$counted, $counted, $stockCountId, $productId]);
+        return $this->productInfo($stockCountId, $productId);
     }
 
     public function submit(int $stockCountId): void
