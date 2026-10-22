@@ -393,12 +393,14 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-btn.ghost { flex: 0 0 auto; padding: 0 16px; background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .mc-btn.ghost.on { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
 .mc-btn.wide { width: 100%; }
-.mc-sheet { position: absolute; inset: 0; background: rgba(10,18,36,.55); display: flex; align-items: flex-end; z-index: 2; }
+.mc.sheet-open > .mc-cam, .mc.sheet-open > .mc-scroll, .mc.sheet-open > .mc-pad, .mc.sheet-open > .mc-actions, .mc.sheet-open .mc-scan { display: none; }
+.mc-sheet { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px 40vh; }
 .mc-sheet[hidden] { display: none; }
-.mc-sheet-box { width: 100%; max-height: 88dvh; display: flex; flex-direction: column; background: var(--surface); border-radius: 18px 18px 0 0; padding: 12px 14px calc(14px + env(safe-area-inset-bottom)); }
-.mc-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 16px; }
+.mc-sheet-box { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.mc-sheet-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 16px; }
+.mc-back { flex: none; height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
 .mc-search { font: inherit; font-size: 17px; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
-.mc-results { overflow-y: auto; margin-top: 8px; min-height: 40vh; }
+.mc-results { margin-top: 8px; }
 .mc-result { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
 .mc-result-photo { flex: 0 0 52px; width: 52px; height: 52px; padding: 0; border: 1px dashed var(--border); border-radius: 9px; overflow: hidden; background: var(--surface2); cursor: pointer; }
 .mc-result-photo img, .mc-noimg { width: 100%; height: 100%; object-fit: cover; display: grid; place-items: center; font-size: 20px; }

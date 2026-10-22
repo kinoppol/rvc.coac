@@ -128,6 +128,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         const scan = root.querySelector('.mc-scan');
         scan.classList.toggle('on', !cam.hidden);
         scan.textContent = cam.hidden ? '📷 สแกน' : '⏹ ปิดกล้อง';
+        resumeScanSoon();
 
         let card = '';
         if (product) {
@@ -268,27 +269,37 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
     }
 
-    // ---- bottom sheets: product search and piece/pack choice ----
+    // ---- pages: product search and piece/pack choice. They replace the keypad screen
+    // (one layer, scrolls as a whole) rather than sliding over it. ----
     const sheet = $('sheet');
     let redrawResults = null;   // re-renders the open search list (after a photo is added)
+    function showSheet(html) {
+        stopCamera();   // reopens on return to the barcode screen
+        sheet.hidden = false;
+        sheet.innerHTML = html;
+        sheet.scrollTop = 0;
+        root.classList.add('sheet-open');
+    }
     function closeSheet() {
         sheet.hidden = true;
         sheet.innerHTML = '';
         redrawResults = null;
+        root.classList.remove('sheet-open');
+        draw();
     }
+    const backBtn = '<button type="button" class="mc-back" data-sheet="close">← กลับ</button>';
 
     function openSearch(linkCode) {
-        sheet.hidden = false;
-        sheet.innerHTML = `
+        showSheet(`
           <div class="mc-sheet-box">
             <div class="mc-sheet-head">
+              ${backBtn}
               <b>${linkCode ? `เลือกสินค้าที่จะผูกบาร์โค้ด ${escapeHtml(linkCode)}` : 'ค้นหาสินค้า'}</b>
-              <button type="button" class="mc-icon" data-sheet="close" aria-label="ปิด">✕</button>
             </div>
             ${linkCode ? `<div class="mc-msg bad" style="margin-bottom:8px">ไม่พบบาร์โค้ดนี้ในฐานข้อมูล — ค้นหาชื่อสินค้าแล้วแตะเพื่อจับคู่</div>` : ''}
             <input type="search" class="mc-search" placeholder="พิมพ์ชื่อสินค้า หรือบาร์โค้ด" enterkeyhint="search" autocomplete="off">
             <div class="mc-results"><div class="muted" style="padding:12px">พิมพ์อย่างน้อย 1 ตัวอักษร</div></div>
-          </div>`;
+          </div>`);
         const box = sheet.querySelector('.mc-results');
         const field = sheet.querySelector('.mc-search');
         let found = [];
@@ -345,22 +356,25 @@ export function openMobileCount({ stockCount, items, onClose }) {
 
     function openLinkSheet(p, code) {
         const storeGoods = p.consignor_id === null;
-        sheet.hidden = false;
-        sheet.innerHTML = `
+        showSheet(`
           <div class="mc-sheet-box">
             <div class="mc-sheet-head">
+              ${backBtn}
               <b>ผูกบาร์โค้ด ${escapeHtml(code)}</b>
-              <button type="button" class="mc-icon" data-sheet="close" aria-label="ปิด">✕</button>
             </div>
             <p style="margin:4px 0 12px">กับสินค้า <b>${escapeHtml(p.name)}</b></p>
             <button type="button" class="mc-btn wide" data-size="1">บาร์โค้ดชิ้น (ขายที่ POS)</button>
             ${p.barcode && p.barcode !== code ? `<p class="muted" style="font-size:13px;margin:6px 0 0">แทนที่บาร์โค้ดชิ้นเดิม ${escapeHtml(p.barcode)}</p>` : ''}
             ${storeGoods ? `
               <div class="mc-pack-row">
-                <button type="button" class="mc-btn alt wide" data-size="pack">บาร์โค้ดแพ็ค</button>
                 <label>แพ็คละ <input type="number" inputmode="numeric" min="2" max="1000" class="mc-pack-size" placeholder="24"> ชิ้น</label>
+                <button type="button" class="mc-btn alt wide" data-size="pack">บาร์โค้ดแพ็ค</button>
               </div>` : ''}
-          </div>`;
+          </div>`);
+        // Keep the pack field and its button above the on-screen keyboard.
+        sheet.querySelector('.mc-pack-size')?.addEventListener('focus', (e) => {
+            setTimeout(() => e.target.closest('.mc-pack-row').scrollIntoView({ block: 'end', behavior: 'smooth' }), 300);
+        });
         sheet.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
             let size = 1;
             if (b.dataset.size === 'pack') {
@@ -375,38 +389,68 @@ export function openMobileCount({ stockCount, items, onClose }) {
     }
 
     sheet.addEventListener('click', (e) => {
-        if (e.target === sheet || e.target.closest('[data-sheet="close"]')) closeSheet();
+        if (e.target.closest('[data-sheet="close"]')) closeSheet();
     });
 
-    // ---- camera ----
-    async function toggleScan() {
-        const cam = $('cam');
-        if (stopScan) {
-            stopScan();
-            stopScan = null;
-            cam.hidden = true;
-            draw();
-            return;
-        }
-        cam.hidden = false;
+    // ---- camera: closes as soon as a barcode is read, and opens again by itself
+    // once that product is saved / linked / cancelled (while scanning is switched on) ----
+    let scanWanted = false;
+    let scanStarting = false;
+
+    function stopCamera() {
+        stopScan?.();
+        stopScan = null;
+        $('cam').hidden = true;
+    }
+
+    async function startCamera() {
+        if (stopScan || scanStarting) return;
+        scanStarting = true;
+        $('cam').hidden = false;
         draw();
         try {
-            stopScan = await startScanner(video, (code) => {
-                if (!sheet.hidden) return;   // picking a product / photo in the sheet
+            const stop = await startScanner(video, (code) => {
+                if (!stopScan || !sheet.hidden) return;
                 const now = Date.now();
                 if (code === lastScan.code && now - lastScan.at < 2500) return;
                 lastScan = { code, at: now };
+                stopCamera();
                 if (mode === 'qty' && !linkFor) {
                     // A new scan while keying a quantity starts over with the new product.
                     mode = 'code';
                 }
+                draw();
                 handleCode(code);
             });
+            if (!scanWanted || !sheet.hidden) stop();   // switched off / moved on while starting
+            else stopScan = stop;
         } catch (e) {
-            cam.hidden = true;
+            scanWanted = false;
             message = { kind: 'bad', text: 'เปิดกล้องไม่ได้: ' + (e.message || e.name) };
+        } finally {
+            scanStarting = false;
+            if (!stopScan) $('cam').hidden = true;
             draw();
         }
+    }
+
+    function toggleScan() {
+        if (!$('cam').hidden) {
+            scanWanted = false;
+            stopCamera();
+            draw();
+        } else {
+            scanWanted = true;
+            startCamera();
+        }
+    }
+
+    /** Back on the barcode screen with nothing pending: reopen the camera. */
+    function resumeScanSoon() {
+        if (!scanWanted || stopScan || scanStarting) return;
+        setTimeout(() => {
+            if (scanWanted && !stopScan && !scanStarting && !busy && sheet.hidden && mode === 'code') startCamera();
+        }, 0);
     }
 
     // ---- photo: saved on the product record (products.image_token) ----
@@ -454,7 +498,8 @@ export function openMobileCount({ stockCount, items, onClose }) {
     }
 
     function close() {
-        stopScan?.();
+        scanWanted = false;
+        stopCamera();
         document.removeEventListener('keydown', onKey);
         if (document.fullscreenElement === root) document.exitFullscreen().catch(() => {});
         document.body.classList.remove('mc-open');
