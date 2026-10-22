@@ -47,9 +47,9 @@ class SettingsController
             }
             $body['pos_payment_methods'] = implode(',', $methods);
         }
-        foreach (['pos_payment_mixed', 'pos_sell_out_of_stock'] as $flag) {
-            if (isset($body[$flag])) {
-                $body[$flag] = $body[$flag] ? '1' : '0';
+        foreach (['pos_mixed_roles', 'pos_short_stock_roles'] as $key) {
+            if (isset($body[$key])) {
+                $body[$key] = implode(',', array_intersect(SettingsService::POS_ROLES, explode(',', (string) $body[$key])));
             }
         }
         $user = $request->getAttribute('user');

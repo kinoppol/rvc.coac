@@ -109,6 +109,12 @@ export async function render(page, { user, permissions, params = {} }) {
 
     function drawPos({ settings: s }) {
         const on = (s.pos_payment_methods || '').split(',');
+        const POS_ROLES = ['admin', 'manager', 'advisor', 'cashier'];
+        const roleBoxes = (name, value) => {
+            const picked = (value || '').split(',');
+            return `<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px">${POS_ROLES.map((r) => `
+              <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="${name}" value="${r}" ${picked.includes(r) ? 'checked' : ''} style="width:20px;height:20px"> ${escapeHtml(ROLE_LABEL[r])}</label>`).join('')}</div>`;
+        };
         pane.innerHTML = `
           <div style="max-width:720px">
             <form id="pos-form">
@@ -120,16 +126,17 @@ export async function render(page, { user, permissions, params = {} }) {
                     ${Object.entries(PAYMENT_LABEL).map(([k, label]) => `
                       <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="method" value="${k}" ${on.includes(k) ? 'checked' : ''} style="width:20px;height:20px"> ${escapeHtml(label)}</label>`).join('')}
                   </div>
-                  <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
-                  <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="mixed" ${s.pos_payment_mixed === '1' ? 'checked' : ''} style="width:20px;height:20px">
-                    อนุญาตชำระแบบผสม <span class="muted" style="font-size:12.5px">(เช่น เงินสดบางส่วน + โอนเงินส่วนที่เหลือ)</span></label>
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
-                  <h2 style="margin-bottom:6px">สินค้าที่คงเหลือในระบบไม่พอ</h2>
-                  <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="out_of_stock" ${s.pos_sell_out_of_stock === '1' ? 'checked' : ''} style="width:20px;height:20px">
-                    เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (0 หรือติดลบ)</label>
-                  <p class="muted" style="font-size:12.5px;margin:8px 0 0 30px">ใช้เมื่อสต๊อกในระบบคลาดเคลื่อน หรือมีของเข้าร้านแล้วแต่ยังไม่ได้บันทึกรับเข้าระบบ
-                    สินค้าเหล่านี้จะค้นหาเจอและแสดงเป็นสีจางในหน้าขาย ขายได้แม้สต๊อกจะติดลบ ควรตรวจนับหรือบันทึกรับสินค้าให้ตรงภายหลัง</p>
+                  <h2 style="margin-bottom:6px">สิทธิ์ใช้สวิตช์ในหน้าขายสินค้า</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 4px">สวิตช์เหล่านี้ปิดไว้เป็นปกติ ผู้ใช้บทบาทที่เลือกจะเปิดใช้เองได้ในหน้าขายเมื่อจำเป็น</p>
+                  <div style="margin-top:14px;font-weight:600;font-size:14px">ชำระแบบผสม <span class="muted" style="font-size:12.5px;font-weight:400">(เช่น เงินสดบางส่วน + โอนเงินส่วนที่เหลือ) — สวิตช์อยู่ในหน้าต่างชำระเงิน</span></div>
+                  ${roleBoxes('mixed_roles', s.pos_mixed_roles)}
+                  <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
+                  <div style="font-weight:600;font-size:14px">ขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (0 หรือติดลบ)</div>
+                  <p class="muted" style="font-size:12.5px;margin:4px 0 0">ใช้เมื่อสต๊อกในระบบคลาดเคลื่อน หรือมีของเข้าร้านแล้วแต่ยังไม่ได้บันทึกรับเข้าระบบ
+                    เมื่อผู้ใช้เปิดสวิตช์ สินค้าเหล่านี้จะค้นหาเจอ (สีจาง) และขายได้แม้สต๊อกจะติดลบ ควรตรวจนับหรือบันทึกรับสินค้าให้ตรงภายหลัง</p>
+                  ${roleBoxes('short_roles', s.pos_short_stock_roles)}
                 </section>
                 ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
               </fieldset>
@@ -140,7 +147,7 @@ export async function render(page, { user, permissions, params = {} }) {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
-                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_payment_mixed: fd.has('mixed') ? 1 : 0, pos_sell_out_of_stock: fd.has('out_of_stock') ? 1 : 0 });
+                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(',') });
                 saved = true;
                 error = null;
                 await load();

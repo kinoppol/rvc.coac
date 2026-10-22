@@ -439,6 +439,8 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-out-note { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-weight: 600; font-size: 14.5px; }
 .pos-out-note small { display: block; margin-top: 4px; font-weight: 400; font-size: 12.5px; }
 .pos-out-note .pos-switch { margin-top: 10px; color: var(--text); }
+.pos-short-bar { padding: 2px 14px; border-radius: 10px; background: var(--warn-bg); border: 1px solid var(--warn); }
+.pos-short-bar .pos-switch { margin: 0; color: var(--warn); }
 .pos-switch { display: flex; align-items: center; gap: 10px; min-height: 48px; margin-top: 10px; font-size: 15px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
 .pos-switch small { font-weight: 400; font-size: 12.5px; }
 .pos-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -474,6 +476,7 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-cart-tools { display: flex; gap: 6px; }
 .pos-cart-tools .btn { min-height: 40px; }
 .pos-held { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--warn-bg); }
+.pos-held[hidden] { display: none; }
 .pos-held-label { flex: none; font-size: 12.5px; font-weight: 600; color: var(--warn); }
 .pos-held-chip { flex: none; display: flex; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
 .pos-held-chip button { border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; touch-action: manipulation; }

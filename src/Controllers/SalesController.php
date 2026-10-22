@@ -32,7 +32,8 @@ class SalesController
     /**
      * Products in stock for the POS. q matches name or barcode; an empty q
      * with all=1 lists everything (the picture grid). sold_qty = pieces sold
-     * in the last 90 days, used for "popular" ordering.
+     * in the last 90 days, used for "popular" ordering. short=1 also lists
+     * products with stock below 1, for roles allowed to sell them.
      */
     public function searchProducts(Request $request, Response $response): Response
     {
@@ -44,7 +45,9 @@ class SalesController
             return $this->json($response, ['data' => []]);
         }
         $db = Db::connection();
-        $stock = (new SettingsService($db))->get('pos_sell_out_of_stock') === '1' ? '1 = 1' : 'p.qty_stock > 0';
+        $role = $request->getAttribute('user')['role'] ?? null;
+        $short = !empty($params['short']) && (new SettingsService($db))->posRoleAllows('pos_short_stock_roles', $role);
+        $stock = $short ? '1 = 1' : 'p.qty_stock > 0';
         if (!empty($params['out']) && $q !== '') {
             // Matches the POS cannot sell (stock below 1), shown so the cashier knows why.
             $stock = 'p.qty_stock < 1';
@@ -69,15 +72,16 @@ class SalesController
         return $this->json($response, ['data' => $stmt->fetchAll()]);
     }
 
-    /** Payment methods the admin has turned on for the POS. */
+    /** Payment methods the admin has turned on, and which POS switches this user's role may use. */
     public function options(Request $request, Response $response): Response
     {
         $settings = new SettingsService(Db::connection());
+        $role = $request->getAttribute('user')['role'] ?? null;
         $methods = array_map(fn ($m) => ['key' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]], $settings->paymentMethods());
         return $this->json($response, [
             'payment_methods' => $methods,
-            'payment_mixed' => $settings->get('pos_payment_mixed') === '1',
-            'sell_out_of_stock' => $settings->get('pos_sell_out_of_stock') === '1',
+            'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
+            'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
         ]);
     }
 
@@ -105,12 +109,13 @@ class SalesController
         try {
             $payments = [
                 'methods' => $settings->paymentMethods(),
-                'mixed' => $settings->get('pos_payment_mixed') === '1',
+                'mixed' => $settings->posRoleAllows('pos_mixed_roles', $user['role'] ?? null),
                 'lines' => is_array($body['payments'] ?? null) ? $body['payments'] : [],
             ];
             $result = $service->record($items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, [
                 'payments' => $payments,
-                'allow_short_stock' => $settings->get('pos_sell_out_of_stock') === '1',
+                // The cashier's own switch, honoured only for roles the admin allows.
+                'allow_short_stock' => !empty($body['allow_short']) && $settings->posRoleAllows('pos_short_stock_roles', $user['role'] ?? null),
             ]);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);

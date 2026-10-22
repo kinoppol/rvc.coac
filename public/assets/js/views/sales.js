@@ -49,8 +49,7 @@ function beep(ok) {
     } catch (e) { /* no audio */ }
 }
 
-export async function render(container, { user, permissions = [] } = {}) {
-    const canSettings = permissions.includes('settings.edit');
+export async function render(container, { user } = {}) {
     // The open cart and held carts live in this browser per user, so they survive
     // leaving the page or a reload until the sale is finished or cleared.
     const CART_KEY = `pos.cart.${user?.id ?? 0}`;
@@ -63,7 +62,11 @@ export async function render(container, { user, permissions = [] } = {}) {
     let keyboard = !TOUCH || pref('kb', '0') === '1';
     let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false };
     // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
-    const allowShort = () => !!options.sell_out_of_stock;
+    // The user's own switch (remembered on this device); only roles the admin allows get it.
+    const SHORT_KEY = `short.${user?.id ?? 0}`;
+    let shortMode = pref(SHORT_KEY, '0') === '1';
+    const canShort = () => !!options.sell_out_of_stock;
+    const allowShort = () => canShort() && shortMode;
     let modal = null; // the payment dialog element while open
     let msgTimer;
     // Products matching the search that cannot be sold (stock below 1, switch off).
@@ -91,6 +94,7 @@ export async function render(container, { user, permissions = [] } = {}) {
           </select>
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
+        <div data-el="shortbar"></div>
         <div data-el="msg"></div>
         <div class="pos-main">
           <section class="pos-products card" data-el="products"><div class="empty">กำลังโหลดสินค้า...</div></section>
@@ -170,11 +174,11 @@ export async function render(container, { user, permissions = [] } = {}) {
                     }, 250);
                 } else if (outHints.items.length) {
                     box.innerHTML = `
-                      <div class="pos-out-note">ไม่มีสินค้าที่ขายได้ตรงกับคำค้น — พบสินค้าที่คงเหลือในระบบต่ำกว่า 1 ซึ่งร้านยังไม่เปิดให้ขาย
-                        ${canSettings
-                            ? `<label class="pos-switch"><input type="checkbox" data-out-switch><span aria-hidden="true"></span> เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (ทั้งร้าน)</label>
-                               <small>ปิดได้ที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้องแทน</small>`
-                            : '<small>แจ้งผู้ดูแลระบบให้เปิดที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้อง</small>'}</div>
+                      <div class="pos-out-note">ไม่มีสินค้าที่ขายได้ตรงกับคำค้น — พบสินค้าที่คงเหลือในระบบต่ำกว่า 1
+                        ${canShort()
+                            ? `<label class="pos-switch"><input type="checkbox" data-out-switch><span aria-hidden="true"></span> เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1</label>
+                               <small>สต๊อกของสินค้าที่ขายจะติดลบ ควรบันทึกรับสินค้า/ตรวจนับให้ถูกต้องภายหลัง</small>`
+                            : '<small>บทบาทของคุณยังไม่ได้รับสิทธิ์ขายสินค้าที่คงเหลือต่ำกว่า 1 แจ้งผู้ดูแลระบบ (ตั้งค่า &gt; หน้าขายสินค้า (POS)) หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้อง</small>'}</div>
                       <div class="pos-list">${outHints.items.map((p) => `
                         <div class="pos-row out" aria-disabled="true">
                           <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
@@ -271,7 +275,14 @@ export async function render(container, { user, permissions = [] } = {}) {
         redraw();
     }
 
+    function drawShortBar() {
+        el('shortbar').innerHTML = allowShort() ? `
+          <div class="pos-short-bar"><label class="pos-switch"><input type="checkbox" data-out-switch checked><span aria-hidden="true"></span>
+            กำลังเปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 <small>แตะเพื่อปิด</small></label></div>` : '';
+    }
+
     function redraw() {
+        drawShortBar();
         drawProducts();
         drawCart();
     }
@@ -320,7 +331,7 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     async function loadProducts() {
         try {
-            const res = await api.get('/sales/products?all=1&sort=popular');
+            const res = await api.get(`/sales/products?all=1&sort=popular${allowShort() ? '&short=1' : ''}`);
             products = res.data.map((p) => ({ ...p, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), sold_qty: Number(p.sold_qty) }));
         } catch (e) {
             message(e.message, 'error');
@@ -472,6 +483,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             try {
                 const res = await api.post('/sales', {
                     items: cart.map((i) => ({ product_id: i.id, qty: i.qty })),
+                    allow_short: allowShort(),
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
                 done = res.data;
@@ -568,22 +580,13 @@ export async function render(container, { user, permissions = [] } = {}) {
     });
     on(q, 'blur', () => { if (TOUCH) setTimeout(setKeyboard, 0); });
 
-    on(el('products'), 'change', async (e) => {
+    on(root, 'change', async (e) => {
         if (!e.target.matches('[data-out-switch]')) return;
-        if (!confirm('เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 สำหรับทุกเครื่องในร้าน? สต๊อกของสินค้าเหล่านี้จะติดลบเมื่อขาย')) {
-            e.target.checked = false;
-            return;
-        }
-        try {
-            await api.put('/settings', { pos_sell_out_of_stock: 1 });
-            options.sell_out_of_stock = true;
-            outHints = { term: '', items: [] };
-            await loadProducts();
-            message('เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว');
-        } catch (err) {
-            e.target.checked = false;
-            message(err.message, 'error');
-        }
+        shortMode = e.target.checked;
+        savePref(SHORT_KEY, shortMode ? '1' : '0');
+        outHints = { term: '', items: [] };
+        await loadProducts();
+        message(shortMode ? 'เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว' : 'ปิดการขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว');
         focusSearch();
     });
 
