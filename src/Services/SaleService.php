@@ -149,6 +149,11 @@ class SaleService
             $upd = $this->db->prepare('UPDATE sales SET total_qty = ?, total_value = ? WHERE id = ?');
             $upd->execute([$totalQty, round($totalValue, 2), $saleId]);
 
+            $change = 0.0;
+            if (isset($opts['payments'])) {
+                $change = $this->recordPayments($saleId, round($totalValue, 2), $opts['payments']);
+            }
+
             $this->audit->log('sales', $saleId, 'create', null, [
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
             ], $cashierId, $ip);
@@ -156,12 +161,61 @@ class SaleService
             if ($own) {
                 $this->db->commit();
             }
-            return ['id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2)];
+            return ['id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2), 'change' => $change];
         } catch (\Throwable $e) {
             if ($own) {
                 $this->db->rollBack();
             }
             throw $e;
         }
+    }
+
+    /**
+     * Saves how a POS sale was paid. Non-cash amounts are taken as exact; cash
+     * covers the rest and may be more than that (the difference is change).
+     * @param array{methods:string[], mixed:bool, lines:array<int,array{method:string, amount:float}>} $payments
+     * @return float change to give back
+     */
+    private function recordPayments(int $saleId, float $total, array $payments): float
+    {
+        $byMethod = [];
+        foreach ($payments['lines'] as $p) {
+            $method = (string) ($p['method'] ?? '');
+            $amount = round((float) ($p['amount'] ?? 0), 2);
+            if ($amount <= 0) {
+                continue;
+            }
+            if (!in_array($method, $payments['methods'], true)) {
+                throw new \RuntimeException('ร้านไม่ได้เปิดรับชำระด้วยวิธีนี้');
+            }
+            $byMethod[$method] = ($byMethod[$method] ?? 0) + $amount;
+        }
+        if (!$byMethod) {
+            throw new \RuntimeException('กรุณาระบุการชำระเงิน');
+        }
+        if (count($byMethod) > 1 && !$payments['mixed']) {
+            throw new \RuntimeException('ร้านไม่ได้เปิดรับการชำระแบบผสม');
+        }
+        $cash = $byMethod['cash'] ?? 0.0;
+        $nonCash = round(array_sum($byMethod) - $cash, 2);
+        if ($nonCash > $total + 0.004) {
+            throw new \RuntimeException('ยอดชำระที่ไม่ใช่เงินสดเกินยอดขาย');
+        }
+        $cashDue = round($total - $nonCash, 2);
+        if ($cash < $cashDue - 0.004) {
+            throw new \RuntimeException('ยอดชำระยังไม่ครบ ขาดอีก ' . number_format($cashDue - $cash, 2));
+        }
+
+        $ins = $this->db->prepare('INSERT INTO sale_payments (sale_id, method, amount) VALUES (?, ?, ?)');
+        foreach ($byMethod as $method => $amount) {
+            $applied = $method === 'cash' ? $cashDue : $amount;
+            if ($applied > 0) {
+                $ins->execute([$saleId, $method, $applied]);
+            }
+        }
+        $change = isset($byMethod['cash']) ? round($cash - $cashDue, 2) : 0.0;
+        $this->db->prepare('UPDATE sales SET cash_received = ?, change_amount = ? WHERE id = ?')
+            ->execute([isset($byMethod['cash']) ? $cash : null, $change, $saleId]);
+        return $change;
     }
 }

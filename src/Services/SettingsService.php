@@ -27,7 +27,18 @@ class SettingsService
         'login_methods' => 'both',
         'timezone' => '', // '' = app.timezone from config/config.php
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)
+        'pos_payment_methods' => 'cash,transfer,qr,card', // comma list of PAYMENT_METHODS accepted at the POS
+        'pos_payment_mixed' => '1', // 1 = a sale may be paid with more than one method
     ];
+
+    public const PAYMENT_METHODS = ['cash' => 'เงินสด', 'transfer' => 'โอนเงินเข้าบัญชี', 'qr' => 'สแกน QR-Code', 'card' => 'บัตรเครดิต'];
+
+    /** @return string[] payment methods the admin has turned on, in PAYMENT_METHODS order */
+    public function paymentMethods(): array
+    {
+        $on = explode(',', (string) $this->get('pos_payment_methods'));
+        return array_values(array_filter(array_keys(self::PAYMENT_METHODS), fn ($m) => in_array($m, $on, true)));
+    }
 
     /** Which RVC-ONE users the sync pulls: '' = staff and students (everything the app is allowed). */
     public const OA_SYNC_TYPE_KEY = 'oa_sync_type';

@@ -411,3 +411,101 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-pack-row { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .mc-pack-row label { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .mc-pack-size { width: 100px; font: inherit; font-size: 18px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
+
+/* ---------- POS (ขายสินค้า) — sized for touch screens ---------- */
+.pos { display: flex; flex-direction: column; gap: 12px; }
+.pos.pos-full { position: fixed; inset: 0; z-index: 40; background: var(--bg); padding: 12px; }
+body.pos-full-open { overflow: hidden; }
+.pos-bar { display: flex; align-items: center; gap: 10px; padding: 10px; flex-wrap: wrap; }
+.pos-search { flex: 1 1 240px; display: flex; align-items: center; gap: 10px; min-height: 60px; padding: 0 8px 0 16px; border: 2px solid var(--priBorder); border-radius: 12px; background: var(--surface); font-size: 22px; cursor: text; }
+.pos-search:focus-within { border-color: var(--pri); box-shadow: 0 0 0 3px var(--soft); }
+.pos-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: inherit; font: inherit; font-size: 22px; padding: 12px 0; }
+.pos-icon-btn, .pos-tool { flex: none; min-width: 48px; height: 48px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 20px; cursor: pointer; }
+.pos-icon-btn { border: 0; background: transparent; color: var(--muted); }
+.pos-tool { height: 60px; min-width: 60px; font-size: 24px; }
+.pos-tool.active { background: var(--soft); border-color: var(--pri); color: var(--pri); }
+.pos-seg { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; height: 60px; }
+.pos-seg button { border: 0; background: var(--surface); color: var(--text); padding: 0 16px; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.pos-seg button + button { border-left: 1px solid var(--border); }
+.pos-seg button.active { background: var(--pri); color: #fff; }
+.pos-sort { height: 60px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; padding: 0 12px; }
+.pos-msg { padding: 12px 16px; border-radius: 10px; font-size: 16px; font-weight: 600; }
+.pos-msg.ok { background: var(--ok-bg); color: var(--ok); }
+.pos-msg.error { background: var(--bad-bg); color: var(--bad); }
+.pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; height: max(480px, calc(100vh - 230px)); }
+.pos-full .pos-main { flex: 1; min-height: 0; height: auto; }
+.pos-products { overflow-y: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }
+.pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.pos-tile { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; touch-action: manipulation; }
+.pos-tile:active, .pos-row:active { transform: scale(.97); }
+.pos-tile.picked, .pos-row.picked { border-color: var(--pri); background: var(--soft); }
+.pos-tile-img { display: block; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--surface2); }
+.pos-tile-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pos-nopic { width: 100%; height: 100%; display: grid; place-items: center; background: #d6dae1; color: #8a919c; font-size: 18px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+.pos-tile-name { font-size: 14.5px; font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+.pos-tile-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.pos-tile-meta b { font-size: 17px; color: var(--pri); }
+.pos-tile-badge { position: absolute; top: -8px; right: -8px; min-width: 30px; height: 30px; padding: 0 8px; border-radius: 99px; background: var(--pri); color: #fff; font-weight: 700; font-size: 15px; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(16,24,40,.25); }
+.pos-list { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
+.pos-grid { padding-top: 6px; }
+.pos-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 16px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; }
+.pos-row-name { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; }
+.pos-row-name small, .pos-line-name small { display: block; font-size: 12.5px; font-weight: 400; color: var(--muted); }
+.pos-row-stock { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.pos-row > b { font-size: 18px; color: var(--pri); white-space: nowrap; }
+.pos-cart { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.pos-cart-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pos-cart-head h2 { margin: 0; font-size: 17px; }
+.pos-cart-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.pos-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name del" "qty total"; gap: 8px 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pos-line-name { grid-area: name; font-weight: 600; font-size: 15px; }
+.pos-line-del { grid-area: del; width: 40px; height: 40px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--bad); font-size: 16px; cursor: pointer; }
+.pos-qty { grid-area: qty; display: flex; align-items: center; gap: 6px; }
+.pos-qty button { width: 48px; height: 48px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 24px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.pos-qty button:disabled { opacity: .4; cursor: not-allowed; }
+.pos-qty input { width: 64px; height: 48px; text-align: center; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; font-size: 18px; font-weight: 700; }
+.pos-line-total { grid-area: total; font-size: 18px; text-align: right; }
+.pos-cart-foot { padding: 14px; border-top: 1px solid var(--border); background: var(--surface2); display: flex; flex-direction: column; gap: 12px; }
+.pos-total { display: flex; justify-content: space-between; align-items: baseline; font-size: 18px; font-weight: 700; }
+.pos-total small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.pos-total b { font-size: 30px; color: var(--pri); }
+.btn.pos-pay, .btn.pos-big { min-height: 60px; font-size: 20px; border-radius: 12px; }
+.btn.pos-pay { width: 100%; }
+@media (max-width: 900px) {
+    .pos-main { grid-template-columns: 1fr; height: auto; }
+    .pos-products { max-height: 60vh; }
+    .pos-cart-list { max-height: 50vh; }
+    .pos-full { overflow-y: auto; }
+    .pos-search { flex-basis: 100%; }
+    .pos-seg, .pos-sort { flex: 1; }
+    .pos-seg button { flex: 1; }
+}
+
+.pos-modal { width: 620px; }
+.pos-due { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 16px; border-radius: 12px; background: var(--soft); margin-bottom: 14px; font-size: 17px; font-weight: 600; }
+.pos-due b { font-size: 32px; color: var(--pri); }
+.pos-methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.pos-method { display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 76px; padding: 10px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.pos-method span { font-size: 26px; }
+.pos-method.active { border-color: var(--pri); background: var(--soft); color: var(--pri); }
+.pos-hint { font-size: 12.5px; margin: 8px 0 0; }
+.pos-pay-lines { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.pos-pay-line { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface2); }
+.pos-pay-line label { flex: 1 1 220px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; }
+.pos-pay-line input { height: 56px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; font-size: 24px; font-weight: 700; text-align: right; padding: 0 14px; }
+.pos-pay-line > .btn { height: 56px; }
+.pos-notes { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.pos-notes button { min-height: 48px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.pos-pay-sum { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 4px; font-size: 16px; }
+.pos-pay-sum > div { display: flex; justify-content: space-between; align-items: baseline; }
+.pos-pay-sum b { font-size: 20px; }
+.pos-pay-sum .due { color: var(--bad); }
+.pos-pay-sum .change { color: var(--ok); }
+.pos-pay-sum .change b { font-size: 30px; }
+.pos-modal .modal-foot .btn { flex: 1; }
+.pos-done { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 30px 20px; }
+.pos-done h2 { margin: 0; font-size: 22px; }
+.pos-done-icon { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-bg); color: var(--ok); font-size: 38px; font-weight: 700; }
+.pos-change { font-size: 20px; margin: 8px 0; }
+.pos-change b { display: block; font-size: 44px; color: var(--ok); }
+.pos-done .btn { width: 100%; max-width: 360px; margin-top: 10px; }

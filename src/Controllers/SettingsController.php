@@ -40,6 +40,16 @@ class SettingsController
         if (isset($body['timezone']) && $body['timezone'] !== '' && !Db::isTimezone((string) $body['timezone'])) {
             return $this->error($response, 'Time zone ไม่ถูกต้อง', 422);
         }
+        if (isset($body['pos_payment_methods'])) {
+            $methods = array_values(array_intersect(array_keys(SettingsService::PAYMENT_METHODS), explode(',', (string) $body['pos_payment_methods'])));
+            if (!$methods) {
+                return $this->error($response, 'ต้องเปิดรับชำระอย่างน้อย 1 วิธี', 422);
+            }
+            $body['pos_payment_methods'] = implode(',', $methods);
+        }
+        if (isset($body['pos_payment_mixed'])) {
+            $body['pos_payment_mixed'] = $body['pos_payment_mixed'] ? '1' : '0';
+        }
         $user = $request->getAttribute('user');
         $db = Db::connection();
         $settings = new SettingsService($db);

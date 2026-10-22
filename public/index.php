@@ -135,6 +135,7 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('return.create'));
 
     $group->get('/sales/products', [SalesController::class, 'searchProducts']);
+    $group->get('/sales/options', [SalesController::class, 'options']);
     $group->post('/sales', [SalesController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
 

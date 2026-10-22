@@ -2,10 +2,13 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 
+const PAYMENT_LABEL = { cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
+
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
 
 const TABS = [
     { key: 'fees', label: 'ค่าฝากขาย' },
+    { key: 'pos', label: 'การรับชำระเงิน (POS)' },
     { key: 'users', label: 'ผู้ใช้งาน', edit: true },
     { key: 'rvcone', label: 'RVC-ONE', edit: true },
     { key: 'time', label: 'เขตเวลา (Time zone)' },
@@ -104,8 +107,47 @@ export async function render(page, { user, permissions, params = {} }) {
         });
     }
 
+    function drawPos({ settings: s }) {
+        const on = (s.pos_payment_methods || '').split(',');
+        pane.innerHTML = `
+          <div style="max-width:720px">
+            <form id="pos-form">
+              <fieldset ${canEdit ? '' : 'disabled'} style="border:0;padding:0;margin:0">
+                <section class="card card-pad">
+                  <h2 style="margin-bottom:6px">วิธีรับชำระเงินที่หน้าขายสินค้า (POS)</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">เลือกวิธีที่ร้านรับชำระได้ พนักงานขายจะเห็นเฉพาะวิธีที่เปิดไว้ตอนกดชำระเงิน</p>
+                  <div style="display:flex;flex-direction:column;gap:10px">
+                    ${Object.entries(PAYMENT_LABEL).map(([k, label]) => `
+                      <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="method" value="${k}" ${on.includes(k) ? 'checked' : ''} style="width:20px;height:20px"> ${escapeHtml(label)}</label>`).join('')}
+                  </div>
+                  <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
+                  <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="mixed" ${s.pos_payment_mixed === '1' ? 'checked' : ''} style="width:20px;height:20px">
+                    อนุญาตชำระแบบผสม <span class="muted" style="font-size:12.5px">(เช่น เงินสดบางส่วน + โอนเงินส่วนที่เหลือ)</span></label>
+                </section>
+                ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
+              </fieldset>
+            </form>
+          </div>`;
+        if (!canEdit) return;
+        pane.querySelector('#pos-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            try {
+                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_payment_mixed: fd.has('mixed') ? 1 : 0 });
+                saved = true;
+                error = null;
+                await load();
+            } catch (err) {
+                saved = null;
+                error = err.message;
+                drawPos(data);
+            }
+        });
+    }
+
     function draw({ settings: s, role_permissions, audit_log }) {
         if (tab === 'time') return drawTime(data);
+        if (tab === 'pos') return drawPos(data);
         const byRole = {};
         role_permissions.forEach((rp) => { (byRole[rp.role] ||= []).push(rp.permission_key); });
 
