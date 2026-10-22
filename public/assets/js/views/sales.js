@@ -49,7 +49,9 @@ export async function render(container) {
     let view = pref('view', 'grid');
     let sort = pref('sort', 'popular');
     let keyboard = !TOUCH || pref('kb', '0') === '1';
-    let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false };
+    let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false };
+    // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
+    const allowShort = () => !!options.sell_out_of_stock;
     let modal = null; // the payment dialog element while open
     let msgTimer;
 
@@ -121,7 +123,8 @@ export async function render(container) {
             ? products.filter((p) => p.name.toLowerCase().includes(term) || (p.barcode || '').includes(term))
             : products.slice();
         const fn = SORT_FN[sort] || SORT_FN.name;
-        return list.sort((a, b) => fn(a, b) || a.name.localeCompare(b.name, 'th'));
+        // Out-of-stock products (shown only when the admin allows selling them) go last.
+        return list.sort((a, b) => (a.qty_stock < 1) - (b.qty_stock < 1) || fn(a, b) || a.name.localeCompare(b.name, 'th'));
     }
 
     function inCart(id) {
@@ -141,7 +144,7 @@ export async function render(container) {
             ? `<div class="pos-grid">${list.map((p) => {
                 const img = photoUrl(p);
                 const n = inCart(p.id);
-                return `<button type="button" class="pos-tile${n ? ' picked' : ''}" data-pick="${p.id}">
+                return `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-tile-img">${img ? `<img src="${escapeHtml(img)}" alt="" loading="lazy">` : '<span class="pos-nopic">no pic</span>'}</span>
                   <span class="pos-tile-name">${escapeHtml(p.name)}</span>
                   <span class="pos-tile-meta"><b>฿${money(p.sale_price)}</b><span>เหลือ ${p.qty_stock - n}</span></span>
@@ -150,7 +153,7 @@ export async function render(container) {
             }).join('')}</div>`
             : `<div class="pos-list">${list.map((p) => {
                 const n = inCart(p.id);
-                return `<button type="button" class="pos-row${n ? ' picked' : ''}" data-pick="${p.id}">
+                return `<button type="button" class="pos-row${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
                   <span class="pos-row-stock">เหลือ ${p.qty_stock - n}</span>
                   <b>฿${money(p.sale_price)}</b>
@@ -177,7 +180,7 @@ export async function render(container) {
             <div class="pos-qty">
               <button type="button" data-dec="${i}" aria-label="ลดจำนวน">−</button>
               <input data-qty="${i}" inputmode="numeric" value="${it.qty}" aria-label="จำนวน">
-              <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${it.qty >= it.qty_stock ? 'disabled' : ''}>+</button>
+              <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${it.qty >= it.qty_stock && !allowShort() ? 'disabled' : ''}>+</button>
             </div>
             <b class="pos-line-total">฿${money(it.sale_price * it.qty)}</b>
             <button type="button" class="pos-line-del" data-remove="${i}" aria-label="เอาออกจากตะกร้า">✕</button>
@@ -191,7 +194,8 @@ export async function render(container) {
 
     function add(p) {
         const line = cart.find((c) => c.id === p.id);
-        if ((line?.qty || 0) >= p.qty_stock) {
+        const short = (line?.qty || 0) >= p.qty_stock;
+        if (short && !allowShort()) {
             beep(false);
             message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น`, 'error');
             return;
@@ -199,7 +203,7 @@ export async function render(container) {
         if (line) line.qty += 1;
         else cart.push({ ...p, qty: 1 });
         beep(true);
-        message('');
+        message(short ? `${p.name}: คงเหลือในระบบ ${p.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ ควรตรวจนับ/บันทึกรับสินค้าภายหลัง` : '', 'warn');
         redraw();
         const idx = cart.findIndex((c) => c.id === p.id);
         el('cart').children[idx]?.scrollIntoView({ block: 'nearest' });
@@ -240,7 +244,7 @@ export async function render(container) {
         // Keep cart lines in step with the new stock figures.
         cart = cart.filter((c) => products.some((p) => p.id === c.id)).map((c) => {
             const p = products.find((x) => x.id === c.id);
-            return { ...p, qty: Math.min(c.qty, p.qty_stock) };
+            return { ...p, qty: allowShort() ? c.qty : Math.min(c.qty, p.qty_stock) };
         });
         redraw();
     }
@@ -475,8 +479,12 @@ export async function render(container) {
         const n = Math.floor(Number(e.target.value));
         if (!(n > 0)) cart.splice(Number(i), 1);
         else {
-            if (n > line.qty_stock) message(`${line.name} มีคงเหลือเพียง ${line.qty_stock} ชิ้น`, 'error');
-            line.qty = Math.min(n, line.qty_stock);
+            if (n > line.qty_stock) {
+                message(allowShort()
+                    ? `${line.name}: คงเหลือในระบบ ${line.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ`
+                    : `${line.name} มีคงเหลือเพียง ${line.qty_stock} ชิ้น`, allowShort() ? 'warn' : 'error');
+            }
+            line.qty = allowShort() ? n : Math.min(n, line.qty_stock);
         }
         redraw();
         q.focus({ preventScroll: true });
@@ -547,7 +555,7 @@ export async function render(container) {
     setKeyboard();
     drawCart();
     focusSearch();
-    api.get('/sales/options').then((o) => { if (o.payment_methods?.length) options = o; }).catch(() => {});
+    await api.get('/sales/options').then((o) => { if (o.payment_methods?.length) options = o; }).catch(() => {});
     await loadProducts();
     focusSearch();
 }

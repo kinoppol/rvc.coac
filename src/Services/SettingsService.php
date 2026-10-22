@@ -29,6 +29,9 @@ class SettingsService
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)
         'pos_payment_methods' => 'cash,transfer,qr,card', // comma list of PAYMENT_METHODS accepted at the POS
         'pos_payment_mixed' => '1', // 1 = a sale may be paid with more than one method
+        // 1 = the POS lists and sells products whose recorded stock is below 1
+        // (miscounted stock, or goods on the shelf that were never received in the system)
+        'pos_sell_out_of_stock' => '0',
     ];
 
     public const PAYMENT_METHODS = ['cash' => 'เงินสด', 'transfer' => 'โอนเงินเข้าบัญชี', 'qr' => 'สแกน QR-Code', 'card' => 'บัตรเครดิต'];

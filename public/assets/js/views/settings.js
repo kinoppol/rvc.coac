@@ -8,7 +8,7 @@ const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผ�
 
 const TABS = [
     { key: 'fees', label: 'ค่าฝากขาย' },
-    { key: 'pos', label: 'การรับชำระเงิน (POS)' },
+    { key: 'pos', label: 'หน้าขายสินค้า (POS)' },
     { key: 'users', label: 'ผู้ใช้งาน', edit: true },
     { key: 'rvcone', label: 'RVC-ONE', edit: true },
     { key: 'time', label: 'เขตเวลา (Time zone)' },
@@ -124,6 +124,13 @@ export async function render(page, { user, permissions, params = {} }) {
                   <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="mixed" ${s.pos_payment_mixed === '1' ? 'checked' : ''} style="width:20px;height:20px">
                     อนุญาตชำระแบบผสม <span class="muted" style="font-size:12.5px">(เช่น เงินสดบางส่วน + โอนเงินส่วนที่เหลือ)</span></label>
                 </section>
+                <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">สินค้าที่คงเหลือในระบบไม่พอ</h2>
+                  <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="out_of_stock" ${s.pos_sell_out_of_stock === '1' ? 'checked' : ''} style="width:20px;height:20px">
+                    เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (0 หรือติดลบ)</label>
+                  <p class="muted" style="font-size:12.5px;margin:8px 0 0 30px">ใช้เมื่อสต๊อกในระบบคลาดเคลื่อน หรือมีของเข้าร้านแล้วแต่ยังไม่ได้บันทึกรับเข้าระบบ
+                    สินค้าเหล่านี้จะค้นหาเจอและแสดงเป็นสีจางในหน้าขาย ขายได้แม้สต๊อกจะติดลบ ควรตรวจนับหรือบันทึกรับสินค้าให้ตรงภายหลัง</p>
+                </section>
                 ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
               </fieldset>
             </form>
@@ -133,7 +140,7 @@ export async function render(page, { user, permissions, params = {} }) {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
-                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_payment_mixed: fd.has('mixed') ? 1 : 0 });
+                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_payment_mixed: fd.has('mixed') ? 1 : 0, pos_sell_out_of_stock: fd.has('out_of_stock') ? 1 : 0 });
                 saved = true;
                 error = null;
                 await load();

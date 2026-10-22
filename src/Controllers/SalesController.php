@@ -44,6 +44,7 @@ class SalesController
             return $this->json($response, ['data' => []]);
         }
         $db = Db::connection();
+        $stock = (new SettingsService($db))->get('pos_sell_out_of_stock') === '1' ? '1 = 1' : 'p.qty_stock > 0';
         $stmt = $db->prepare(
             "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token,
                     COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty
@@ -55,7 +56,7 @@ class SalesController
                 WHERE sa.sale_datetime >= NOW() - INTERVAL 90 DAY
                 GROUP BY si.product_id
              ) s ON s.product_id = p.id
-             WHERE p.qty_stock > 0 AND (p.name LIKE ? OR p.barcode LIKE ?)
+             WHERE {$stock} AND (p.name LIKE ? OR p.barcode LIKE ?)
              ORDER BY {$order} LIMIT " . ($all ? 500 : 20)
         );
         $like = '%' . $q . '%';
@@ -71,6 +72,7 @@ class SalesController
         return $this->json($response, [
             'payment_methods' => $methods,
             'payment_mixed' => $settings->get('pos_payment_mixed') === '1',
+            'sell_out_of_stock' => $settings->get('pos_sell_out_of_stock') === '1',
         ]);
     }
 
@@ -101,7 +103,10 @@ class SalesController
                 'mixed' => $settings->get('pos_payment_mixed') === '1',
                 'lines' => is_array($body['payments'] ?? null) ? $body['payments'] : [],
             ];
-            $result = $service->record($items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, ['payments' => $payments]);
+            $result = $service->record($items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, [
+                'payments' => $payments,
+                'allow_short_stock' => $settings->get('pos_sell_out_of_stock') === '1',
+            ]);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

@@ -432,6 +432,9 @@ body.pos-full-open { overflow: hidden; }
 .pos-msg { padding: 12px 16px; border-radius: 10px; font-size: 16px; font-weight: 600; }
 .pos-msg.ok { background: var(--ok-bg); color: var(--ok); }
 .pos-msg.error { background: var(--bad-bg); color: var(--bad); }
+.pos-msg.warn { background: var(--warn-bg); color: var(--warn); }
+.pos-tile.out, .pos-row.out { opacity: .45; border-style: dashed; }
+.pos-tile.out.picked, .pos-row.out.picked { opacity: .7; }
 .pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; height: max(480px, calc(100vh - 230px)); }
 .pos-full .pos-main { flex: 1; min-height: 0; height: auto; }
 .pos-products { overflow-y: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }

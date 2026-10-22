@@ -47,8 +47,10 @@ class SettingsController
             }
             $body['pos_payment_methods'] = implode(',', $methods);
         }
-        if (isset($body['pos_payment_mixed'])) {
-            $body['pos_payment_mixed'] = $body['pos_payment_mixed'] ? '1' : '0';
+        foreach (['pos_payment_mixed', 'pos_sell_out_of_stock'] as $flag) {
+            if (isset($body[$flag])) {
+                $body[$flag] = $body[$flag] ? '1' : '0';
+            }
         }
         $user = $request->getAttribute('user');
         $db = Db::connection();
