@@ -85,6 +85,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
       <header class="mc-head">
         <button type="button" class="mc-icon" data-act="close" aria-label="ปิด">✕</button>
         <div class="mc-title"><b>${escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
+        ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
         <button type="button" class="mc-icon" data-act="search" aria-label="ค้นหาสินค้า">🔍</button>
       </header>
       <div class="mc-cam" data-el="cam" hidden>
@@ -104,11 +105,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
       <input type="file" accept="image/*" capture="environment" data-el="photo" hidden>
       <div class="mc-sheet" data-el="sheet" hidden></div>`;
     document.body.appendChild(root);
-    // Hide the page underneath (a wide table there makes phones zoom out) and go
-    // fullscreen so the browser's address bar doesn't take room from the keypad.
+    // Hide the page underneath (a wide table there makes phones zoom out). Fullscreen
+    // is opt-in (⛶): Chrome shows an exit hint over the bottom buttons when it starts.
     const scrollY = window.scrollY;
     document.body.classList.add('mc-open');
-    root.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => { /* not allowed / iPhone */ });
 
     const $ = (name) => root.querySelector(`[data-el="${name}"]`);
     const video = root.querySelector('video');
@@ -471,6 +471,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
         if (!act) return;
         if (act === 'close') close();
         else if (act === 'search') openSearch(null);
+        else if (act === 'fullscreen') {
+            if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+            else root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+        }
         else if (act === 'scan') toggleScan();
         else if (act === 'find') handleCode(input);
         else if (act === 'set') saveQty(false);
