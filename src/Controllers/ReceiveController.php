@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Repositories\ConsignRequestRepo;
 use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
+use App\Repositories\UserRepo;
 use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
 use App\Services\FeeCalculator;
@@ -97,6 +98,25 @@ class ReceiveController
             }
         }
 
+        $user = $request->getAttribute('user');
+
+        // Backdating (receive.backdate): admin / store manager only; today's date is a normal entry.
+        $receiveDate = trim((string) ($body['receive_date'] ?? ''));
+        if ($receiveDate === '' || $receiveDate === date('Y-m-d')) {
+            $receiveDate = null;
+        } else {
+            $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $receiveDate);
+            if (!$d || $d->format('Y-m-d') !== $receiveDate) {
+                return $this->error($response, 'วันที่รับฝากไม่ถูกต้อง', 422);
+            }
+            if ($receiveDate > date('Y-m-d')) {
+                return $this->error($response, 'วันที่รับฝากต้องไม่เกินวันนี้', 422);
+            }
+            if (!(new UserRepo($db))->hasPermission($user['role'], 'receive.backdate')) {
+                return $this->error($response, 'ไม่มีสิทธิ์บันทึกรับฝากย้อนหลัง (เฉพาะผู้ดูแลระบบและผู้จัดการร้าน)', 403);
+            }
+        }
+
         $settings = new SettingsService($db);
         $service = new ReceiveService(
             $db,
@@ -109,9 +129,8 @@ class ReceiveController
             $audit
         );
 
-        $user = $request->getAttribute('user');
         try {
-            $result = $service->receive($consignorId, $items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, $requestId);
+            $result = $service->receive($consignorId, $items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, $requestId, $receiveDate);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

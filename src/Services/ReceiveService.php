@@ -25,9 +25,14 @@ class ReceiveService
 
     /**
      * @param array<int,array{name:string, cost_price:float, qty:int, mfg_date:string, barcode?:string, expiry_date?:string}> $items
+     * @param string|null $receiveDate Y-m-d of an earlier day the goods were received (backdated entry); null = now
      */
-    public function receive(int $consignorId, array $items, int $userId, ?string $ip, ?int $requestId = null): array
+    public function receive(int $consignorId, array $items, int $userId, ?string $ip, ?int $requestId = null, ?string $receiveDate = null): array
     {
+        // Backdated: keep the current time of day on the chosen date.
+        $at = $receiveDate !== null ? new \DateTimeImmutable($receiveDate . ' ' . date('H:i:s')) : new \DateTimeImmutable('now');
+        $atSql = $at->format('Y-m-d H:i:s');
+
         if (empty($items)) {
             throw new \RuntimeException('ไม่มีรายการรับฝาก');
         }
@@ -41,16 +46,16 @@ class ReceiveService
 
         $this->db->beginTransaction();
         try {
-            $docNo = $this->docs->next('RC', 'receive_documents', 'doc_no');
+            $docNo = $this->docs->next('RC', 'receive_documents', 'doc_no', $at);
 
             $insDoc = $this->db->prepare(
                 'INSERT INTO receive_documents
                     (doc_no, consignor_id, user_id, total_qty, total_value, listing_fee_total, waived_count, waived_amount, created_at)
-                 VALUES (?, ?, ?, 0, 0, ?, ?, ?, NOW())'
+                 VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?)'
             );
             $insDoc->execute([
                 $docNo, $consignorId, $userId,
-                $plan['charged_total'], $plan['waived_count'], $plan['waived_total'],
+                $plan['charged_total'], $plan['waived_count'], $plan['waived_total'], $atSql,
             ]);
             $docId = (int) $this->db->lastInsertId();
 
@@ -83,6 +88,9 @@ class ReceiveService
                     'listing_fee_status' => $isWaived ? 'waived' : 'charged',
                     'listing_fee_amount' => $listingFeeCharged,
                 ], $userId, $ip);
+                if ($receiveDate !== null) {
+                    $this->db->prepare('UPDATE products SET created_at = ? WHERE id = ?')->execute([$atSql, $productId]);
+                }
 
                 $insItem->execute([
                     $docId, $productId, $item['cost_price'], $calc['price'], $calc['fee'],
@@ -113,13 +121,14 @@ class ReceiveService
                     $refNo,
                     0,
                     $plan['charged_total'],
-                    $userId
+                    $userId,
+                    $at->format('Y-m-d')
                 );
             }
 
             $this->audit->log('receive_documents', $docId, 'create', null, [
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
-            ], $userId, $ip);
+            ] + ($receiveDate !== null ? ['backdated_to' => $receiveDate] : []), $userId, $ip);
 
             $this->db->commit();
             return ['id' => $docId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2), 'listing_fee_plan' => $plan];

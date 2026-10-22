@@ -16,9 +16,9 @@ class DocumentNumberService
     {
     }
 
-    public function next(string $type, string $table, string $column = 'doc_no'): string
+    public function next(string $type, string $table, string $column = 'doc_no', ?\DateTimeInterface $date = null): string
     {
-        $now = new \DateTimeImmutable('now');
+        $now = $date ?? new \DateTimeImmutable('now');
         $beYear = ((int) $now->format('Y')) + 543;
         $datePart = substr((string) $beYear, -2) . $now->format('md');
         $prefix = $type . '-' . $datePart . '-';

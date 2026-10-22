@@ -2,8 +2,10 @@ import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
 
-export async function render(container) {
+export async function render(container, { permissions = [] } = {}) {
+    const canBackdate = permissions.includes('receive.backdate');
     const options = (await api.get('/consignors/options')).data;
+    let receiveDate = todayISO();
     let consignorId = options[0]?.id ?? null;
     let cart = [];
     let quote = null;
@@ -65,6 +67,11 @@ export async function render(container) {
               <label class="field">เลือกผู้ฝากขาย
                 <select id="sel-consignor" ${loaded ? 'disabled' : ''}>${options.map((o) => `<option value="${o.id}" ${Number(o.id) === Number(consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
               </label>
+              ${canBackdate ? `
+                <label class="field" style="margin-top:12px;max-width:260px">วันที่รับฝาก
+                  <input type="date" id="f-receive-date" value="${receiveDate}" max="${todayISO()}">
+                </label>
+                <div class="pill warn" id="backdate-note" style="margin-top:8px;display:${receiveDate < todayISO() ? 'inline-flex' : 'none'}">บันทึกย้อนหลังเป็นวันที่ ${escapeHtml(receiveDate)}</div>` : ''}
             </section>
 
             <section class="card card-pad">
@@ -121,6 +128,14 @@ export async function render(container) {
 
     function wire() {
         container.querySelector('#sel-consignor').addEventListener('change', (e) => { consignorId = Number(e.target.value); });
+        container.querySelector('#f-receive-date')?.addEventListener('change', (e) => {
+            const v = e.target.value;
+            receiveDate = v && v <= todayISO() ? v : todayISO();
+            e.target.value = receiveDate;
+            const note = container.querySelector('#backdate-note');
+            note.style.display = receiveDate < todayISO() ? 'inline-flex' : 'none';
+            note.textContent = `บันทึกย้อนหลังเป็นวันที่ ${receiveDate}`;
+        });
         container.querySelector('#f-cost').addEventListener('input', updateQuote);
         container.querySelector('#btn-clear').addEventListener('click', () => { draw(); });
         container.querySelector('#btn-add').addEventListener('click', addItem);
@@ -246,6 +261,7 @@ export async function render(container) {
             const result = await api.post('/receive', {
                 consignor_id: consignorId,
                 request_id: loaded?.id ?? null,
+                receive_date: canBackdate ? receiveDate : null,
                 items: cart.map((i) => ({ name: i.name, cost_price: i.cost_price, qty: i.qty, barcode: i.barcode, mfg_date: i.mfg_date, expiry_date: i.expiry_date })),
             });
             success = `บันทึกใบรับฝากสำเร็จ: ${result.data.doc_no}${loaded ? ` (จากคำขอ ${loaded.request_no})` : ''}`;
