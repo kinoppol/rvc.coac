@@ -7,10 +7,11 @@ export async function render(container, { permissions }) {
     let items = [];
     let error = null;
     const canApprove = permissions.includes('stockcount.approve');
+    const canCreate = permissions.includes('stockcount.create');
 
     async function loadList() {
         const list = (await api.get('/stockcounts')).data;
-        const active = list.find((c) => c.status !== 'approved');
+        const active = list.find((c) => c.status === 'draft' || c.status === 'submitted');
         if (active) {
             await loadOne(active.id);
         } else {
@@ -36,7 +37,7 @@ export async function render(container, { permissions }) {
               ${history && history.length ? `
                 <div class="table-wrap" style="margin-top:20px;text-align:left"><table>
                   <thead><tr><th>เลขที่</th><th>วันที่</th><th>สถานะ</th></tr></thead>
-                  <tbody>${history.map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td><span class="pill ok">เสร็จสิ้น</span></td></tr>`).join('')}</tbody>
+                  <tbody>${history.map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td>${h.status === 'cancelled' ? '<span class="pill">ยกเลิก</span>' : '<span class="pill ok">เสร็จสิ้น</span>'}</td></tr>`).join('')}</tbody>
                 </table></div>` : ''}
             </section>`;
             container.querySelector('#btn-start').addEventListener('click', async () => {
@@ -86,6 +87,7 @@ export async function render(container, { permissions }) {
             <button type="button" class="btn" id="btn-submit" ${diffCount ? '' : 'disabled'}>ส่งรายงานผลต่างให้ผู้จัดการร้าน</button>
           ` : ''}
           ${current.status === 'submitted' && canApprove ? `<button type="button" class="btn" id="btn-approve">อนุมัติและปรับสต๊อก</button>` : ''}
+          ${(current.status === 'draft' && canCreate) || (current.status === 'submitted' && canApprove) ? `<button type="button" class="btn danger" id="btn-cancel">ยกเลิกรอบตรวจนับ</button>` : ''}
           ${current.status === 'submitted' && !canApprove ? `<span class="pill warn">ส่งรายงานแล้ว รออนุมัติจากผู้จัดการร้าน</span>` : ''}
         </div>`;
 
@@ -104,6 +106,8 @@ export async function render(container, { permissions }) {
         if (submitBtn) submitBtn.addEventListener('click', () => saveCounts(true));
         const approveBtn = container.querySelector('#btn-approve');
         if (approveBtn) approveBtn.addEventListener('click', approveCount);
+        const cancelBtn = container.querySelector('#btn-cancel');
+        if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
     }
 
     async function saveCounts(thenSubmit) {
@@ -126,6 +130,18 @@ export async function render(container, { permissions }) {
     async function approveCount() {
         try {
             await api.post(`/stockcounts/${current.id}/approve`);
+            await loadList();
+        } catch (e) {
+            error = e.message;
+            draw();
+        }
+    }
+
+    async function cancelCount() {
+        if (!confirm(`ยกเลิกรอบตรวจนับ ${current.doc_no}? ผลการนับในรอบนี้จะไม่ถูกนำไปปรับสต๊อก`)) return;
+        try {
+            await api.post(`/stockcounts/${current.id}/cancel`);
+            error = null;
             await loadList();
         } catch (e) {
             error = e.message;

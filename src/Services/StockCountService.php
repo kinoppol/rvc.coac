@@ -189,6 +189,10 @@ class StockCountService
     /** Manager/admin approves the diff report; adjusts product stock to match physical count. */
     public function approve(int $stockCountId, int $userId, ?string $ip): void
     {
+        $sc = $this->get($stockCountId);
+        if (!$sc || $sc['status'] !== 'submitted') {
+            throw new \RuntimeException('รอบตรวจนับนี้ยังไม่ได้ส่งรายงาน หรืออนุมัติ/ยกเลิกไปแล้ว');
+        }
         $summary = $this->diffSummary($stockCountId);
         $this->db->beginTransaction();
         try {
@@ -218,6 +222,22 @@ class StockCountService
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /** Cancels a round that has not been approved yet; product stock is not changed. */
+    public function cancel(int $stockCountId, int $userId, ?string $ip): void
+    {
+        $sc = $this->get($stockCountId);
+        if (!$sc) {
+            throw new \RuntimeException('ไม่พบรอบตรวจนับ');
+        }
+        if (!in_array($sc['status'], ['draft', 'submitted'], true)) {
+            throw new \RuntimeException('รอบตรวจนับนี้อนุมัติหรือยกเลิกไปแล้ว ยกเลิกไม่ได้');
+        }
+        $this->db->prepare(
+            "UPDATE stock_counts SET status='cancelled', cancelled_by=?, cancelled_at=NOW() WHERE id = ?"
+        )->execute([$userId, $stockCountId]);
+        $this->audit->log('stock_counts', $stockCountId, 'cancel', ['status' => $sc['status']], ['status' => 'cancelled'], $userId, $ip);
     }
 
     public function get(int $id): ?array

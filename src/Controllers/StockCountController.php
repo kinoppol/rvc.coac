@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\ProductRepo;
+use App\Repositories\UserRepo;
 use App\Services\AttachmentService;
 use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
@@ -173,6 +174,26 @@ class StockCountController
         $id = (int) $args['id'];
         try {
             $this->service()->approve($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $this->service()->get($id)]);
+    }
+
+    /** POST /stockcounts/{id}/cancel — a submitted round may only be cancelled by an approver. */
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $id = (int) $args['id'];
+        $sc = $this->service()->get($id);
+        if (!$sc) {
+            return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
+        }
+        if ($sc['status'] === 'submitted' && !(new UserRepo(Db::connection()))->hasPermission($user['role'], 'stockcount.approve')) {
+            return $this->error($response, 'รอบตรวจนับนี้ส่งรายงานแล้ว ต้องให้ผู้อนุมัติเป็นผู้ยกเลิก', 403);
+        }
+        try {
+            $this->service()->cancel($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
