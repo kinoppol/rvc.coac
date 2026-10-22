@@ -76,12 +76,22 @@ const PAGE_TITLES = {
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', consignor: 'ผู้ฝากขาย' };
 
+const SIDEBAR_KEY = 'coac.sidebarCollapsed';
+
+// Remembered per browser; with no saved choice, start collapsed on narrow screens.
+function sidebarCollapsed() {
+    let saved = null;
+    try { saved = localStorage.getItem(SIDEBAR_KEY); } catch (e) { /* ignore */ }
+    if (saved !== null) return saved === '1';
+    return window.matchMedia('(max-width: 900px)').matches;
+}
+
 export function renderShell(root, { user, permissions, impersonator = null, badges = {} }) {
     const has = (perm) => permissions.includes(perm);
     const initials = (user.full_name || user.username).slice(0, 2);
 
     root.innerHTML = `
-    <div class="app-shell">
+    <div class="app-shell${sidebarCollapsed() ? ' sidebar-collapsed' : ''}">
       <aside class="sidebar">
         <div class="brand">
           <div class="logo">สห</div>
@@ -95,7 +105,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
               const items = g.items.filter((it) => has(it.perm));
               if (!items.length) return '';
               return `<div class="group-label">${escapeHtml(g.group)}</div>` + items.map((it) => `
-                <button type="button" class="nav-btn" data-route="${it.key}">
+                <button type="button" class="nav-btn" data-route="${it.key}" title="${escapeHtml(it.label)}">
                   ${ICONS[it.icon || it.key] || ''}<span>${escapeHtml(it.label)}</span>
                   ${badges[it.key] ? `<span class="badge${badges[it.key].warn ? ' warn' : ''}">${badges[it.key].count}</span>` : ''}
                 </button>`).join('');
@@ -110,6 +120,9 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
       </aside>
       <div class="main">
         <header class="topbar">
+          <button type="button" class="btn-sidebar-toggle" id="sidebar-toggle" title="ย่อ / ขยายเมนู" aria-label="ย่อ / ขยายเมนู">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          </button>
           <div>
             <div class="crumb" id="topbar-crumb"></div>
             <h1 id="topbar-title"></h1>
@@ -140,6 +153,10 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
   `;
 
     updateThemeButton();
+    document.getElementById('sidebar-toggle').addEventListener('click', () => {
+        const collapsed = root.querySelector('.app-shell').classList.toggle('sidebar-collapsed');
+        try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+    });
     document.getElementById('topbar-date').textContent = fmtNow({
         weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
     });
