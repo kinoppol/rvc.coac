@@ -2,7 +2,8 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 
-const PAYMENT_LABEL = { cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
+const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+const PAYMENT_LABEL ={ cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
 
@@ -128,6 +129,21 @@ export async function render(page, { user, permissions, params = {} }) {
                   </div>
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">เวลาเปิด-ปิดร้าน</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">ขายนอกเวลาได้ตามปกติ แต่รายการที่ขายหลังเวลาปิดร้าน (หรือในวันที่ร้านปิด) จะลงบัญชีเป็นยอดขายของวันเปิดร้านถัดไป
+                    ยอดสรุปของวันที่ปิดไปแล้วจึงไม่เปลี่ยน เวลาขายจริงยังถูกบันทึกไว้ ดูได้ที่ รายงาน &gt; ขายนอกเวลาทำการ เพื่อตรวจสอบกับการนับสต๊อก
+                    เว้นว่างทั้งสองช่อง = ไม่กำหนดเวลา</p>
+                  <div class="form-grid">
+                    <label class="field">เวลาเปิดร้าน <input type="time" name="store_open_time" value="${escapeHtml(s.store_open_time || '')}"></label>
+                    <label class="field">เวลาปิดร้าน <input type="time" name="store_close_time" value="${escapeHtml(s.store_close_time || '')}"></label>
+                  </div>
+                  <div style="margin-top:14px;font-weight:600;font-size:14px">วันที่ร้านปิด</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px">
+                    ${WEEKDAYS.map((d, i) => `
+                      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="closed_day" value="${i}" ${(s.store_closed_days || '').split(',').includes(String(i)) ? 'checked' : ''} style="width:20px;height:20px"> ${d}</label>`).join('')}
+                  </div>
+                </section>
+                <section class="card card-pad" style="margin-top:16px">
                   <h2 style="margin-bottom:6px">สิทธิ์ใช้สวิตช์ในหน้าขายสินค้า</h2>
                   <p class="muted" style="font-size:13px;margin:0 0 4px">สวิตช์เหล่านี้ปิดไว้เป็นปกติ ผู้ใช้บทบาทที่เลือกจะเปิดใช้เองได้ในหน้าขายเมื่อจำเป็น</p>
                   <div style="margin-top:14px;font-weight:600;font-size:14px">ชำระแบบผสม <span class="muted" style="font-size:12.5px;font-weight:400">(เช่น เงินสดบางส่วน + โอนเงินส่วนที่เหลือ) — สวิตช์อยู่ในหน้าต่างชำระเงิน</span></div>
@@ -147,7 +163,8 @@ export async function render(page, { user, permissions, params = {} }) {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
-                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(',') });
+                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
+                    store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'), store_closed_days: fd.getAll('closed_day').join(',') });
                 saved = true;
                 error = null;
                 await load();

@@ -33,7 +33,45 @@ class SettingsService
         // stock is below 1 (miscounted stock, or goods never received in the system).
         'pos_mixed_roles' => 'admin,manager,advisor,cashier',
         'pos_short_stock_roles' => 'admin,manager',
+        // Store hours, HH:MM; '' = no set hours (every sale counts on the day it is made).
+        'store_open_time' => '',
+        'store_close_time' => '',
+        'store_closed_days' => '', // comma list of weekdays the store is closed, 0 = Sunday … 6 = Saturday
     ];
+
+    /**
+     * The accounting day for a sale made at $at. After closing time, before
+     * opening time on a closed day, or any time on a closed day, a sale counts
+     * toward the next day the store opens; before opening on an open day it
+     * counts toward that same day.
+     * @return array{date:string, after_hours:bool}
+     */
+    public function businessDay(\DateTimeImmutable $at): array
+    {
+        $open = (string) $this->get('store_open_time');
+        $close = (string) $this->get('store_close_time');
+        $closedDays = array_filter(explode(',', (string) $this->get('store_closed_days')), 'strlen');
+        $isClosedDay = fn (\DateTimeImmutable $d) => in_array($d->format('w'), $closedDays, true);
+        $nextOpenDay = function (\DateTimeImmutable $d) use ($isClosedDay): \DateTimeImmutable {
+            for ($i = 0, $n = $d->modify('+1 day'); $i < 7 && $isClosedDay($n); $i++) {
+                $n = $n->modify('+1 day');
+            }
+            return $n;
+        };
+
+        $day = $at->setTime(0, 0);
+        if ($isClosedDay($day)) {
+            return ['date' => $nextOpenDay($day)->format('Y-m-d'), 'after_hours' => true];
+        }
+        if ($open === '' || $close === '') {
+            return ['date' => $day->format('Y-m-d'), 'after_hours' => false];
+        }
+        $time = $at->format('H:i');
+        if ($time >= $close) {
+            return ['date' => $nextOpenDay($day)->format('Y-m-d'), 'after_hours' => true];
+        }
+        return ['date' => $day->format('Y-m-d'), 'after_hours' => $time < $open];
+    }
 
     public const POS_ROLES = ['admin', 'manager', 'advisor', 'cashier'];
 

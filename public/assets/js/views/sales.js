@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, escapeHtml } from '../util.js';
+import { money, escapeHtml, fmtDate } from '../util.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -94,6 +94,7 @@ export async function render(container, { user } = {}) {
           </select>
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
+        <div data-el="hours"></div>
         <div data-el="shortbar"></div>
         <div data-el="msg"></div>
         <div class="pos-main">
@@ -275,6 +276,19 @@ export async function render(container, { user } = {}) {
         redraw();
     }
 
+    /** Outside store hours: sales still go through but are booked on the next opening day. */
+    function drawHours() {
+        const d = options.business_day;
+        const h = options.store_hours || {};
+        const hours = h.open && h.close ? ` (เวลาทำการ ${h.open}–${h.close} น.)` : '';
+        el('hours').innerHTML = d?.after_hours ? `
+          <div class="pos-hours">🌙 <span><b>นอกเวลาทำการ${escapeHtml(hours)}</b>
+            ${d.date !== options.today
+                ? `รายการที่ขายตอนนี้จะลงบัญชีเป็นยอดขายวันที่ <b>${escapeHtml(fmtDate(d.date))}</b> (ไม่กระทบยอดสรุปของวันนี้)`
+                : 'ยังไม่ถึงเวลาเปิดร้าน รายการที่ขายตอนนี้ลงบัญชีเป็นยอดขายวันนี้'}
+            · บันทึกเวลาขายจริงไว้ตรวจสอบกับการนับสต๊อก</span></div>` : '';
+    }
+
     function drawShortBar() {
         el('shortbar').innerHTML = allowShort() ? `
           <div class="pos-short-bar"><label class="pos-switch"><input type="checkbox" data-out-switch checked><span aria-hidden="true"></span>
@@ -282,6 +296,7 @@ export async function render(container, { user } = {}) {
     }
 
     function redraw() {
+        drawHours();
         drawShortBar();
         drawProducts();
         drawCart();
@@ -406,6 +421,7 @@ export async function render(container, { user } = {}) {
                       <div class="pos-done-icon">✓</div>
                       <h2>บันทึกการขายแล้ว</h2>
                       <div class="muted">เลขที่ ${escapeHtml(done.doc_no)} · ยอดขาย ฿${money(done.total_value)}</div>
+                      ${done.after_hours ? `<div class="pos-hours-note">ขายนอกเวลาทำการ · ลงบัญชีวันที่ ${escapeHtml(fmtDate(done.business_date))}</div>` : ''}
                       ${done.change > 0 ? `<div class="pos-change">เงินทอน <b>฿${money(done.change)}</b></div>` : ''}
                       <button type="button" class="btn pos-big" data-pay="next">ขายรายการถัดไป</button>
                     </div>
@@ -695,7 +711,11 @@ export async function render(container, { user } = {}) {
     setKeyboard();
     drawCart();
     focusSearch();
-    await api.get('/sales/options').then((o) => { if (o.payment_methods?.length) options = o; }).catch(() => {});
+    const loadOptions = () => api.get('/sales/options').then((o) => { if (o.payment_methods?.length) options = o; }).catch(() => {});
+    await loadOptions();
     await loadProducts();
     focusSearch();
+    // Store hours pass while the page stays open (e.g. closing time arrives).
+    const hoursTimer = setInterval(() => loadOptions().then(drawHours), 60000);
+    life.signal.addEventListener('abort', () => clearInterval(hoursTimer));
 }

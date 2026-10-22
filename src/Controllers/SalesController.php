@@ -82,6 +82,12 @@ class SalesController
             'payment_methods' => $methods,
             'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
             'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
+            'store_hours' => [
+                'open' => $settings->get('store_open_time'),
+                'close' => $settings->get('store_close_time'),
+            ],
+            'business_day' => $settings->businessDay(new \DateTimeImmutable()),
+            'today' => date('Y-m-d'),
         ]);
     }
 
@@ -112,7 +118,12 @@ class SalesController
                 'mixed' => $settings->posRoleAllows('pos_mixed_roles', $user['role'] ?? null),
                 'lines' => is_array($body['payments'] ?? null) ? $body['payments'] : [],
             ];
+            $now = new \DateTimeImmutable();
+            $day = $settings->businessDay($now);
             $result = $service->record($items, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, [
+                'sale_datetime' => $now->format('Y-m-d H:i:s'),
+                'business_date' => $day['date'],
+                'after_hours' => $day['after_hours'],
                 'payments' => $payments,
                 // The cashier's own switch, honoured only for roles the admin allows.
                 'allow_short_stock' => !empty($body['allow_short']) && $settings->posRoleAllows('pos_short_stock_roles', $user['role'] ?? null),

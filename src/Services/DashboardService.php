@@ -18,7 +18,7 @@ class DashboardService
 
         $salesToday = $this->db->prepare(
             'SELECT COALESCE(SUM(total_value),0) AS value, COALESCE(SUM(total_qty),0) AS qty
-             FROM sales WHERE DATE(sale_datetime) = ?'
+             FROM sales WHERE business_date = ?'
         );
         $salesToday->execute([$today]);
         $sales = $salesToday->fetch();
@@ -62,7 +62,7 @@ class DashboardService
             'SELECT COALESCE(SUM(si.qty * si.unit_price),0) AS sales, COALESCE(SUM(si.cost_amount),0) AS cogs,
                     COALESCE(SUM(si.qty),0) AS qty
              FROM sale_items si JOIN sales s ON s.id = si.sale_id
-             WHERE si.consignor_id IS NULL AND DATE(s.sale_datetime) = ?'
+             WHERE si.consignor_id IS NULL AND s.business_date = ?'
         );
         $storeSales->execute([$today]);
         $ss = $storeSales->fetch();
@@ -192,7 +192,7 @@ class DashboardService
             'year' => [$d->setDate((int) $d->format('Y'), 1, 1), $d->setDate((int) $d->format('Y') + 1, 1, 1), '+1 month', '-1 year'],
         };
         $keyFormat = $period === 'year' ? 'Y-m' : 'Y-m-d';
-        $sqlKey = $period === 'year' ? "DATE_FORMAT(s.sale_datetime, '%Y-%m')" : 'DATE(s.sale_datetime)';
+        $sqlKey = $period === 'year' ? "DATE_FORMAT(s.business_date, '%Y-%m')" : 's.business_date';
 
         $stmt = $this->db->prepare(
             "SELECT {$sqlKey} AS k,
@@ -201,10 +201,10 @@ class DashboardService
                     COALESCE(SUM(si.qty), 0) AS qty,
                     COUNT(DISTINCT s.id) AS bills
              FROM sale_items si JOIN sales s ON s.id = si.sale_id
-             WHERE s.sale_datetime >= ? AND s.sale_datetime < ?
+             WHERE s.business_date >= ? AND s.business_date < ?
              GROUP BY k"
         );
-        $stmt->execute([$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 00:00:00')]);
+        $stmt->execute([$start->format('Y-m-d'), $end->format('Y-m-d')]);
         $rows = [];
         foreach ($stmt->fetchAll() as $r) {
             $rows[(string) $r['k']] = $r;
@@ -229,9 +229,9 @@ class DashboardService
         $prevStart = $start->modify($prev);
         $prevTotal = $this->db->prepare(
             'SELECT COALESCE(SUM(si.qty * si.unit_price), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
-             WHERE s.sale_datetime >= ? AND s.sale_datetime < ?'
+             WHERE s.business_date >= ? AND s.business_date < ?'
         );
-        $prevTotal->execute([$prevStart->format('Y-m-d 00:00:00'), $start->format('Y-m-d 00:00:00')]);
+        $prevTotal->execute([$prevStart->format('Y-m-d'), $start->format('Y-m-d')]);
 
         $today = new \DateTimeImmutable('today');
         return [

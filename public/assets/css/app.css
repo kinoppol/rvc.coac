@@ -439,7 +439,10 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-out-note { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-weight: 600; font-size: 14.5px; }
 .pos-out-note small { display: block; margin-top: 4px; font-weight: 400; font-size: 12.5px; }
 .pos-out-note .pos-switch { margin-top: 10px; color: var(--text); }
-.pos-short-bar { padding: 2px 14px; border-radius: 10px; background: var(--warn-bg); border: 1px solid var(--warn); }
+.pos-hours { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; border-radius: 10px; background: #2b2f6b; color: #e6e8ff; font-size: 14.5px; line-height: 1.5; }
+.pos-hours b { color: #fff; }
+.pos-hours-note { padding: 6px 14px; border-radius: 99px; background: var(--soft); color: var(--pri); font-size: 14px; font-weight: 600; }
+.pos-short-bar {padding: 2px 14px; border-radius: 10px; background: var(--warn-bg); border: 1px solid var(--warn); }
 .pos-short-bar .pos-switch { margin: 0; color: var(--warn); }
 .pos-switch { display: flex; align-items: center; gap: 10px; min-height: 48px; margin-top: 10px; font-size: 15px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
 .pos-switch small { font-weight: 400; font-size: 12.5px; }

@@ -47,6 +47,24 @@ class SettingsController
             }
             $body['pos_payment_methods'] = implode(',', $methods);
         }
+        foreach (['store_open_time', 'store_close_time'] as $key) {
+            if (isset($body[$key]) && $body[$key] !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $body[$key])) {
+                return $this->error($response, 'เวลาเปิด-ปิดร้านไม่ถูกต้อง', 422);
+            }
+        }
+        if (isset($body['store_open_time'], $body['store_close_time'])) {
+            $open = (string) $body['store_open_time'];
+            $close = (string) $body['store_close_time'];
+            if (($open === '') !== ($close === '')) {
+                return $this->error($response, 'กรุณาระบุทั้งเวลาเปิดและเวลาปิดร้าน หรือเว้นว่างทั้งคู่', 422);
+            }
+            if ($open !== '' && $close <= $open) {
+                return $this->error($response, 'เวลาปิดร้านต้องหลังเวลาเปิดร้าน', 422);
+            }
+        }
+        if (isset($body['store_closed_days'])) {
+            $body['store_closed_days'] = implode(',', array_intersect(['0', '1', '2', '3', '4', '5', '6'], explode(',', (string) $body['store_closed_days'])));
+        }
         foreach (['pos_mixed_roles', 'pos_short_stock_roles'] as $key) {
             if (isset($body[$key])) {
                 $body[$key] = implode(',', array_intersect(SettingsService::POS_ROLES, explode(',', (string) $body[$key])));

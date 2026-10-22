@@ -49,7 +49,7 @@ class ReportService
              FROM sale_items si
              JOIN sales s ON s.id = si.sale_id
              LEFT JOIN consignors c ON c.id = si.consignor_id
-             WHERE DATE(s.sale_datetime) BETWEEN ? AND ?
+             WHERE s.business_date BETWEEN ? AND ?
              GROUP BY c.id, c.name
              ORDER BY total_sales DESC"
         );
@@ -65,7 +65,7 @@ class ReportService
              FROM sale_items si
              JOIN sales s ON s.id = si.sale_id
              JOIN products p ON p.id = si.product_id
-             WHERE si.consignor_id = ? AND DATE(s.sale_datetime) BETWEEN ? AND ?
+             WHERE si.consignor_id = ? AND s.business_date BETWEEN ? AND ?
              GROUP BY p.id, p.name, p.sale_price, p.qty_stock
              ORDER BY total_sales DESC'
         );
@@ -96,6 +96,30 @@ class ReportService
         return $rows;
     }
 
+    /**
+     * Sales made outside store hours, line by line: the real time they happened
+     * (what stock counts see) next to the accounting day they were booked on.
+     * Picked when either date falls in the range.
+     */
+    public function afterHoursSales(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT s.sale_datetime AS sold_at, s.business_date, s.doc_no, u.full_name AS cashier,
+                    p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner,
+                    si.qty, si.qty * si.unit_price AS sales_value
+             FROM sales s
+             JOIN sale_items si ON si.sale_id = s.id
+             JOIN products p ON p.id = si.product_id
+             LEFT JOIN consignors c ON c.id = si.consignor_id
+             LEFT JOIN users u ON u.id = s.cashier_id
+             WHERE s.after_hours = 1
+               AND (DATE(s.sale_datetime) BETWEEN ? AND ? OR s.business_date BETWEEN ? AND ?)
+             ORDER BY s.sale_datetime ASC, si.id ASC"
+        );
+        $stmt->execute([$from, $to, $from, $to]);
+        return $stmt->fetchAll();
+    }
+
     /** Store-owned goods: sales, cost of goods sold and gross profit per product. */
     public function storeSales(string $from, string $to): array
     {
@@ -107,7 +131,7 @@ class ReportService
              FROM sale_items si
              JOIN sales s ON s.id = si.sale_id
              JOIN products p ON p.id = si.product_id
-             WHERE si.consignor_id IS NULL AND DATE(s.sale_datetime) BETWEEN ? AND ?
+             WHERE si.consignor_id IS NULL AND s.business_date BETWEEN ? AND ?
              GROUP BY p.id, p.name, p.qty_stock
              ORDER BY gross_profit DESC'
         );

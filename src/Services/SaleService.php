@@ -26,8 +26,10 @@ class SaleService
 
     /**
      * @param array<int,array{product_id:int, qty:int, unit_price?:float}> $items unit_price defaults to the product's sale price
-     * @param array{sale_datetime?:string, allow_short_stock?:bool, note?:string} $opts sale_datetime for sales recorded
-     *        after the fact (imported from an external POS); allow_short_stock lets stock go below zero
+     * @param array{sale_datetime?:string, business_date?:string, after_hours?:bool, allow_short_stock?:bool, note?:string} $opts
+     *        sale_datetime for sales recorded after the fact (imported from an external POS); business_date is the
+     *        accounting day (defaults to the day of sale_datetime; later for a sale made after the store closed);
+     *        allow_short_stock lets stock go below zero
      */
     public function record(array $items, int $cashierId, ?string $ip, array $opts = []): array
     {
@@ -35,6 +37,8 @@ class SaleService
             throw new \RuntimeException('ไม่มีรายการขาย');
         }
         $saleAt = $opts['sale_datetime'] ?? date('Y-m-d H:i:s');
+        $businessDate = $opts['business_date'] ?? substr($saleAt, 0, 10);
+        $afterHours = !empty($opts['after_hours']);
         $note = isset($opts['note']) ? " ({$opts['note']})" : '';
 
         // Callers that also write other rows (e.g. a POS import) keep their own transaction.
@@ -48,10 +52,10 @@ class SaleService
             $totalValue = 0.0;
 
             $insSale = $this->db->prepare(
-                'INSERT INTO sales (doc_no, cashier_id, sale_datetime, total_qty, total_value, created_at)
-                 VALUES (?, ?, ?, 0, 0, NOW())'
+                'INSERT INTO sales (doc_no, cashier_id, sale_datetime, business_date, after_hours, total_qty, total_value, created_at)
+                 VALUES (?, ?, ?, ?, ?, 0, 0, NOW())'
             );
-            $insSale->execute([$docNo, $cashierId, $saleAt]);
+            $insSale->execute([$docNo, $cashierId, $saleAt, $businessDate, (int) $afterHours]);
             $saleId = (int) $this->db->lastInsertId();
 
             $insItem = $this->db->prepare(
@@ -129,7 +133,7 @@ class SaleService
                     round($agg['sale_value'], 2),
                     0,
                     $cashierId,
-                    substr($saleAt, 0, 10)
+                    $businessDate
                 );
                 if ($agg['fee_value'] > 0) {
                     $feeRef = $this->docs->next('FEE', 'ledger_entries', 'ref_no');
@@ -141,7 +145,7 @@ class SaleService
                         0,
                         round($agg['fee_value'], 2),
                         $cashierId,
-                        substr($saleAt, 0, 10)
+                        $businessDate
                     );
                 }
             }
@@ -156,12 +160,16 @@ class SaleService
 
             $this->audit->log('sales', $saleId, 'create', null, [
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
+                'business_date' => $businessDate, 'after_hours' => $afterHours,
             ], $cashierId, $ip);
 
             if ($own) {
                 $this->db->commit();
             }
-            return ['id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2), 'change' => $change];
+            return [
+                'id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
+                'change' => $change, 'business_date' => $businessDate, 'after_hours' => $afterHours,
+            ];
         } catch (\Throwable $e) {
             if ($own) {
                 $this->db->rollBack();
