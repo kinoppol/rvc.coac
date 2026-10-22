@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 /**
  * นำเข้ายอดขายจากระบบ POS ภายนอก: the report has item names (and, in newer
@@ -401,13 +402,13 @@ export async function render(container, { permissions = [] } = {}) {
     }
 
     async function cancelImport(v) {
-        const reason = prompt(`ยกเลิกการนำเข้ายอดขายวันที่ ${fmtDate(v.sale_date)}${v.doc_no ? ` (${v.doc_no})` : ''}
-
-ยอดขายนี้จะถูกลบออก สินค้าคืนเข้าสต๊อก ${count(v.total_qty)} ชิ้น รายการในสมุดบัญชีผู้ฝากของการขายนี้ถูกถอนออก
+        const reason = await promptDialog(`ยอดขายนี้จะถูกลบออก สินค้าคืนเข้าสต๊อก ${count(v.total_qty)} ชิ้น รายการในสมุดบัญชีผู้ฝากของการขายนี้ถูกถอนออก
 และสินค้าที่สร้างใหม่ตอนนำเข้า (ถ้ายังไม่ถูกใช้ที่อื่น) จะถูกลบ — คู่สินค้าที่จับไว้ยังเก็บไว้ใช้ต่อ (ยกเลิกแล้วกู้คืนไม่ได้)
-กรุณาระบุเหตุผลที่ยกเลิก:`);
+กรุณาระบุเหตุผลที่ยกเลิก:`, {
+            title: `ยกเลิกการนำเข้ายอดขายวันที่ ${fmtDate(v.sale_date)}${v.doc_no ? ` (${v.doc_no})` : ''}?`,
+            okText: 'ยกเลิกการนำเข้า', cancelText: 'ไม่ยกเลิก', placeholder: 'เหตุผลที่ยกเลิก', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true,
+        });
         if (reason === null) return;
-        if (!reason.trim()) { alert('กรุณาระบุเหตุผลที่ยกเลิก'); return; }
         try {
             const res = (await api.post(`/pos-import/${v.id}/cancel`, { reason: reason.trim() })).data;
             success = `ยกเลิกการนำเข้า${res.doc_no ? ` ${res.doc_no}` : ''} แล้ว — คืนสินค้าเข้าสต๊อก ${count(res.units)} ชิ้น`
@@ -416,7 +417,7 @@ export async function render(container, { permissions = [] } = {}) {
             await loadRecent();
             draw();
         } catch (e) {
-            alert(e.message);
+            alertDialog(e.message, { tone: 'error' });
         }
     }
 
@@ -591,7 +592,7 @@ export async function render(container, { permissions = [] } = {}) {
                 const cost = Number(costText);
                 const price = Number(host.querySelector('#np-price').value);
                 // Left blank when the POS has no cost: it must not silently become 0.
-                if (!name || !(price > 0) || costText === '' || !(cost >= 0)) { alert('กรุณากรอกชื่อ ราคาทุน และราคาขายให้ถูกต้อง'); return; }
+                if (!name || !(price > 0) || costText === '' || !(cost >= 0)) { alertDialog('กรุณากรอกชื่อ ราคาทุน และราคาขายให้ถูกต้อง', { title: 'ข้อมูลสินค้าไม่ครบ', tone: 'error' }); return; }
                 setDecision(editing, { action: 'new', product: null, origin: 'new' }, {
                     name, consignor_id: host.querySelector('#np-owner').value || null, cost_price: cost, sale_price: price,
                 });
@@ -646,11 +647,11 @@ export async function render(container, { permissions = [] } = {}) {
         });
         body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
             const m = mappings.find((x) => x.id === Number(b.dataset.del));
-            if (!confirm(`ลบคู่ «${m?.pos_name}» ? ครั้งต่อไประบบจะแนะนำคู่ใหม่ให้`)) return;
+            if (!(await confirmDialog('ครั้งต่อไประบบจะแนะนำคู่ใหม่ให้', { title: `ลบคู่ «${m?.pos_name}»?`, okText: 'ลบ', danger: true }))) return;
             try {
                 await api.del(`/pos-import/mappings/${b.dataset.del}`);
                 await loadMappings();
-            } catch (e) { alert(e.message); }
+            } catch (e) { alertDialog(e.message, { tone: 'error' }); }
             draw();
         }));
     }

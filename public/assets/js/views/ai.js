@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { escapeHtml } from '../util.js';
 import { refreshAssistantModels } from '../assistant.js';
+import { alertDialog, confirmDialog } from '../dialog.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย' };
 
@@ -276,7 +277,7 @@ export async function render(container) {
                 refreshAssistantModels();
             } catch (e) {
                 defaultModel = prev;
-                alert(e.message || 'บันทึกไม่สำเร็จ');
+                alertDialog(e.message || 'บันทึกไม่สำเร็จ', { tone: 'error' });
             }
             draw();
         });
@@ -388,7 +389,7 @@ export async function render(container) {
         });
 
         container.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
-            if (!confirm(`ลบผู้ให้บริการ "${editing.name}" และโมเดลทั้งหมดของผู้ให้บริการนี้?`)) return;
+            if (!(await confirmDialog(`ลบผู้ให้บริการ "${editing.name}" และโมเดลทั้งหมดของผู้ให้บริการนี้?`, { title: 'ลบผู้ให้บริการ AI', okText: 'ลบ', danger: true }))) return;
             try {
                 await api.del(`/ai/providers/${editing.id}`);
                 listMessage = `ลบ "${editing.name}" แล้ว`;

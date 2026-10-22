@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { uploadImage, attachmentUrl, imagesFromClipboard } from '../images.js';
 import { printPurchaseDoc } from '../print-slip.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 /**
  * ซื้อสินค้าเข้าร้าน: store-owned purchases. Receipt photos (one receipt may
@@ -513,8 +514,9 @@ export async function render(container) {
             const rows = container.querySelectorAll('tr[data-row] [data-f="name"]');
             rows[rows.length - 1]?.focus();
         });
-        const resetForm = () => {
-            if (!confirm(editing ? `ยกเลิกการแก้ไข ${editing.doc_no}? (ใบซื้อเดิมไม่เปลี่ยนแปลง)` : 'ล้างข้อมูลในฟอร์มทั้งหมด?')) return;
+        const resetForm = async () => {
+            if (!(await confirmDialog(editing ? 'ใบซื้อเดิมไม่เปลี่ยนแปลง' : 'ข้อมูลที่กรอกในฟอร์มจะถูกล้างทั้งหมด',
+                { title: editing ? `ยกเลิกการแก้ไข ${editing.doc_no}?` : 'ล้างข้อมูลในฟอร์ม?', okText: editing ? 'ยกเลิกการแก้ไข' : 'ล้างข้อมูล', cancelText: 'กลับไปแก้ไขต่อ', danger: true }))) return;
             clearForm();
             error = null; success = null;
             draw();
@@ -528,9 +530,9 @@ export async function render(container) {
             container.querySelector('[data-h="supplier_name"]')?.focus();
         });
         // Closing keeps a new purchase's data for later; closing an edit discards it.
-        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => {
+        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', async () => {
             if (editing) {
-                if (!confirm(`ปิดและยกเลิกการแก้ไข ${editing.doc_no}? (ใบซื้อเดิมไม่เปลี่ยนแปลง)`)) return;
+                if (!(await confirmDialog('ใบซื้อเดิมไม่เปลี่ยนแปลง', { title: `ปิดและยกเลิกการแก้ไข ${editing.doc_no}?`, okText: 'ปิดและยกเลิก', cancelText: 'กลับไปแก้ไขต่อ', danger: true }))) return;
                 clearForm();
             }
             formOpen = false;
@@ -539,10 +541,10 @@ export async function render(container) {
         }));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
             const formUsed = !editing && items.some((i) => i.name.trim());
-            if ((formUsed || editing) && !confirm('ข้อมูลที่กรอกค้างไว้ในฟอร์มจะถูกแทนที่ด้วยใบซื้อที่เลือก ดำเนินการต่อ?')) return;
+            if ((formUsed || editing) && !(await confirmDialog('ข้อมูลที่กรอกค้างไว้ในฟอร์มจะถูกแทนที่ด้วยใบซื้อที่เลือก', { title: 'แทนที่ข้อมูลในฟอร์ม?', okText: 'ดำเนินการต่อ' }))) return;
             try {
                 startEdit((await api.get(`/purchases/${b.dataset.edit}`)).data);
-            } catch (e) { alert(e.message); }
+            } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         }));
         container.querySelector('#pc-save')?.addEventListener('click', save);
         container.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => cancelDoc(Number(b.dataset.cancel), b.dataset.doc)));
@@ -550,7 +552,7 @@ export async function render(container) {
             try {
                 viewing = (await api.get(`/purchases/${b.dataset.view}`)).data;
                 draw();
-            } catch (e) { alert(e.message); }
+            } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         }));
         // The detail modal closes only via its close buttons.
         container.querySelector('[data-print-view]')?.addEventListener('click', () => printPurchaseDoc(viewing));
@@ -642,7 +644,7 @@ export async function render(container) {
     async function extract() {
         if (!photos.length || !modelId) return;
         const hasData = items.some((i) => i.name);
-        if (hasData && !confirm('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI ดำเนินการต่อ?')) return;
+        if (hasData && !(await confirmDialog('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI', { title: 'อ่านใบเสร็จด้วย AI?', okText: 'ดำเนินการต่อ' }))) return;
         busy = 'extract';
         error = null;
         success = null;
@@ -667,12 +669,9 @@ export async function render(container) {
     }
 
     async function cancelDoc(id, docNo) {
-        const reason = prompt(`ยกเลิกใบซื้อ ${docNo}
-
-สินค้าตามใบนี้จะถูกหักออกจากสต๊อก และไม่นับรวมในรายงาน (ยกเลิกแล้วกู้คืนไม่ได้)
-กรุณาระบุเหตุผลที่ยกเลิก:`);
+        const reason = await promptDialog('สินค้าตามใบนี้จะถูกหักออกจากสต๊อก และไม่นับรวมในรายงาน (ยกเลิกแล้วกู้คืนไม่ได้)\nกรุณาระบุเหตุผลที่ยกเลิก:',
+            { title: `ยกเลิกใบซื้อ ${docNo}?`, okText: 'ยกเลิกใบซื้อ', cancelText: 'ไม่ยกเลิก', placeholder: 'เหตุผลที่ยกเลิก', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true });
         if (reason === null) return;
-        if (!reason.trim()) { alert('กรุณาระบุเหตุผลที่ยกเลิก'); return; }
         try {
             const res = await api.post(`/purchases/${id}/cancel`, { reason: reason.trim() });
             success = `ยกเลิกใบซื้อ ${res.data.doc_no} แล้ว — หักสินค้าออกจากสต๊อก ${res.data.units} ชิ้น`;
@@ -685,7 +684,7 @@ export async function render(container) {
             await loadDocs();
             draw();
         } catch (e) {
-            alert(e.message);
+            alertDialog(e.message, { tone: 'error' });
         }
     }
 

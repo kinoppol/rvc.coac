@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
+import { alertDialog, confirmDialog } from '../dialog.js';
 
 const STATUS = {
     pending: ['warn', 'รอร้านตรวจรับ'],
@@ -162,7 +163,7 @@ export async function render(container) {
     function wire() {
         container.querySelector('#btn-open').addEventListener('click', openModal);
         container.querySelectorAll('[data-delete]').forEach((btn) => btn.addEventListener('click', async () => {
-            if (!confirm(`ลบคำขอนี้? กู้คืนได้ภายใน ${retentionDays} วัน หลังจากนั้นจะถูกลบถาวร`)) return;
+            if (!(await confirmDialog(`กู้คืนได้ภายใน ${retentionDays} วัน หลังจากนั้นจะถูกลบถาวร`, { title: 'ลบคำขอนี้?', okText: 'ลบ', danger: true }))) return;
             try {
                 await api.post(`/my/requests/${btn.dataset.delete}/delete`);
                 success = `ลบแล้ว — กู้คืนได้จากหัวข้อ «ลบแล้ว» ด้านล่างภายใน ${retentionDays} วัน`;
@@ -188,12 +189,12 @@ export async function render(container) {
             try {
                 await printConsignSlip(r, async (cost) => (await api.post('/my/quote', { cost_price: cost })).data.price);
             } catch (e) {
-                alert(e.message);
+                alertDialog(e.message, { tone: 'error' });
             }
             btn.disabled = false;
         }));
         container.querySelectorAll('[data-cancel]').forEach((btn) => btn.addEventListener('click', async () => {
-            if (!confirm('ยกเลิกคำขอฝากนี้?')) return;
+            if (!(await confirmDialog('', { title: 'ยกเลิกคำขอฝากนี้?', okText: 'ยกเลิกคำขอ', cancelText: 'ไม่ยกเลิก', danger: true }))) return;
             try {
                 await api.post(`/my/requests/${btn.dataset.cancel}/cancel`);
                 success = 'ยกเลิกคำขอแล้ว';

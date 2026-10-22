@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
+import { confirmDialog, promptDialog } from '../dialog.js';
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', consignor: 'ผู้ฝากขายเท่านั้น' };
 const METHOD_LABEL = { both: 'รหัสผ่าน และ RVC-ONE', sso: 'เฉพาะ RVC-ONE', password: 'เฉพาะรหัสผ่าน' };
@@ -106,7 +107,7 @@ export async function renderUsersPanel(el, { user: me }) {
                 act(() => api.put(`/users/${id}`, { active: e.target.textContent.trim() !== 'ใช้งาน' })));
             tr.querySelector('[data-impersonate]')?.addEventListener('click', async () => {
                 const name = tr.children[0].textContent.trim();
-                if (!confirm(`สวมสิทธิ์เป็น ${name}? จะใช้งานระบบด้วยสิทธิ์ของผู้ใช้นี้ จนกว่าจะกด «กลับเป็นผู้ดูแลระบบ»`)) return;
+                if (!(await confirmDialog('จะใช้งานระบบด้วยสิทธิ์ของผู้ใช้นี้ จนกว่าจะกด «กลับเป็นผู้ดูแลระบบ»', { title: `สวมสิทธิ์เป็น ${name}?`, okText: 'สวมสิทธิ์' }))) return;
                 try {
                     await api.post(`/users/${id}/impersonate`);
                     location.hash = '';
@@ -116,24 +117,24 @@ export async function renderUsersPanel(el, { user: me }) {
                     await load();
                 }
             });
-            tr.querySelector('[data-consign]')?.addEventListener('click', () => {
-                const code = prompt('ผูกกับรหัสผู้ฝากขายที่มีอยู่แล้ว (เช่น C-012)\nหรือเว้นว่างเพื่อสร้างผู้ฝากขายใหม่จากข้อมูลผู้ใช้นี้');
+            tr.querySelector('[data-consign]')?.addEventListener('click', async () => {
+                const code = await promptDialog('ผูกกับรหัสผู้ฝากขายที่มีอยู่แล้ว (เช่น C-012)\nหรือเว้นว่างเพื่อสร้างผู้ฝากขายใหม่จากข้อมูลผู้ใช้นี้', { title: 'ตั้งเป็นผู้ฝากขาย', placeholder: 'รหัสผู้ฝากขาย (ไม่บังคับ)' });
                 if (code === null) return;
                 act(() => api.put(`/users/${id}`, { consignor: code.trim() || 'new' }),
                     'ตั้งเป็นผู้ฝากขายแล้ว ผู้ใช้สลับไปเมนูผู้ฝากขายได้จากมุมขวาบน');
             });
-            tr.querySelector('[data-unconsign]')?.addEventListener('click', () => {
-                if (confirm('ยกเลิกการเป็นผู้ฝากขายของผู้ใช้นี้? (ข้อมูลผู้ฝากขายและสมุดบัญชียังอยู่ครบ เพียงไม่ผูกกับบัญชีนี้)')) {
+            tr.querySelector('[data-unconsign]')?.addEventListener('click', async () => {
+                if (await confirmDialog('ข้อมูลผู้ฝากขายและสมุดบัญชียังอยู่ครบ เพียงไม่ผูกกับบัญชีนี้', { title: 'ยกเลิกการเป็นผู้ฝากขายของผู้ใช้นี้?', okText: 'ยกเลิกการเป็นผู้ฝากขาย', cancelText: 'ไม่ยกเลิก', danger: true })) {
                     act(() => api.put(`/users/${id}`, { consignor: null }), 'ยกเลิกแล้ว');
                 }
             });
-            tr.querySelector('[data-unlink]')?.addEventListener('click', () => {
-                if (confirm('ยกเลิกการผูกบัญชี RVC-ONE? ผู้ใช้นี้จะเข้าสู่ระบบผ่าน RVC-ONE ไม่ได้อีก')) {
+            tr.querySelector('[data-unlink]')?.addEventListener('click', async () => {
+                if (await confirmDialog('ผู้ใช้นี้จะเข้าสู่ระบบผ่าน RVC-ONE ไม่ได้อีก', { title: 'ยกเลิกการผูกบัญชี RVC-ONE?', okText: 'ยกเลิกการผูก', cancelText: 'ไม่ยกเลิก', danger: true })) {
                     act(() => api.put(`/users/${id}`, { oa_user_id: null }), 'ยกเลิกการผูกแล้ว');
                 }
             });
-            tr.querySelector('[data-link]')?.addEventListener('click', () => {
-                const oaId = prompt('กรอก RVC-ONE ID ของผู้ใช้นี้ (ดูได้จากผลค้นหาด้านล่าง)');
+            tr.querySelector('[data-link]')?.addEventListener('click', async () => {
+                const oaId = await promptDialog('กรอก RVC-ONE ID ของผู้ใช้นี้ (ดูได้จากผลค้นหาด้านล่าง)', { title: 'ผูกบัญชี RVC-ONE', placeholder: 'RVC-ONE ID', required: 'กรุณากรอก RVC-ONE ID' });
                 if (oaId && oaId.trim()) act(() => api.put(`/users/${id}`, { oa_user_id: oaId.trim() }), 'ผูกบัญชีแล้ว');
             });
         });
@@ -243,14 +244,14 @@ export async function renderOaPanel(el) {
             if (!v) return;
             act(() => api.put('/oa/secret', { client_secret: v }), 'บันทึก Client Secret แล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อทดสอบ');
         });
-        el.querySelector('[data-clear-secret]')?.addEventListener('click', () => {
-            if (confirm('ลบ Client Secret? จะซิงค์รายชื่อจาก RVC-ONE ไม่ได้จนกว่าจะใส่ใหม่')) {
+        el.querySelector('[data-clear-secret]')?.addEventListener('click', async () => {
+            if (await confirmDialog('จะซิงค์รายชื่อจาก RVC-ONE ไม่ได้จนกว่าจะใส่ใหม่', { title: 'ลบ Client Secret?', okText: 'ลบ', danger: true })) {
                 act(() => api.put('/oa/secret', { client_secret: '', clear: true }), 'ลบ Client Secret แล้ว');
             }
         });
-        el.querySelectorAll('[data-method]').forEach((btn) => btn.addEventListener('click', () => {
+        el.querySelectorAll('[data-method]').forEach((btn) => btn.addEventListener('click', async () => {
             const v = btn.dataset.method;
-            if (v === 'password' && !confirm('ปิดการเข้าสู่ระบบผ่าน RVC-ONE? ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้')) return;
+            if (v === 'password' && !(await confirmDialog('ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้', { title: 'ปิดการเข้าสู่ระบบผ่าน RVC-ONE?', okText: 'ปิด RVC-ONE', danger: true }))) return;
             act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
         }));
         el.querySelectorAll('[data-sync-type]').forEach((btn) => btn.addEventListener('click', () =>

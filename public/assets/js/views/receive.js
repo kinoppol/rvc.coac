@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 export async function render(container, { permissions = [] } = {}) {
     const canBackdate = permissions.includes('receive.backdate');
@@ -172,7 +173,7 @@ export async function render(container, { permissions = [] } = {}) {
             try {
                 await printConsignSlip(r, async (cost) => (await api.post('/receive/quote', { cost_price: cost })).data.price);
             } catch (e) {
-                alert(e.message);
+                alertDialog(e.message, { tone: 'error' });
             }
             btn.disabled = false;
         }));
@@ -184,7 +185,7 @@ export async function render(container, { permissions = [] } = {}) {
     async function loadRequest(id) {
         const r = requests.find((x) => x.id === id);
         if (!r) return;
-        if (cart.length && !confirm('ล้างรายการในใบรับฝากปัจจุบัน แล้วโหลดคำขอนี้แทน?')) return;
+        if (cart.length && !(await confirmDialog('รายการในใบรับฝากปัจจุบันจะถูกล้าง แล้วโหลดคำขอนี้แทน', { title: 'โหลดคำขอฝากนี้?', okText: 'โหลดคำขอ' }))) return;
         if (!options.some((o) => Number(o.id) === Number(r.consignor_id))) {
             error = `ผู้ฝากขาย ${r.consignor_code} ยังไม่อยู่ในสถานะใช้งาน — เปิดใช้งานในทะเบียนผู้ฝากขายก่อน`;
             draw();
@@ -205,7 +206,7 @@ export async function render(container, { permissions = [] } = {}) {
 
     async function rejectRequest(id) {
         const r = requests.find((x) => x.id === id);
-        const note = prompt(`เหตุผลที่ไม่รับฝาก ${r?.request_no || ''} (ผู้ฝากจะเห็นข้อความนี้)`);
+        const note = await promptDialog('ผู้ฝากจะเห็นข้อความนี้', { title: `ไม่รับฝาก ${r?.request_no || ''}`, okText: 'บันทึกไม่รับฝาก', placeholder: 'เหตุผลที่ไม่รับฝาก', multiline: true, danger: true });
         if (note === null) return;
         try {
             await api.post(`/receive/requests/${id}/reject`, { note });

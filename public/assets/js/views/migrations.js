@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
+import { confirmDialog } from '../dialog.js';
 
 export async function render(container) {
     let error = null;
@@ -44,7 +45,7 @@ export async function render(container) {
             catch (e) { error = e.message; draw(rows); }
         });
         container.querySelector('#btn-rollback').addEventListener('click', async () => {
-            if (!confirm('ย้อนกลับ migration ชุดล่าสุด? การกระทำนี้จะรันคำสั่ง down() ของแต่ละไฟล์ในชุดนั้น')) return;
+            if (!(await confirmDialog('การกระทำนี้จะรันคำสั่ง down() ของแต่ละไฟล์ในชุดนั้น', { title: 'ย้อนกลับ migration ชุดล่าสุด?', okText: 'ย้อนกลับ', danger: true }))) return;
             try { await api.post('/admin/migrations/rollback'); error = null; await load(); }
             catch (e) { error = e.message; draw(rows); }
         });

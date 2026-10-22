@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml } from '../util.js';
 import { openMobileCount } from './count-mobile.js';
+import { confirmDialog } from '../dialog.js';
 
 export async function render(container, { permissions }) {
     let current = null;
@@ -138,7 +139,7 @@ export async function render(container, { permissions }) {
     }
 
     async function cancelCount() {
-        if (!confirm(`ยกเลิกรอบตรวจนับ ${current.doc_no}? ผลการนับในรอบนี้จะไม่ถูกนำไปปรับสต๊อก (บาร์โค้ดและรูปสินค้าที่บันทึกระหว่างนับยังอยู่)`)) return;
+        if (!(await confirmDialog('ผลการนับในรอบนี้จะไม่ถูกนำไปปรับสต๊อก (บาร์โค้ดและรูปสินค้าที่บันทึกระหว่างนับยังอยู่)', { title: `ยกเลิกรอบตรวจนับ ${current.doc_no}?`, okText: 'ยกเลิกรอบตรวจนับ', cancelText: 'ไม่ยกเลิก', danger: true }))) return;
         try {
             await api.post(`/stockcounts/${current.id}/cancel`);
             error = null;

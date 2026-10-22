@@ -121,6 +121,8 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
 .btn.danger { background: var(--bad); }
+.btn.secondary:hover { background: var(--hover); }
+.btn.danger:hover { background: var(--bad); filter: brightness(.9); }
 .btn.sm { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
 
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
@@ -235,6 +237,25 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .modal-close:hover { background: var(--hover); color: var(--text); }
 .modal-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 18px; }
 .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--surface2); }
+
+/* ---------- Dialogs (แทน alert / confirm / prompt) ---------- */
+.app-dialog { z-index: 80; animation: app-dialog-fade .12s ease-out; }
+.app-dialog-box { width: 440px; animation: app-dialog-pop .14s ease-out; }
+.app-dialog-body { display: flex; gap: 14px; align-items: flex-start; padding: 22px 22px 18px; }
+.app-dialog-icon { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; font-weight: 800; background: var(--soft); color: var(--pri); }
+.app-dialog-icon.warn { background: var(--warn-bg); color: var(--warn); }
+.app-dialog-icon.danger, .app-dialog-icon.error { background: var(--bad-bg); color: var(--bad); }
+.app-dialog-text { flex: 1; min-width: 0; }
+.app-dialog-text h2 { margin: 2px 0 6px; font-size: 17px; font-weight: 700; }
+.app-dialog-text p { margin: 0; font-size: 14.5px; line-height: 1.55; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }
+.app-dialog-input { width: 100%; margin-top: 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 15px; outline: none; resize: vertical; }
+.app-dialog-input:focus { border-color: var(--pri); box-shadow: 0 0 0 3px var(--soft); }
+.app-dialog-error { margin-top: 6px; color: var(--bad); font-size: 13px; font-weight: 600; }
+.app-dialog-foot { justify-content: flex-end; }
+.app-dialog-foot .btn { min-width: 96px; min-height: 44px; font-size: 15px; }
+@keyframes app-dialog-fade { from { opacity: 0; } }
+@keyframes app-dialog-pop { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .app-dialog, .app-dialog-box { animation: none; } }
 
 /* ---------- Purchases (ซื้อสินค้าเข้าร้าน) ---------- */
 .pc-photos { display: flex; flex-wrap: wrap; gap: 10px; }

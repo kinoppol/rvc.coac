@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate } from '../util.js';
+import { confirmDialog, isDialogOpen } from '../dialog.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -127,7 +128,7 @@ export async function render(container, { user } = {}) {
 
     /** Puts the cursor back in the search box unless the cashier is typing somewhere else. */
     function focusSearch() {
-        if (modal || !root.isConnected) return;
+        if (modal || isDialogOpen() || !root.isConnected) return;
         const a = document.activeElement;
         if (a && a !== q && root.contains(a) && a.matches('input, select, textarea')) return;
         q.focus({ preventScroll: true });
@@ -670,13 +671,17 @@ export async function render(container, { user } = {}) {
                 resumeCart(Number(t.dataset.resume));
             } else if (t.dataset.drop) {
                 const h = held.find((x) => x.id === Number(t.dataset.drop));
-                if (h && confirm(`ลบตะกร้าที่พัก #${h.no}?`)) {
+                const pieces = h ? h.items.reduce((s, i) => s + i.qty, 0) : 0;
+                if (h) confirmDialog(`สินค้า ${pieces} ชิ้นในตะกร้านี้จะถูกนำออกทั้งหมด`, { title: `ลบตะกร้าที่พัก #${h.no}?`, okText: 'ลบตะกร้า', danger: true }).then((yes) => {
+                    if (!yes) return;
                     held = held.filter((x) => x !== h);
                     saveJson(HELD_KEY, held);
                     drawHeld();
-                }
+                });
             } else if (t.dataset.act === 'clear-cart') {
-                if (cart.length && confirm('ล้างสินค้าทั้งหมดในตะกร้า?')) { cart = []; redraw(); }
+                if (cart.length) confirmDialog(`สินค้า ${cart.length} รายการในตะกร้าจะถูกนำออกทั้งหมด`, { title: 'ล้างตะกร้าสินค้า?', okText: 'ล้างตะกร้า', danger: true }).then((yes) => {
+                    if (yes) { cart = []; redraw(); }
+                });
             } else if (t.dataset.act === 'pay') {
                 openPayment();
                 return;
@@ -694,7 +699,7 @@ export async function render(container, { user } = {}) {
 
     // A scanner keeps typing even when the cashier last tapped somewhere else.
     on(document, 'keydown', (e) => {
-        if (modal || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+        if (modal || isDialogOpen() || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
         const a = document.activeElement;
         if (a && a.matches('input, select, textarea') ) return;
         q.focus({ preventScroll: true });

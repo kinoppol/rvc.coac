@@ -3,6 +3,7 @@ import { renderShell, setActiveNav, updateThemeButton, updateBadges } from './la
 import { initTheme, cycleTheme } from './theme.js';
 import { escapeHtml, setAppTimeZone } from './util.js';
 import { mountAssistant, unmountAssistant } from './assistant.js';
+import { alertDialog } from './dialog.js';
 
 const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
@@ -175,7 +176,7 @@ function onAuthenticated(data) {
             location.hash = '';
             location.reload();
         } catch (err) {
-            alert(err.message);
+            alertDialog(err.message, { tone: 'error' });
         }
     });
     document.getElementById('side-nav').addEventListener('click', (e) => {
