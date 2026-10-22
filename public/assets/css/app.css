@@ -435,6 +435,9 @@ body.pos-full-open { overflow: hidden; }
 .pos-msg.warn { background: var(--warn-bg); color: var(--warn); }
 .pos-tile.out, .pos-row.out { opacity: .45; border-style: dashed; }
 .pos-tile.out.picked, .pos-row.out.picked { opacity: .7; }
+div.pos-row.out { cursor: not-allowed; }
+.pos-out-note { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-weight: 600; font-size: 14.5px; }
+.pos-out-note small { display: block; margin-top: 4px; font-weight: 400; font-size: 12.5px; }
 .pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; height: max(480px, calc(100vh - 230px)); }
 .pos-full .pos-main { flex: 1; min-height: 0; height: auto; }
 .pos-products { overflow-y: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }

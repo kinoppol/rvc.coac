@@ -45,6 +45,11 @@ class SalesController
         }
         $db = Db::connection();
         $stock = (new SettingsService($db))->get('pos_sell_out_of_stock') === '1' ? '1 = 1' : 'p.qty_stock > 0';
+        if (!empty($params['out']) && $q !== '') {
+            // Matches the POS cannot sell (stock below 1), shown so the cashier knows why.
+            $stock = 'p.qty_stock < 1';
+            $all = false;
+        }
         $stmt = $db->prepare(
             "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token,
                     COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty

@@ -65,6 +65,9 @@ export async function render(container, { user } = {}) {
     const allowShort = () => !!options.sell_out_of_stock;
     let modal = null; // the payment dialog element while open
     let msgTimer;
+    // Products matching the search that cannot be sold (stock below 1, switch off).
+    let outHints = { term: '', items: [] };
+    let outTimer;
 
     const life = new AbortController();
     const on = (target, type, fn) => target.addEventListener(type, fn, { signal: life.signal });
@@ -154,7 +157,28 @@ export async function render(container, { user } = {}) {
         const list = matches();
         const box = el('products');
         if (!list.length) {
-            box.innerHTML = `<div class="empty">${q.value.trim() ? 'ไม่พบสินค้าที่ค้นหา' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
+            const term = q.value.trim();
+            box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
+            if (term && !allowShort()) {
+                if (outHints.term !== term) {
+                    clearTimeout(outTimer);
+                    outTimer = setTimeout(async () => {
+                        const res = await api.get(`/sales/products?out=1&q=${encodeURIComponent(term)}`).catch(() => ({ data: [] }));
+                        outHints = { term, items: res.data };
+                        if (q.value.trim() === term) drawProducts();
+                    }, 250);
+                } else if (outHints.items.length) {
+                    box.innerHTML = `
+                      <div class="pos-out-note">ไม่มีสินค้าที่ขายได้ตรงกับคำค้น — พบสินค้าที่คงเหลือในระบบต่ำกว่า 1 ซึ่งร้านยังไม่เปิดให้ขาย
+                        <small>ผู้ดูแลระบบเปิดได้ที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) &gt; เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้อง</small></div>
+                      <div class="pos-list">${outHints.items.map((p) => `
+                        <div class="pos-row out" aria-disabled="true">
+                          <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
+                          <span class="pos-row-stock">คงเหลือ ${Number(p.qty_stock)}</span>
+                          <b>฿${money(p.sale_price)}</b>
+                        </div>`).join('')}</div>`;
+                }
+            }
             return;
         }
         box.innerHTML = view === 'grid'
