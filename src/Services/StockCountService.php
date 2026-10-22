@@ -224,7 +224,11 @@ class StockCountService
         }
     }
 
-    /** Cancels a round that has not been approved yet; product stock is not changed. */
+    /**
+     * Cancels a round that has not been approved yet; product stock is not changed.
+     * Barcodes and photos linked during the count were already saved on the product
+     * records (see StockCountController::assignBarcode/savePhoto) and are kept.
+     */
     public function cancel(int $stockCountId, int $userId, ?string $ip): void
     {
         $sc = $this->get($stockCountId);

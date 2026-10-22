@@ -138,7 +138,7 @@ export async function render(container, { permissions }) {
     }
 
     async function cancelCount() {
-        if (!confirm(`ยกเลิกรอบตรวจนับ ${current.doc_no}? ผลการนับในรอบนี้จะไม่ถูกนำไปปรับสต๊อก`)) return;
+        if (!confirm(`ยกเลิกรอบตรวจนับ ${current.doc_no}? ผลการนับในรอบนี้จะไม่ถูกนำไปปรับสต๊อก (บาร์โค้ดและรูปสินค้าที่บันทึกระหว่างนับยังอยู่)`)) return;
         try {
             await api.post(`/stockcounts/${current.id}/cancel`);
             error = null;
