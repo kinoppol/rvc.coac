@@ -459,6 +459,15 @@ body.pos-full-open { overflow: hidden; }
 .pos-cart { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .pos-cart-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .pos-cart-head h2 { margin: 0; font-size: 17px; }
+.pos-cart-tools { display: flex; gap: 6px; }
+.pos-cart-tools .btn { min-height: 40px; }
+.pos-held { display: flex; gap: 8px; align-items: center; overflow-x: auto; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--warn-bg); }
+.pos-held-label { flex: none; font-size: 12.5px; font-weight: 600; color: var(--warn); }
+.pos-held-chip { flex: none; display: flex; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.pos-held-chip button { border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; touch-action: manipulation; }
+.pos-held-chip [data-resume] { min-height: 48px; padding: 4px 12px; text-align: left; font-size: 13.5px; }
+.pos-held-chip [data-resume] small { display: block; font-size: 11.5px; color: var(--muted); }
+.pos-held-del { width: 40px; border-left: 1px solid var(--border) !important; color: var(--bad) !important; }
 .pos-cart-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
 .pos-line { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; grid-template-areas: "img name del" "img qty total"; gap: 8px 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .pos-line-img { grid-area: img; align-self: start; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--surface2); }

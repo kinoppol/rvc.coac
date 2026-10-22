@@ -28,6 +28,12 @@ function pref(key, fallback) {
 function savePref(key, value) {
     try { localStorage.setItem(`pos.${key}`, value); } catch (e) { /* private mode */ }
 }
+function loadJson(key) {
+    try { return JSON.parse(localStorage.getItem(key)) || []; } catch (e) { return []; }
+}
+function saveJson(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ }
+}
 
 let audio;
 function beep(ok) {
@@ -43,9 +49,14 @@ function beep(ok) {
     } catch (e) { /* no audio */ }
 }
 
-export async function render(container) {
+export async function render(container, { user } = {}) {
+    // The open cart and held carts live in this browser per user, so they survive
+    // leaving the page or a reload until the sale is finished or cleared.
+    const CART_KEY = `pos.cart.${user?.id ?? 0}`;
+    const HELD_KEY = `pos.held.${user?.id ?? 0}`;
     let products = [];
-    let cart = [];
+    let cart = loadJson(CART_KEY);
+    let held = loadJson(HELD_KEY);
     let view = pref('view', 'grid');
     let sort = pref('sort', 'popular');
     let keyboard = !TOUCH || pref('kb', '0') === '1';
@@ -80,7 +91,13 @@ export async function render(container) {
         <div class="pos-main">
           <section class="pos-products card" data-el="products"><div class="empty">กำลังโหลดสินค้า...</div></section>
           <aside class="pos-cart card">
-            <div class="pos-cart-head"><h2 data-el="cart-title">ตะกร้าสินค้า</h2><button type="button" class="btn secondary sm" data-act="clear-cart">ล้างตะกร้า</button></div>
+            <div class="pos-cart-head"><h2 data-el="cart-title">ตะกร้าสินค้า</h2>
+              <div class="pos-cart-tools">
+                <button type="button" class="btn secondary sm" data-act="hold" title="พักตะกร้านี้ไว้ แล้วเปิดรายการขายใหม่">⏸ พักตะกร้า</button>
+                <button type="button" class="btn secondary sm" data-act="clear-cart">ล้างตะกร้า</button>
+              </div>
+            </div>
+            <div class="pos-held" data-el="held" hidden></div>
             <div class="pos-cart-list" data-el="cart"></div>
             <div class="pos-cart-foot">
               <div class="pos-total"><span>ยอดรวม <small data-el="cart-qty"></small></span><b data-el="total">฿ 0.00</b></div>
@@ -173,6 +190,9 @@ export async function render(container) {
         el('total').textContent = `฿ ${money(cartTotal())}`;
         root.querySelector('[data-act="pay"]').disabled = !cart.length;
         root.querySelector('[data-act="clear-cart"]').disabled = !cart.length;
+        root.querySelector('[data-act="hold"]').disabled = !cart.length;
+        saveJson(CART_KEY, cart);
+        drawHeld();
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
             <span class="pos-line-img">${photoUrl(it) ? `<img src="${escapeHtml(photoUrl(it))}" alt="">` : '<span class="pos-nopic">no pic</span>'}</span>
@@ -185,6 +205,42 @@ export async function render(container) {
             <b class="pos-line-total">฿${money(it.sale_price * it.qty)}</b>
             <button type="button" class="pos-line-del" data-remove="${i}" aria-label="เอาออกจากตะกร้า">✕</button>
           </div>`).join('') || '<div class="empty">ยังไม่มีสินค้าในตะกร้า<br><small class="muted">สแกนบาร์โค้ด หรือแตะสินค้าเพื่อเพิ่ม</small></div>';
+    }
+
+    function drawHeld() {
+        const box = el('held');
+        box.hidden = !held.length;
+        box.innerHTML = held.length ? `<span class="pos-held-label">ตะกร้าที่พักไว้</span>${held.map((h) => {
+            const total = h.items.reduce((s, i) => s + i.sale_price * i.qty, 0);
+            const pieces = h.items.reduce((s, i) => s + i.qty, 0);
+            return `<span class="pos-held-chip">
+              <button type="button" data-resume="${h.id}" title="${escapeHtml(h.items.map((i) => `${i.name} x${i.qty}`).join(', '))}">
+                <b>#${h.no}</b> ${pieces} ชิ้น · ฿${money(total)}<small>พักเมื่อ ${escapeHtml(h.at)}</small></button>
+              <button type="button" class="pos-held-del" data-drop="${h.id}" aria-label="ลบตะกร้าที่พัก #${h.no}">✕</button>
+            </span>`;
+        }).join('')}` : '';
+    }
+
+    /** Puts the current cart aside; returns its number. */
+    function holdCart() {
+        const no = held.reduce((m, h) => Math.max(m, h.no), 0) + 1;
+        const at = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+        held.push({ id: Date.now(), no, at, items: cart });
+        saveJson(HELD_KEY, held);
+        cart = [];
+        return no;
+    }
+
+    function resumeCart(id) {
+        const h = held.find((x) => x.id === id);
+        if (!h) return;
+        // A cart in progress is held in its place, so nothing is lost by switching.
+        const swapped = cart.length ? holdCart() : null;
+        held = held.filter((x) => x !== h);
+        cart = h.items.map((c) => ({ ...(products.find((p) => p.id === c.id) || c), qty: c.qty }));
+        saveJson(HELD_KEY, held);
+        message(`เปิดตะกร้าที่พัก #${h.no}${swapped ? ` (พักตะกร้าเดิมไว้เป็น #${swapped})` : ''}`);
+        redraw();
     }
 
     function redraw() {
@@ -240,12 +296,16 @@ export async function render(container) {
             products = res.data.map((p) => ({ ...p, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), sold_qty: Number(p.sold_qty) }));
         } catch (e) {
             message(e.message, 'error');
+            redraw();
+            return;
         }
-        // Keep cart lines in step with the new stock figures.
-        cart = cart.filter((c) => products.some((p) => p.id === c.id)).map((c) => {
+        // Keep cart lines in step with the new prices and stock figures.
+        const gone = [];
+        cart = cart.filter((c) => products.some((p) => p.id === c.id) || !gone.push(c.name)).map((c) => {
             const p = products.find((x) => x.id === c.id);
             return { ...p, qty: allowShort() ? c.qty : Math.min(c.qty, p.qty_stock) };
         });
+        if (gone.length) message(`เอาออกจากตะกร้าเพราะสินค้าหมด: ${gone.join(', ')}`, 'warn');
         redraw();
     }
 
@@ -519,6 +579,21 @@ export async function render(container) {
             } else if (t.dataset.act === 'clear-q') {
                 q.value = '';
                 drawProducts();
+            } else if (t.dataset.act === 'hold') {
+                if (cart.length) {
+                    const no = holdCart();
+                    message(`พักตะกร้าไว้เป็น #${no} แล้ว เริ่มรายการขายใหม่ได้`);
+                    redraw();
+                }
+            } else if (t.dataset.resume) {
+                resumeCart(Number(t.dataset.resume));
+            } else if (t.dataset.drop) {
+                const h = held.find((x) => x.id === Number(t.dataset.drop));
+                if (h && confirm(`ลบตะกร้าที่พัก #${h.no}?`)) {
+                    held = held.filter((x) => x !== h);
+                    saveJson(HELD_KEY, held);
+                    drawHeld();
+                }
             } else if (t.dataset.act === 'clear-cart') {
                 if (cart.length && confirm('ล้างสินค้าทั้งหมดในตะกร้า?')) { cart = []; redraw(); }
             } else if (t.dataset.act === 'pay') {
