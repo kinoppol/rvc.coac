@@ -59,7 +59,9 @@ class ReceiptMarkdownImport
                 $i = $j - 1;
             }
         }
-        usort($tables, fn ($a, $b) => count($b['rows']) <=> count($a['rows']));
+        // A receipt summary often has other tables too (receipt details, totals)
+        // that can be longer than the item table, so rank by how item-like they look.
+        usort($tables, fn ($a, $b) => [self::itemScore($b), count($b['rows'])] <=> [self::itemScore($a), count($a['rows'])]);
         $t = $tables[0] ?? null;
         if (!$t || !$t['rows']) {
             return ['columns' => '', 'rows' => [], 'header' => $md, 'footer' => ''];
@@ -70,6 +72,36 @@ class ReceiptMarkdownImport
             'header' => trim(implode("\n", array_slice($lines, 0, $t['start']))),
             'footer' => trim(implode("\n", array_slice($lines, $t['end']))),
         ];
+    }
+
+    /** How much a table looks like a list of purchased items. */
+    private static function itemScore(array $t): float
+    {
+        $cols = array_map('trim', explode('|', trim($t['columns'], " \t|")));
+        $head = mb_strtolower($t['columns']);
+        $score = 0.0;
+        foreach ([
+            '/รายการ|สินค้า|ชื่อ|item|description|product/u',
+            '/จำนวน|qty|quantity/u',
+            '/ราคา|หน่วย|price|unit/u',
+            '/รวม|มูลค่า|จำนวนเงิน|amount|total/u',
+        ] as $re) {
+            if (preg_match($re, $head)) {
+                $score += 2;
+            }
+        }
+        // Two-column tables are "label | value" details, not item lines.
+        if (count($cols) <= 2) {
+            $score -= 4;
+        }
+        // Item rows carry several numbers (qty, price, line total).
+        $numeric = 0;
+        foreach ($t['rows'] as $row) {
+            if (preg_match_all('/(?<![\d\/.-])\d[\d,]*(?:\.\d+)?(?![\d\/-])/', $row) >= 2) {
+                $numeric++;
+            }
+        }
+        return $score + ($t['rows'] ? 3 * $numeric / count($t['rows']) : 0);
     }
 
     private static function isRow(string $line): bool
