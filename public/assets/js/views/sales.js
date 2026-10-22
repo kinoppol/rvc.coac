@@ -172,6 +172,7 @@ export async function render(container) {
         root.querySelector('[data-act="clear-cart"]').disabled = !cart.length;
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
+            <span class="pos-line-img">${photoUrl(it) ? `<img src="${escapeHtml(photoUrl(it))}" alt="">` : '<span class="pos-nopic">no pic</span>'}</span>
             <div class="pos-line-name">${escapeHtml(it.name)}<small>฿${money(it.sale_price)} · ${escapeHtml(it.consignor_name)}</small></div>
             <div class="pos-qty">
               <button type="button" data-dec="${i}" aria-label="ลดจำนวน">−</button>

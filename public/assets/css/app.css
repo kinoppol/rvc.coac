@@ -457,7 +457,10 @@ body.pos-full-open { overflow: hidden; }
 .pos-cart-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .pos-cart-head h2 { margin: 0; font-size: 17px; }
 .pos-cart-list { flex: 1; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
-.pos-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name del" "qty total"; gap: 8px 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pos-line { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; grid-template-areas: "img name del" "img qty total"; gap: 8px 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.pos-line-img { grid-area: img; align-self: start; width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--surface2); }
+.pos-line-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pos-line-img .pos-nopic { font-size: 10px; letter-spacing: 0; }
 .pos-line-name { grid-area: name; font-weight: 600; font-size: 15px; }
 .pos-line-del { grid-area: del; width: 40px; height: 40px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--bad); font-size: 16px; cursor: pointer; }
 .pos-qty { grid-area: qty; display: flex; align-items: center; gap: 6px; }
