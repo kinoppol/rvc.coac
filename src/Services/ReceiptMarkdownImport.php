@@ -66,12 +66,47 @@ class ReceiptMarkdownImport
         if (!$t || !$t['rows']) {
             return ['columns' => '', 'rows' => [], 'header' => $md, 'footer' => ''];
         }
+        // Total/discount/VAT rows inside the table are bill totals, not items.
+        $items = [];
+        $totals = [];
+        foreach ($t['rows'] as $r) {
+            if (self::isTotalRow($r)) {
+                $totals[] = $r;
+            } else {
+                $items[] = $r;
+            }
+        }
+        $footer = trim(implode("\n", array_slice($lines, $t['end'])));
+        if ($totals) {
+            $footer = trim($t['columns'] . "\n" . implode("\n", $totals) . "\n\n" . $footer);
+        }
         return [
             'columns' => $t['columns'],
-            'rows' => $t['rows'],
+            'rows' => $items,
             'header' => trim(implode("\n", array_slice($lines, 0, $t['start']))),
-            'footer' => trim(implode("\n", array_slice($lines, $t['end']))),
+            'footer' => $footer,
         ];
+    }
+
+    /** A table row whose only text is a label like "รวม", "ส่วนลด", "VAT 7%", "Total". */
+    private static function isTotalRow(string $row): bool
+    {
+        $labels = [];
+        foreach (explode('|', trim(trim($row), '|')) as $cell) {
+            $cell = trim(str_replace(['*', '_'], '', $cell));
+            if (preg_match('/\p{L}/u', $cell)) {
+                $labels[] = $cell;
+            }
+        }
+        if (!$labels) {
+            return false;
+        }
+        foreach ($labels as $l) {
+            if (!preg_match('/^(รวม(ทั้งสิ้น|ทั้งหมด|เงิน(ทั้งสิ้น)?|สุทธิ|ยอด)?|ยอด(รวม|สุทธิ|ชำระ|เงิน)\S*|ส่วนลด\S*|ภาษี\S*|vat|(sub\s*|grand\s*)?total|net|discount|บาท|ถ้วย|ชิ้น|หน่วย)[^\p{L}]*$/iu', $l)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** How much a table looks like a list of purchased items. */
