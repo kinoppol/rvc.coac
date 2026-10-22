@@ -346,6 +346,8 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-title span { font-size: 12.5px; opacity: .8; }
 .mc-icon { width: 42px; height: 42px; border-radius: 10px; border: 1px solid rgba(255,255,255,.25); background: transparent; color: inherit; font-size: 18px; cursor: pointer; }
 .mc-sheet .mc-icon { border-color: var(--border); }
+.mc-scan { height: 42px; padding: 0 14px; border-radius: 10px; border: 0; background: #fff; color: var(--sidebar); font: inherit; font-size: 15px; font-weight: 700; white-space: nowrap; cursor: pointer; touch-action: manipulation; }
+.mc-scan.on { background: var(--bad); color: #fff; }
 .mc-cam { position: relative; background: #000; height: 32vh; min-height: 180px; overflow: hidden; }
 .mc-cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .mc-aim { position: absolute; left: 12%; right: 12%; top: 50%; height: 2px; background: #ff3b3b; box-shadow: 0 0 10px #ff3b3b; }

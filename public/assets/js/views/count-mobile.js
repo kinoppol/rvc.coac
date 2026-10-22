@@ -85,6 +85,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
       <header class="mc-head">
         <button type="button" class="mc-icon" data-act="close" aria-label="ปิด">✕</button>
         <div class="mc-title"><b>${escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
+        <button type="button" class="mc-scan" data-act="scan">📷 สแกน</button>
         ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
         <button type="button" class="mc-icon" data-act="search" aria-label="ค้นหาสินค้า">🔍</button>
       </header>
@@ -124,7 +125,9 @@ export function openMobileCount({ stockCount, items, onClose }) {
     function draw() {
         $('progress').textContent = `นับแล้ว ${countedN()}/${total}`;
         const cam = $('cam');
-        root.querySelector('[data-act="scan"]')?.classList.toggle('on', !cam.hidden);
+        const scan = root.querySelector('.mc-scan');
+        scan.classList.toggle('on', !cam.hidden);
+        scan.textContent = cam.hidden ? '📷 สแกน' : '⏹ ปิดกล้อง';
 
         let card = '';
         if (product) {
@@ -172,12 +175,11 @@ export function openMobileCount({ stockCount, items, onClose }) {
             : '<span class="mc-ph">–</span>';
         $('val').classList.toggle('qty', mode === 'qty');
 
-        const scanBtn = `<button type="button" class="mc-btn ghost${cam.hidden ? '' : ' on'}" data-act="scan">${cam.hidden ? '📷 สแกน' : '⏹ ปิดกล้อง'}</button>`;
         $('actions').innerHTML = mode === 'qty'
             ? `<button type="button" class="mc-btn ghost" data-act="cancel">ยกเลิก</button>
                <button type="button" class="mc-btn alt" data-act="add" ${input && !busy ? '' : 'disabled'}>+ บวกเพิ่ม</button>
                <button type="button" class="mc-btn" data-act="set" ${input && !busy ? '' : 'disabled'}>✓ บันทึก</button>`
-            : `${scanBtn}<button type="button" class="mc-btn" data-act="find" ${input && !busy ? '' : 'disabled'}>${linkFor ? 'ผูกบาร์โค้ด' : 'ค้นหา'}</button>`;
+            : `<button type="button" class="mc-btn" data-act="find" ${input && !busy ? '' : 'disabled'}>${linkFor ? 'ผูกบาร์โค้ด' : 'ค้นหา'}</button>`;
     }
 
     function selectProduct(p, size = 1) {
