@@ -104,7 +104,11 @@ export function openMobileCount({ stockCount, items, onClose }) {
       <input type="file" accept="image/*" capture="environment" data-el="photo" hidden>
       <div class="mc-sheet" data-el="sheet" hidden></div>`;
     document.body.appendChild(root);
+    // Hide the page underneath (a wide table there makes phones zoom out) and go
+    // fullscreen so the browser's address bar doesn't take room from the keypad.
+    const scrollY = window.scrollY;
     document.body.classList.add('mc-open');
+    root.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => { /* not allowed / iPhone */ });
 
     const $ = (name) => root.querySelector(`[data-el="${name}"]`);
     const video = root.querySelector('video');
@@ -130,7 +134,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
             card = `
               <div class="mc-card">
                 <button type="button" class="mc-photo" data-act="photo" aria-label="ถ่ายภาพสินค้า">
-                  ${img ? `<img src="${img}" alt="">` : '<span>📷<br>ถ่ายภาพ</span>'}
+                  ${img ? `<img src="${img}" alt=""><span class="mc-photo-re">📷</span>` : '<span>📷<br>ถ่ายภาพ<br>สินค้า</span>'}
                 </button>
                 <div class="mc-info">
                   <div class="mc-name">${escapeHtml(product.name)}</div>
@@ -202,11 +206,13 @@ export function openMobileCount({ stockCount, items, onClose }) {
             product = null;
             mode = 'code';
             input = '';
-            message = { kind: 'bad', text: e.message, linkCode: code };
+            message = { kind: 'bad', text: e.message, linkCode: e.status === 404 ? code : null };
         } finally {
             busy = false;
             draw();
         }
+        // Unknown barcode: go straight to picking the product it belongs to.
+        if (message?.linkCode) openSearch(message.linkCode);
     }
 
     async function saveQty(addTo) {
@@ -262,9 +268,11 @@ export function openMobileCount({ stockCount, items, onClose }) {
 
     // ---- bottom sheets: product search and piece/pack choice ----
     const sheet = $('sheet');
+    let redrawResults = null;   // re-renders the open search list (after a photo is added)
     function closeSheet() {
         sheet.hidden = true;
         sheet.innerHTML = '';
+        redrawResults = null;
     }
 
     function openSearch(linkCode) {
@@ -275,6 +283,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
               <b>${linkCode ? `เลือกสินค้าที่จะผูกบาร์โค้ด ${escapeHtml(linkCode)}` : 'ค้นหาสินค้า'}</b>
               <button type="button" class="mc-icon" data-sheet="close" aria-label="ปิด">✕</button>
             </div>
+            ${linkCode ? `<div class="mc-msg bad" style="margin-bottom:8px">ไม่พบบาร์โค้ดนี้ในฐานข้อมูล — ค้นหาชื่อสินค้าแล้วแตะเพื่อจับคู่</div>` : ''}
             <input type="search" class="mc-search" placeholder="พิมพ์ชื่อสินค้า หรือบาร์โค้ด" enterkeyhint="search" autocomplete="off">
             <div class="mc-results"><div class="muted" style="padding:12px">พิมพ์อย่างน้อย 1 ตัวอักษร</div></div>
           </div>`;
@@ -283,6 +292,20 @@ export function openMobileCount({ stockCount, items, onClose }) {
         let found = [];
         let timer = null;
         let seq = 0;
+        function drawResults() {
+            box.innerHTML = found.length ? found.map((p, i) => `
+              <div class="mc-result">
+                <button type="button" class="mc-result-photo" data-shot="${i}" aria-label="ถ่ายภาพสินค้า">
+                  ${p.image_token ? `<img src="${photoUrl(p)}" alt="">` : '<span class="mc-noimg">📷</span>'}
+                </button>
+                <button type="button" class="mc-result-pick" data-pick="${i}">
+                  <span class="mc-result-main"><b>${escapeHtml(p.name)}</b>
+                    <small>${escapeHtml(p.barcode || 'ไม่มีบาร์โค้ด')} · ${escapeHtml(p.consignor_name)}</small></span>
+                  <span class="mc-result-qty">${p.item ? Number(p.item.system_qty) : Number(p.qty_stock)}<small>${counted.get(Number(p.id)) != null ? `นับ ${counted.get(Number(p.id))}` : 'ในระบบ'}</small></span>
+                </button>
+              </div>`).join('') : '<div class="muted" style="padding:12px">ไม่พบสินค้า</div>';
+        }
+        redrawResults = drawResults;
         field.addEventListener('input', () => {
             clearTimeout(timer);
             timer = setTimeout(async () => {
@@ -293,19 +316,18 @@ export function openMobileCount({ stockCount, items, onClose }) {
                     const res = await api.get(`/stockcounts/${stockCount.id}/search?q=${encodeURIComponent(q)}`);
                     if (my !== seq) return;
                     found = res.data;
-                    box.innerHTML = found.length ? found.map((p, i) => `
-                      <button type="button" class="mc-result" data-pick="${i}">
-                        ${p.image_token ? `<img src="${photoUrl(p)}" alt="">` : '<span class="mc-noimg">📦</span>'}
-                        <span class="mc-result-main"><b>${escapeHtml(p.name)}</b>
-                          <small>${escapeHtml(p.barcode || 'ไม่มีบาร์โค้ด')} · ${escapeHtml(p.consignor_name)}</small></span>
-                        <span class="mc-result-qty">${p.item ? Number(p.item.system_qty) : Number(p.qty_stock)}<small>${counted.get(Number(p.id)) != null ? `นับ ${counted.get(Number(p.id))}` : 'ในระบบ'}</small></span>
-                      </button>`).join('') : '<div class="muted" style="padding:12px">ไม่พบสินค้า</div>';
+                    drawResults();
                 } catch (e) {
                     box.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
                 }
             }, 250);
         });
         box.addEventListener('click', (e) => {
+            const shot = e.target.closest('[data-shot]');
+            if (shot) {
+                takePhoto(found[Number(shot.dataset.shot)]);
+                return;
+            }
             const btn = e.target.closest('[data-pick]');
             if (!btn) return;
             const p = found[Number(btn.dataset.pick)];
@@ -368,6 +390,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         draw();
         try {
             stopScan = await startScanner(video, (code) => {
+                if (!sheet.hidden) return;   // picking a product / photo in the sheet
                 const now = Date.now();
                 if (code === lastScan.code && now - lastScan.at < 2500) return;
                 lastScan = { code, at: now };
@@ -384,24 +407,34 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
     }
 
-    // ---- photo ----
+    // ---- photo: saved on the product record (products.image_token) ----
+    let photoFor = null;
+    function takePhoto(p) {
+        photoFor = p;
+        $('photo').click();
+    }
     $('photo').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         e.target.value = '';
-        if (!file || !product) return;
-        const p = product;
-        message = { kind: 'info', text: 'กำลังอัปโหลดรูป…' };
+        const p = photoFor;
+        photoFor = null;
+        if (!file || !p) return;
+        message = { kind: 'info', text: `กำลังอัปโหลดรูป ${p.name}…` };
         draw();
         try {
             const dataUrl = await fileToDataUrl(file);
             const res = await api.post(`/products/${p.id}/photo`, { data_url: dataUrl });
             p.image_token = res.data.image_token;
+            if (product && Number(product.id) === Number(p.id)) product.image_token = p.image_token;
             photoCache++;
+            beep(true);
             message = { kind: 'ok', text: `บันทึกรูป ${p.name} แล้ว` };
         } catch (err) {
-            message = { kind: 'bad', text: err.message };
+            beep(false);
+            message = { kind: 'bad', text: 'บันทึกรูปไม่สำเร็จ: ' + err.message };
         }
         draw();
+        redrawResults?.();
     });
 
     // ---- input ----
@@ -421,8 +454,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
     function close() {
         stopScan?.();
         document.removeEventListener('keydown', onKey);
+        if (document.fullscreenElement === root) document.exitFullscreen().catch(() => {});
         document.body.classList.remove('mc-open');
         root.remove();
+        window.scrollTo(0, scrollY);
         onClose?.();
     }
 
@@ -440,7 +475,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         else if (act === 'find') handleCode(input);
         else if (act === 'set') saveQty(false);
         else if (act === 'add') saveQty(true);
-        else if (act === 'photo') $('photo').click();
+        else if (act === 'photo') takePhoto(product);
         else if (act === 'link') openSearch(message.linkCode);
         else if (act === 'cancel') {
             mode = 'code';
