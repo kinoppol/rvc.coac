@@ -438,6 +438,15 @@ body.pos-full-open { overflow: hidden; }
 div.pos-row.out { cursor: not-allowed; }
 .pos-out-note { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-weight: 600; font-size: 14.5px; }
 .pos-out-note small { display: block; margin-top: 4px; font-weight: 400; font-size: 12.5px; }
+.pos-out-note .pos-switch { margin-top: 10px; color: var(--text); }
+.pos-switch { display: flex; align-items: center; gap: 10px; min-height: 48px; margin-top: 10px; font-size: 15px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.pos-switch small { font-weight: 400; font-size: 12.5px; }
+.pos-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.pos-switch span { flex: none; position: relative; width: 52px; height: 30px; border-radius: 99px; background: var(--border); transition: background .15s; }
+.pos-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(16,24,40,.3); transition: transform .15s; }
+.pos-switch input:checked + span { background: var(--pri); }
+.pos-switch input:checked + span::after { transform: translateX(22px); }
+.pos-switch input:focus-visible + span { outline: 2px solid var(--pri); outline-offset: 2px; }
 .pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; height: max(480px, calc(100vh - 230px)); }
 .pos-full .pos-main { flex: 1; min-height: 0; height: auto; }
 .pos-products { overflow-y: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }

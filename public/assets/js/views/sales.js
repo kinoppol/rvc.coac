@@ -49,7 +49,8 @@ function beep(ok) {
     } catch (e) { /* no audio */ }
 }
 
-export async function render(container, { user } = {}) {
+export async function render(container, { user, permissions = [] } = {}) {
+    const canSettings = permissions.includes('settings.edit');
     // The open cart and held carts live in this browser per user, so they survive
     // leaving the page or a reload until the sale is finished or cleared.
     const CART_KEY = `pos.cart.${user?.id ?? 0}`;
@@ -170,7 +171,10 @@ export async function render(container, { user } = {}) {
                 } else if (outHints.items.length) {
                     box.innerHTML = `
                       <div class="pos-out-note">ไม่มีสินค้าที่ขายได้ตรงกับคำค้น — พบสินค้าที่คงเหลือในระบบต่ำกว่า 1 ซึ่งร้านยังไม่เปิดให้ขาย
-                        <small>ผู้ดูแลระบบเปิดได้ที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) &gt; เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้อง</small></div>
+                        ${canSettings
+                            ? `<label class="pos-switch"><input type="checkbox" data-out-switch><span aria-hidden="true"></span> เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (ทั้งร้าน)</label>
+                               <small>ปิดได้ที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้องแทน</small>`
+                            : '<small>แจ้งผู้ดูแลระบบให้เปิดที่ ตั้งค่า &gt; หน้าขายสินค้า (POS) หรือบันทึกรับสินค้า/ตรวจนับให้สต๊อกถูกต้อง</small>'}</div>
                       <div class="pos-list">${outHints.items.map((p) => `
                         <div class="pos-row out" aria-disabled="true">
                           <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
@@ -348,6 +352,9 @@ export async function render(container, { user } = {}) {
         let done = null;
         // Until the cashier types a cash amount, cash follows whatever the other methods leave.
         let cashTouched = false;
+        // Normally one method pays the whole bill; the cashier turns this on to split it.
+        let mixMode = false;
+        const payWithOnly = (k) => { selected = [k]; amounts = { [k]: total }; cashTouched = false; };
         const followCash = () => {
             if (!cashTouched && selected.includes('cash')) amounts.cash = restFor('cash');
         };
@@ -405,7 +412,9 @@ export async function render(container, { user } = {}) {
                     ${methods.map((m) => `<button type="button" class="pos-method${selected.includes(m.key) ? ' active' : ''}" data-method="${m.key}">
                       <span>${METHOD_ICON[m.key] || ''}</span>${escapeHtml(m.label)}</button>`).join('')}
                   </div>
-                  ${mixed && methods.length > 1 ? '<p class="muted pos-hint">ชำระแบบผสมได้: แตะเลือกหลายวิธีแล้วใส่จำนวนเงินของแต่ละวิธี</p>' : ''}
+                  ${mixed && methods.length > 1 ? `
+                  <label class="pos-switch"><input type="checkbox" data-mix ${mixMode ? 'checked' : ''}><span aria-hidden="true"></span>
+                    ชำระแบบผสม <small class="muted">${mixMode ? 'แตะเลือกหลายวิธี แล้วใส่จำนวนเงินของแต่ละวิธี' : '(เช่น เงินสดบางส่วน + โอนส่วนที่เหลือ)'}</small></label>` : ''}
                   <div class="pos-pay-lines">
                     ${selected.map((k) => {
                         const m = methods.find((x) => x.key === k);
@@ -482,11 +491,14 @@ export async function render(container, { user } = {}) {
             if (act === 'confirm') return confirm();
             if (t.dataset.method) {
                 const k = t.dataset.method;
-                if (selected.includes(k)) {
-                    selected = selected.filter((x) => x !== k);
-                    delete amounts[k];
+                if (!mixMode) {
+                    payWithOnly(k);
+                } else if (selected.includes(k)) {
+                    if (selected.length > 1) {
+                        selected = selected.filter((x) => x !== k);
+                        delete amounts[k];
+                    }
                 } else {
-                    if (!mixed) { selected = []; amounts = {}; }
                     selected.push(k);
                     amounts[k] = restFor(k);
                 }
@@ -498,6 +510,13 @@ export async function render(container, { user } = {}) {
                 cashTouched = true;
             }
             if (t.dataset.method || t.dataset.rest) followCash();
+            error = null;
+            draw();
+        });
+        modal.addEventListener('change', (e) => {
+            if (!e.target.matches('[data-mix]')) return;
+            mixMode = e.target.checked;
+            if (!mixMode) payWithOnly(selected[0] || first.key);
             error = null;
             draw();
         });
@@ -548,6 +567,25 @@ export async function render(container, { user } = {}) {
         }
     });
     on(q, 'blur', () => { if (TOUCH) setTimeout(setKeyboard, 0); });
+
+    on(el('products'), 'change', async (e) => {
+        if (!e.target.matches('[data-out-switch]')) return;
+        if (!confirm('เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 สำหรับทุกเครื่องในร้าน? สต๊อกของสินค้าเหล่านี้จะติดลบเมื่อขาย')) {
+            e.target.checked = false;
+            return;
+        }
+        try {
+            await api.put('/settings', { pos_sell_out_of_stock: 1 });
+            options.sell_out_of_stock = true;
+            outHints = { term: '', items: [] };
+            await loadProducts();
+            message('เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว');
+        } catch (err) {
+            e.target.checked = false;
+            message(err.message, 'error');
+        }
+        focusSearch();
+    });
 
     on(el('sort'), 'change', (e) => {
         sort = e.target.value;
