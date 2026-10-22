@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\ProductRepo;
+use App\Services\AttachmentService;
 use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
@@ -69,7 +70,14 @@ class SalesController
         );
         $like = '%' . $q . '%';
         $stmt->execute([$like, $like]);
-        return $this->json($response, ['data' => $stmt->fetchAll()]);
+        $rows = $stmt->fetchAll();
+        // Photos still without a small copy: the POS makes one from the first load.
+        $attachments = new AttachmentService($db);
+        foreach ($rows as &$r) {
+            $r['has_thumb'] = $r['image_token'] && $attachments->hasThumb($r['image_token']);
+        }
+        unset($r);
+        return $this->json($response, ['data' => $rows]);
     }
 
     /** Payment methods the admin has turned on, and which POS switches this user's role may use. */

@@ -185,6 +185,7 @@ $app->group('/api', function ($group) {
     $group->post('/products/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
+    $group->post('/products/{id:[0-9]+}/photo/thumb', [StockCountController::class, 'saveThumb']);
     $group->post('/stockcounts/{id:[0-9]+}/cancel', [StockCountController::class, 'cancel'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id}/submit', [StockCountController::class, 'submit'])

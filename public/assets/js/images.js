@@ -34,6 +34,35 @@ export function fileToDataUrl(file) {
     });
 }
 
+/** Product-photo thumbnail size; matches AttachmentService::THUMB_SIZE on the server. */
+export const THUMB_SIZE = 320;
+
+/**
+ * Shrinks an already loaded image (an <img> element, or a data URL) to a small
+ * JPEG data URL for lists; resolves to null when the image cannot be read.
+ */
+export async function thumbDataUrl(source, max = THUMB_SIZE) {
+    try {
+        let img = source;
+        if (typeof source === 'string') {
+            img = new Image();
+            img.src = source;
+            await img.decode();
+        }
+        const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.72);
+    } catch (e) {
+        return null;
+    }
+}
+
 /** Uploads one image file; resolves to { token, preview } (preview is a local data URL). */
 export async function uploadImage(file) {
     const dataUrl = await fileToDataUrl(file);

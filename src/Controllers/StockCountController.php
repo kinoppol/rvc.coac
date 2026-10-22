@@ -132,10 +132,19 @@ class StockCountController
             return $this->error($response, $e->getMessage(), 422);
         }
         $repo->setImage($id, $row['token'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        $service = new AttachmentService($db);
+        if (!$service->saveThumbDataUrl($row['token'], (string) ($body['thumb_data_url'] ?? ''))) {
+            $service->makeThumb($row);
+        }
         return $this->json($response, ['data' => ['image_token' => $row['token']]]);
     }
 
-    /** GET /products/{id}/photo — any signed-in user may see product photos. */
+    /**
+     * GET /products/{id}/photo — any signed-in user may see product photos.
+     * size=thumb returns the small copy (made with GD here when possible, else
+     * the original until a browser uploads one). The URL carries the photo's
+     * token, so a real thumbnail or original can be cached for good.
+     */
     public function photo(Request $request, Response $response, array $args): Response
     {
         $db = Db::connection();
@@ -145,16 +154,44 @@ class StockCountController
         if (!$row) {
             return $this->error($response, 'ไม่พบรูปสินค้า', 404);
         }
-        try {
-            $path = $service->absolutePath($row);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 404);
+        $thumb = ($request->getQueryParams()['size'] ?? '') === 'thumb';
+        $path = null;
+        if ($thumb) {
+            $path = $service->hasThumb($row['token']) ? $service->thumbPath($row['token']) : $service->makeThumb($row);
+        }
+        $mime = $path ? 'image/jpeg' : $row['mime'];
+        // An original sent in place of a missing thumbnail is cached only briefly,
+        // so the thumbnail is picked up once it exists.
+        $cache = $thumb && !$path ? 'private, max-age=300' : 'private, max-age=31536000, immutable';
+        if ($path === null) {
+            try {
+                $path = $service->absolutePath($row);
+            } catch (\RuntimeException $e) {
+                return $this->error($response, $e->getMessage(), 404);
+            }
+        }
+        $etag = '"' . $row['token'] . ($thumb ? '-t' . (int) filesize($path) : '') . '"';
+        $response = $response
+            ->withHeader('Cache-Control', $cache)
+            ->withHeader('ETag', $etag)
+            ->withHeader('X-Content-Type-Options', 'nosniff');
+        if (trim($request->getHeaderLine('If-None-Match')) === $etag) {
+            return $response->withStatus(304);
         }
         $response->getBody()->write((string) file_get_contents($path));
-        return $response
-            ->withHeader('Content-Type', $row['mime'])
-            ->withHeader('Cache-Control', 'private, max-age=86400')
-            ->withHeader('X-Content-Type-Options', 'nosniff');
+        return $response->withHeader('Content-Type', $mime);
+    }
+
+    /** POST /products/{id}/photo/thumb — a browser-made thumbnail for a photo that has none yet. */
+    public function saveThumb(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        $product = (new ProductRepo($db, new AuditLogger($db)))->find((int) $args['id']);
+        if (!$product || !$product['image_token']) {
+            return $this->error($response, 'ไม่พบรูปสินค้า', 404);
+        }
+        $saved = (new AttachmentService($db))->saveThumbDataUrl($product['image_token'], (string) (((array) $request->getParsedBody())['data_url'] ?? ''));
+        return $this->json($response, ['data' => ['saved' => $saved]]);
     }
 
     public function submit(Request $request, Response $response, array $args): Response

@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate } from '../util.js';
 import { confirmDialog, isDialogOpen } from '../dialog.js';
+import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -75,7 +76,7 @@ export async function render(container, { user } = {}) {
     let outTimer;
 
     const life = new AbortController();
-    const on = (target, type, fn) => target.addEventListener(type, fn, { signal: life.signal });
+    const on = (target, type, fn, capture = false) => target.addEventListener(type, fn, { signal: life.signal, capture });
 
     container.innerHTML = `
       <div class="pos">
@@ -141,7 +142,27 @@ export async function render(container, { user } = {}) {
     }
 
     function photoUrl(p) {
-        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?v=${p.image_token}`) : null;
+        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${p.image_token}`) : null;
+    }
+
+    /** <img> for a product photo; a photo without a server thumbnail is marked so its first load makes one. */
+    function photoImg(p) {
+        const url = photoUrl(p);
+        return url ? `<img src="${escapeHtml(url)}" alt="" loading="lazy" decoding="async"${p.has_thumb ? '' : ` data-thumbless="${p.id}"`}>` : '<span class="pos-nopic">no pic</span>';
+    }
+
+    // The server could not shrink these photos (no GD), so it sent the original:
+    // shrink it here once and upload the copy, and every device gets the small file next time.
+    const thumbing = new Set();
+    async function uploadThumb(img) {
+        const p = products.find((x) => x.id === Number(img.dataset.thumbless));
+        if (!p || p.has_thumb || thumbing.has(p.id)) return;
+        p.has_thumb = true;
+        if (Math.max(img.naturalWidth, img.naturalHeight) <= THUMB_SIZE) return; // already a thumbnail
+        thumbing.add(p.id);
+        const dataUrl = await thumbDataUrl(img);
+        if (dataUrl) await api.post(`/products/${p.id}/photo/thumb`, { data_url: dataUrl }).catch(() => {});
+        thumbing.delete(p.id);
     }
 
     function matches() {
@@ -193,10 +214,9 @@ export async function render(container, { user } = {}) {
         }
         box.innerHTML = view === 'grid'
             ? `<div class="pos-grid">${list.map((p) => {
-                const img = photoUrl(p);
                 const n = inCart(p.id);
                 return `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
-                  <span class="pos-tile-img">${img ? `<img src="${escapeHtml(img)}" alt="" loading="lazy">` : '<span class="pos-nopic">no pic</span>'}</span>
+                  <span class="pos-tile-img">${photoImg(p)}</span>
                   <span class="pos-tile-name">${escapeHtml(p.name)}</span>
                   <span class="pos-tile-meta"><b>฿${money(p.sale_price)}</b><span>เหลือ ${p.qty_stock - n}</span></span>
                   ${n ? `<span class="pos-tile-badge">${n}</span>` : ''}
@@ -229,7 +249,7 @@ export async function render(container, { user } = {}) {
         drawHeld();
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
-            <span class="pos-line-img">${photoUrl(it) ? `<img src="${escapeHtml(photoUrl(it))}" alt="">` : '<span class="pos-nopic">no pic</span>'}</span>
+            <span class="pos-line-img">${photoImg(it)}</span>
             <div class="pos-line-name">${escapeHtml(it.name)}<small>฿${money(it.sale_price)} · ${escapeHtml(it.consignor_name)}</small></div>
             <div class="pos-qty">
               <button type="button" data-dec="${i}" aria-label="ลดจำนวน">−</button>
@@ -606,6 +626,10 @@ export async function render(container, { user } = {}) {
         message(shortMode ? 'เปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว' : 'ปิดการขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 แล้ว');
         focusSearch();
     });
+
+    on(root, 'load', (e) => {
+        if (e.target.matches?.('img[data-thumbless]')) uploadThumb(e.target);
+    }, true);
 
     on(el('sort'), 'change', (e) => {
         sort = e.target.value;

@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { escapeHtml } from '../util.js';
-import { fileToDataUrl } from '../images.js';
+import { fileToDataUrl, thumbDataUrl } from '../images.js';
 
 // Fallback decoder for browsers without the BarcodeDetector API (iOS Safari, Firefox).
 const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm';
@@ -119,7 +119,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
     }
 
     function photoUrl(p) {
-        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?v=${p.image_token}${photoCache}`) : null;
+        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${p.image_token}${photoCache}`) : null;
     }
 
     function draw() {
@@ -469,7 +469,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         draw();
         try {
             const dataUrl = await fileToDataUrl(file);
-            const res = await api.post(`/products/${p.id}/photo`, { data_url: dataUrl });
+            const res = await api.post(`/products/${p.id}/photo`, { data_url: dataUrl, thumb_data_url: await thumbDataUrl(dataUrl) });
             p.image_token = res.data.image_token;
             if (product && Number(product.id) === Number(p.id)) product.image_token = p.image_token;
             photoCache++;
