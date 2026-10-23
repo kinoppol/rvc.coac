@@ -45,6 +45,27 @@ async function startScanner(video, onCode) {
     return () => controls.stop();
 }
 
+/**
+ * Why `code` is not a valid EAN-13 (13 digits, the last one the check digit of the other 12), or '' when it is.
+ * A 12-digit UPC-A is the same code without its leading 0, so it is checked as such.
+ */
+function ean13Problem(code) {
+    if (!/^\d+$/.test(code)) return 'มีตัวอักษรหรือสัญลักษณ์ปนอยู่ (EAN-13 เป็นตัวเลขล้วน)';
+    if (code.length === 12) code = `0${code}`;
+    if (code.length !== 13) return `มี ${code.length} หลัก (EAN-13 ต้องมี 13 หลัก)`;
+    const sum = [...code.slice(0, 12)].reduce((s, d, i) => s + Number(d) * (i % 2 ? 3 : 1), 0);
+    return (10 - (sum % 10)) % 10 === Number(code[12]) ? '' : 'เลขตรวจสอบ (หลักสุดท้าย) ไม่ถูกต้อง อาจสแกนอ่านผิด';
+}
+
+// Odd barcodes the counter already accepted (e.g. the store's own printed codes): not asked again on this device.
+const ACCEPTED_KEY = 'count.acceptedCodes';
+function loadAccepted() {
+    try { return new Set(JSON.parse(localStorage.getItem(ACCEPTED_KEY) || '[]')); } catch { return new Set(); }
+}
+function saveAccepted(set) {
+    try { localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...set].slice(-500))); } catch { /* private mode */ }
+}
+
 let audioCtx = null;
 function beep(ok = true) {
     try {
@@ -192,9 +213,16 @@ export function openMobileCount({ stockCount, items, onClose }) {
         draw();
     }
 
-    async function handleCode(code) {
+    async function handleCode(code, accepted = false) {
         code = String(code).trim();
         if (!code || busy) return;
+        // Guard against misreads: a code that is not a valid EAN-13 needs the counter's OK first.
+        const problem = ean13Problem(code);
+        if (problem && !accepted && !acceptedCodes.has(code)) {
+            beep(false);
+            openOddCodeSheet(code, problem);
+            return;
+        }
         if (linkFor) {
             await linkBarcode(linkFor, code, null);
             return;
@@ -352,6 +380,27 @@ export function openMobileCount({ stockCount, items, onClose }) {
             }
         });
         setTimeout(() => field.focus(), 50);
+    }
+
+    const acceptedCodes = loadAccepted();
+
+    function openOddCodeSheet(code, problem) {
+        showSheet(`
+          <div class="mc-sheet-box">
+            <div class="mc-sheet-head">${backBtn}<b>⚠️ บาร์โค้ดผิดปกติ</b></div>
+            <p style="margin:4px 0 6px;font-size:20px;font-family:ui-monospace,monospace;word-break:break-all">${escapeHtml(code)}</p>
+            <p style="margin:0 0 6px">ไม่ใช่บาร์โค้ด EAN-13 ที่ถูกต้อง: ${escapeHtml(problem)}</p>
+            <p class="muted" style="font-size:13px;margin:0 0 14px">ตรวจดูบาร์โค้ดบนสินค้าอีกครั้ง ถ้าเป็นบาร์โค้ดที่ร้านหรือผู้ฝากพิมพ์เอง กดยอมรับได้</p>
+            <button type="button" class="mc-btn wide" data-odd="rescan">สแกนใหม่</button>
+            <button type="button" class="mc-btn alt wide" data-odd="accept" style="margin-top:10px">ยอมรับบาร์โค้ดนี้</button>
+          </div>`);
+        sheet.querySelectorAll('[data-odd]').forEach((b) => b.addEventListener('click', () => {
+            closeSheet();
+            if (b.dataset.odd !== 'accept') return;
+            acceptedCodes.add(code);
+            saveAccepted(acceptedCodes);
+            handleCode(code, true);
+        }));
     }
 
     function openLinkSheet(p, code) {
