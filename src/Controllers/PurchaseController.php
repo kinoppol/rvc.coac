@@ -58,6 +58,25 @@ class PurchaseController
         return $this->json($response, ['data' => self::service()->preview(array_slice($items, 0, 300))]);
     }
 
+    /**
+     * Store products to pair a receipt line with (?q= name or barcode): goods first
+     * recorded by a sale or a POS import, before any purchase, so the receipt restocks them.
+     */
+    public function products(Request $request, Response $response): Response
+    {
+        $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        $stmt = Db::connection()->prepare(
+            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.cost_price, p.sale_price,
+                    (SELECT GROUP_CONCAT(CONCAT(b.barcode, '×', b.pack_size) SEPARATOR ', ') FROM product_pack_barcodes b WHERE b.product_id = p.id) AS packs
+             FROM products p
+             WHERE p.consignor_id IS NULL AND (? = '' OR p.name LIKE ? OR p.barcode = ?
+                   OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))
+             ORDER BY p.qty_stock < 0 DESC, p.name LIMIT 40"
+        );
+        $stmt->execute([$q, '%' . addcslashes($q, '%_\\') . '%', $q, $q]);
+        return $this->json($response, ['data' => $stmt->fetchAll()]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();

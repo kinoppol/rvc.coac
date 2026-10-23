@@ -20,7 +20,8 @@ function emptyItem() {
     // name = per-piece product name; qty/unit_cost/line_total = as printed (packs); sale_price = per piece
     // item_type: 'stock' = bought to sell, 'supply' = used in the business (cost only, no stock/price)
     // product_id/origName: set when editing a saved purchase, so an unrenamed line stays on the same product
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '' };
+    // pickedId: an existing product the user paired the line with by hand (it restocks that product)
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -240,6 +241,7 @@ export async function render(container) {
             </tbody>
           </table></div>
           <div class="pc-summary" id="pc-summary">${summaryHtml(subtotal)}</div>
+          <div style="padding:0 18px 12px">${pricingHelpHtml()}</div>
           <div style="padding:0 18px 18px">
             ${warnings.length ? `<div class="pc-warn"><b>ข้อสังเกตจาก AI</b><ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>` : ''}
             ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
@@ -344,9 +346,79 @@ export async function render(container) {
     function statusHtml(it) {
         if (!it.name) return '';
         if (it.item_type === 'supply') return '<span class="pill muted" title="บันทึกเป็นต้นทุนของร้าน">ต้นทุนกิจการ</span>';
-        return it.match
-            ? `<span class="pill ok" title="มีในสต๊อก ${it.match.qty_stock} ชิ้น">เติมสต๊อก</span>`
-            : '<span class="pill warn">สินค้าใหม่</span>';
+        if (!it.match) {
+            return `<span class="pill warn" title="ไม่พบในสต๊อก จะสร้างเป็นสินค้าใหม่">สินค้าใหม่</span>
+              <button type="button" class="link-btn" data-pick title="เลือกสินค้าที่มีอยู่แล้ว เช่น ที่เคยขายหรือนำเข้ายอดขายไว้ก่อน">จับคู่สินค้าเดิม</button>`;
+        }
+        const stock = Number(it.match.qty_stock);
+        return `<span class="pill ok" title="มีในสต๊อก ${stock} ชิ้น">เติมสต๊อก</span>
+          <div class="muted" style="font-size:11.5px;max-width:170px">→ ${escapeHtml(it.match.name)} · คงเหลือ <span style="${stock < 0 ? 'color:var(--bad)' : ''}">${stock}</span></div>
+          <button type="button" class="link-btn" data-pick>${it.pickedId ? 'เปลี่ยน' : 'ไม่ใช่ตัวนี้? เลือกเอง'}</button>
+          ${it.pickedId ? '<button type="button" class="link-btn" data-unpick style="margin-left:6px">ยกเลิกจับคู่</button>' : ''}`;
+    }
+
+    /** Pairing buttons in a row's status cell (the cell is also redrawn by refreshPreview). */
+    function bindStatus(tr) {
+        const it = items[Number(tr.dataset.row)];
+        tr.querySelector('[data-status] [data-pick]')?.addEventListener('click', () => openProductPicker(it));
+        tr.querySelector('[data-status] [data-unpick]')?.addEventListener('click', () => {
+            it.pickedId = null;
+            it.match = null;
+            it.priceTouched = false;
+            draw();
+            refreshPreview();
+        });
+    }
+
+    /** Picks an existing store product for a receipt line (e.g. goods sold or imported before this purchase). */
+    function openProductPicker(it) {
+        const box = document.createElement('div');
+        box.className = 'modal-backdrop';
+        box.style.zIndex = 70;
+        // Start broad: the first word of the receipt name (store names are often shorter).
+        const start = it.name.trim().split(/[\s\-]+/)[0] || '';
+        box.innerHTML = `
+          <div class="modal" role="dialog" aria-modal="true" style="width:640px">
+            <div class="modal-head"><h2>จับคู่กับสินค้าเดิม</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
+            <div class="modal-body">
+              <div class="muted" style="font-size:12.5px;margin-bottom:8px">รายการในใบเสร็จ: <b>${escapeHtml(it.receipt_name || it.name)}</b>${it.barcode ? ` · บาร์โค้ด ${escapeHtml(it.barcode)}` : ''}<br>
+                เลือกสินค้าที่มีอยู่แล้ว ระบบจะเติมสต๊อกให้สินค้านั้นแทนการสร้างสินค้าใหม่ และจำบาร์โค้ดใบเสร็จนี้ไว้จับคู่ครั้งต่อไป</div>
+              <input class="search-input" data-q value="${escapeHtml(start)}" placeholder="ค้นหาชื่อหรือบาร์โค้ด" style="max-width:none;width:100%">
+              <div data-list style="margin-top:10px;max-height:52vh;overflow:auto"></div>
+            </div>
+          </div>`;
+        document.body.appendChild(box);
+        const q = box.querySelector('[data-q]');
+        const list = box.querySelector('[data-list]');
+        const close = () => box.remove();
+        let timer;
+        let rows = [];
+        const search = async () => {
+            const res = await api.get(`/purchases/products?q=${encodeURIComponent(q.value.trim())}`).catch(() => ({ data: [] }));
+            rows = res.data;
+            list.innerHTML = rows.length ? `<table><thead><tr><th>สินค้า</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">ราคาขาย</th><th></th></tr></thead><tbody>
+              ${rows.map((p, i) => `<tr><td>${escapeHtml(p.name)}<div class="muted" style="font-size:11.5px">${escapeHtml([p.barcode, p.packs].filter(Boolean).join(' · ') || 'ไม่มีบาร์โค้ด')}</div></td>
+                <td class="num" style="${Number(p.qty_stock) < 0 ? 'color:var(--bad);font-weight:600' : ''}">${Number(p.qty_stock)}</td>
+                <td class="num">${money(p.cost_price)}</td><td class="num">${money(p.sale_price)}</td>
+                <td><button type="button" class="btn sm" data-choose="${i}">เลือก</button></td></tr>`).join('')}</tbody></table>`
+                : '<div class="empty">ไม่พบสินค้า ลองพิมพ์คำสั้นลง</div>';
+            list.querySelectorAll('[data-choose]').forEach((b) => b.addEventListener('click', () => {
+                const p = rows[Number(b.dataset.choose)];
+                it.pickedId = Number(p.id);
+                it.match = { product_id: Number(p.id), name: p.name, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), cost_price: Number(p.cost_price) };
+                it.suggested = Number(p.sale_price);
+                if (!it.priceTouched) it.sale_price = Number(p.sale_price) || it.sale_price;
+                close();
+                draw();
+                refreshPreview();
+            }));
+        };
+        q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+        box.querySelector('[data-x]').addEventListener('click', close);
+        box.addEventListener('click', (e) => { if (e.target === box) close(); });
+        q.focus();
+        q.select();
+        search();
     }
 
     function supplyTotal() {
@@ -357,7 +429,8 @@ export async function render(container) {
         const discount = Number(header.discount) || 0;
         const net = round2(subtotal - discount);
         const printed = Number(header.total) || 0;
-        const mismatch = printed > 0 && Math.abs(net - printed) > 0.009;
+        const vat = Number(header.vat) || 0;
+        const gap = vatGap(subtotal);
         // [data-sum] parts are the figures; redrawSummary() swaps only those while an amount is being typed.
         return `
           <span data-sum="split" class="muted">${supplyTotal() > 0 ? `เพื่อขาย ฿${money(subtotal - supplyTotal())} · ใช้ในกิจการ ฿${money(supplyTotal())}` : ''}</span>
@@ -365,10 +438,42 @@ export async function render(container) {
           <label>ส่วนลดท้ายบิล <input data-h="discount" type="number" min="0" step="0.01" value="${header.discount}"></label>
           <label>VAT (ถ้ามี) <input data-h="vat" type="number" min="0" step="0.01" value="${header.vat}"></label>
           <label>ยอดสุทธิตามใบเสร็จ <input data-h="total" type="number" min="0" step="0.01" value="${header.total}"></label>
-          <div data-sum="diff" class="${mismatch ? 'pc-diff bad' : 'pc-diff'}">${printed > 0
-            ? (mismatch ? `⚠ ยอดรายการหลังหักส่วนลด ฿${money(net)} ไม่ตรงกับใบเสร็จ (ต่าง ฿${money(net - printed)})` : '✓ ยอดตรงกับใบเสร็จ')
-            : `ยอดสุทธิ ฿${money(net)}`}</div>
-          <span data-sum="vat">${vatGap(subtotal) ? `<button type="button" class="btn sm" data-add-vat>บวก VAT ฿${money(vatGap(subtotal))} เข้าราคาทุกรายการ</button>` : ''}</span>`;
+          <div data-sum="diff" class="pc-diff${gap ? ' info' : printed > 0 && Math.abs(net - printed) > 0.009 ? ' bad' : ''}">${diffText(subtotal, discount, net, vat, printed, gap)}</div>
+          <span data-sum="vat">${gap ? `<button type="button" class="btn sm" data-add-vat title="เกลี่ย VAT ตามสัดส่วนราคาของแต่ละรายการ">รวม VAT ฿${money(gap)} เข้าต้นทุนทุกรายการ</button>` : ''}</span>`;
+    }
+
+    /** How the lines add up to the receipt's net total, in words (and what to do when they don't). */
+    function diffText(subtotal, discount, net, vat, printed, gap) {
+        const parts = `รวมตามรายการ ฿${money(subtotal)}${discount ? ` − ส่วนลด ฿${money(discount)}` : ''}`;
+        if (!printed) return `ยอดสุทธิ ฿${money(net)} (กรอกยอดสุทธิตามใบเสร็จเพื่อตรวจทาน)`;
+        if (Math.abs(net - printed) <= 0.009) {
+            return `✓ ${parts} = ฿${money(net)} ตรงกับยอดสุทธิตามใบเสร็จ${vat ? ' — ต้นทุนในรายการรวม VAT แล้ว' : ''}`;
+        }
+        if (gap) {
+            const pct = net ? (gap / net) * 100 : 0;
+            return `ℹ ราคาในรายการเป็น<b>ราคาก่อน VAT</b>: ${parts} + VAT ฿${money(vat)} = ฿${money(net + vat)} ตรงกับใบเสร็จ
+              <div class="muted" style="font-weight:400;margin-top:2px">ร้านจ่าย VAT ไปจริงและขอคืนไม่ได้ VAT จึงเป็นต้นทุนสินค้า — กดปุ่มด้านล่างเพื่อรวม VAT เข้าต้นทุน (ทุน/ชิ้นทุกรายการเพิ่มขึ้นประมาณ ${pct.toFixed(2)}%)</div>`;
+        }
+        return `⚠ ${parts}${vat ? ` + VAT ฿${money(vat)}` : ''} = ฿${money(net + vat)} แต่ยอดสุทธิตามใบเสร็จคือ ฿${money(printed)} (ต่าง ฿${money(net + vat - printed)})
+          <div style="font-weight:400;margin-top:2px">ตรวจจำนวน ราคา และส่วนลดของแต่ละรายการให้ตรงกับใบเสร็จ หรือใส่ VAT ถ้าใบเสร็จแยก VAT ไว้</div>`;
+    }
+
+    /** What each money column means and how the totals are worked out. */
+    function pricingHelpHtml() {
+        return `
+          <details class="pc-help">
+            <summary>วิธีคิดราคา ภาษี VAT และยอดสุทธิ</summary>
+            <ul>
+              <li><b>จำนวนซื้อ</b> = จำนวนหน่วยตามใบเสร็จ (แพ็ค/ลัง) · <b>ชิ้น/แพ็ค</b> = จำนวนชิ้นในหนึ่งหน่วยซื้อ</li>
+              <li><b>ทุน/หน่วยซื้อ</b> = ราคาต่อหน่วยหลังหักส่วนลดของรายการ · <b>รวม</b> = จำนวนซื้อ × ทุน/หน่วยซื้อ (ควรตรงกับช่องจำนวนเงินในใบเสร็จ)</li>
+              <li><b>เข้าสต๊อก</b> = จำนวนซื้อ × ชิ้น/แพ็ค · <b>ทุน/ชิ้น</b> = รวม ÷ จำนวนชิ้นที่เข้าสต๊อก (ใช้คิดต้นทุนและกำไร)</li>
+              <li><b>ราคาขาย/ชิ้น</b> ระบบเสนอเป็นทุน/ชิ้น + ${escapeHtml(markup)}% (แก้ได้) สินค้าที่มีอยู่แล้วใช้ราคาขายเดิม</li>
+              <li><b>VAT 7%</b>: ใบเสร็จบางร้านพิมพ์ราคาสินค้าเป็นราคาก่อน VAT แล้วบวก VAT ท้ายบิล
+                ยอดสุทธิ = รวมตามรายการ − ส่วนลดท้ายบิล + VAT · ร้านค้าสหการไม่ได้ขอคืน VAT จึงควรรวม VAT เข้าต้นทุนสินค้า (กดปุ่ม "รวม VAT เข้าต้นทุน")</li>
+              <li><b>ส่วนลดท้ายบิล</b> บันทึกไว้ในใบซื้อ แต่ไม่ได้หักออกจากทุน/ชิ้นของแต่ละรายการ (ยกเว้นตอนกดรวม VAT ซึ่งเกลี่ยทั้ง VAT และส่วนลดให้)</li>
+              <li><b>สินค้าใหม่ / เติมสต๊อก</b>: ระบบจับคู่จากบาร์โค้ดหรือชื่อ ถ้าสินค้านี้เคยขายหรือนำเข้ายอดขายไว้ก่อนแล้วแต่ชื่อไม่ตรง กด <b>จับคู่สินค้าเดิม</b> เพื่อเติมสต๊อกให้สินค้านั้นแทนการสร้างใหม่</li>
+            </ul>
+          </details>`;
     }
 
     /** Receipt prices are before VAT when lines − discount + VAT = printed total; returns that VAT, else 0. */
@@ -493,6 +598,7 @@ export async function render(container) {
 
         container.querySelectorAll('tr[data-row]').forEach((tr) => {
             const i = Number(tr.dataset.row);
+            bindStatus(tr);
             tr.querySelectorAll('[data-f]').forEach((inp) => {
                 inp.addEventListener('input', () => onItemInput(i, inp.dataset.f, inp.value, tr));
                 inp.addEventListener('change', () => {
@@ -601,7 +707,7 @@ export async function render(container) {
             const payload = items.map((it) => ({
                 name: it.receipt_name || it.name, product_name: it.name, barcode: it.barcode, qty: it.qty,
                 pack_size: it.pack_size, unit_cost: it.unit_cost, line_total: it.line_total,
-                item_type: it.typeTouched ? it.item_type : null, product_id: keptProductId(it),
+                item_type: it.typeTouched ? it.item_type : null, product_id: chosenProductId(it),
             }));
             try {
                 const res = await api.post('/purchases/preview', { items: payload });
@@ -613,6 +719,7 @@ export async function render(container) {
                     const tr = container.querySelector(`tr[data-row="${i}"]`);
                     if (!tr || it.item_type === 'supply') return;
                     tr.querySelector('[data-status]').innerHTML = statusHtml(it);
+                    bindStatus(tr);
                     const sp = tr.querySelector('[data-f="sale_price"]');
                     sp.placeholder = it.suggested || '';
                     if (!it.priceTouched && document.activeElement !== sp) sp.value = it.sale_price || '';
@@ -667,6 +774,12 @@ export async function render(container) {
         draw();
     }
 
+    /** The product a line restocks: one paired by hand, else (editing) the one it was saved with. */
+    function chosenProductId(it) {
+        if (it.item_type !== 'stock') return null;
+        return it.pickedId || keptProductId(it);
+    }
+
     /** While editing, a line keeps its product unless it was renamed or switched to a business supply. */
     function keptProductId(it) {
         return it.product_id && it.item_type === 'stock' && it.name.trim() === it.origName ? it.product_id : null;
@@ -713,7 +826,7 @@ export async function render(container) {
                 header: { ...header },
                 items: rows.map((it) => ({
                     name: (it.receipt_name || it.name).trim(), product_name: it.name.trim(), pack_size: Math.max(1, Number(it.pack_size) || 1),
-                    item_type: it.item_type, product_id: keptProductId(it),
+                    item_type: it.item_type, product_id: chosenProductId(it),
                     barcode: it.barcode.trim(), qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                     line_total: Number(it.line_total), sale_price: Number(it.sale_price) || null,
                 })),
