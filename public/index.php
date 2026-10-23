@@ -208,6 +208,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/claim-sales', [InventoryController::class, 'claimStoreSales'])
         ->add(new RoleGuard('purchase.create'));
+    $group->get('/consignors/{id:[0-9]+}/unclaimed-sales', [InventoryController::class, 'unclaimedSales']);
+    $group->post('/consignors/{id:[0-9]+}/claim-sales', [InventoryController::class, 'claimConsignorSales']);
 
     $group->get('/settings', [SettingsController::class, 'show'])
         ->add(new RoleGuard('settings.view'));

@@ -90,6 +90,68 @@ class InventoryController
         return $this->json($response, ['ok' => true, 'claimed' => $claimed]);
     }
 
+    /**
+     * Admin only: this consignor's products whose sales are still recorded as the store's
+     * (sold before the product was changed to consignment), with what the consignor would get.
+     */
+    public function unclaimedSales(Request $request, Response $response, array $args): Response
+    {
+        if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        return $this->json($response, ['data' => $this->unclaimedFor(Db::connection(), (int) $args['id'])]);
+    }
+
+    /** Admin only: move every unclaimed sale of this consignor's products into their ledger. */
+    public function claimConsignorSales(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        $db = Db::connection();
+        $repo = new ProductRepo($db, new AuditLogger($db));
+        $ledger = new LedgerService($db);
+        $docs = new DocumentNumberService($db);
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        $total = ['products' => 0, 'qty' => 0, 'sale' => 0.0, 'fee' => 0.0];
+        $db->beginTransaction();
+        try {
+            foreach ($this->unclaimedFor($db, (int) $args['id']) as $p) {
+                $r = $repo->claimStoreSales((int) $p['id'], $ledger, $docs, (int) $user['id'], $ip);
+                $total['products']++;
+                $total['qty'] += $r['qty'];
+                $total['sale'] = round($total['sale'] + $r['sale'], 2);
+                $total['fee'] = round($total['fee'] + $r['fee'], 2);
+            }
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            if ($e instanceof \RuntimeException) {
+                return $this->error($response, $e->getMessage(), 422);
+            }
+            throw $e;
+        }
+        return $this->json($response, ['data' => $total]);
+    }
+
+    private function unclaimedFor(\PDO $db, int $consignorId): array
+    {
+        $stmt = $db->prepare(
+            "SELECT p.id, p.name, SUM(si.qty) AS qty, ROUND(SUM(si.qty * si.unit_price), 2) AS sale,
+                    ROUND(SUM(si.qty) * (p.fee_per_unit + IF(p.rounding_beneficiary = 'store', p.round_per_unit, 0)), 2) AS fee,
+                    MIN(s.sale_datetime) AS first_sale, MAX(s.sale_datetime) AS last_sale
+             FROM sale_items si
+             JOIN products p ON p.id = si.product_id
+             JOIN sales s ON s.id = si.sale_id
+             WHERE p.consignor_id = ? AND si.consignor_id IS NULL
+             GROUP BY p.id, p.name, p.fee_per_unit, p.rounding_beneficiary, p.round_per_unit
+             ORDER BY p.name"
+        );
+        $stmt->execute([$consignorId]);
+        return $stmt->fetchAll();
+    }
+
     /** Admin only: credit the consignor with sales made before the product became theirs. */
     public function claimStoreSales(Request $request, Response $response, array $args): Response
     {
