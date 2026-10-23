@@ -233,6 +233,7 @@ export async function render(container, { user } = {}) {
                 return `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-tile-img">${photoImg(p)}</span>
                   <span class="pos-tile-name">${escapeHtml(p.name)}</span>
+                  ${p.consignor_id != null ? `<span class="pos-tile-consignor">ผู้ฝาก: ${escapeHtml(p.consignor_name)}</span>` : ''}
                   <span class="pos-tile-meta"><b>฿${money(p.sale_price)}</b><span>เหลือ ${p.qty_stock - n}</span></span>
                   ${n ? `<span class="pos-tile-badge">${n}</span>` : ''}
                 </button>`;
