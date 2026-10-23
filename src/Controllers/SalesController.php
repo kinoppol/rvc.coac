@@ -55,7 +55,7 @@ class SalesController
             $all = false;
         }
         $stmt = $db->prepare(
-            "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token,
+            "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token, p.consignor_id,
                     COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty
              FROM products p
              LEFT JOIN consignors c ON c.id = p.consignor_id

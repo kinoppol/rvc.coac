@@ -19,6 +19,16 @@ const SORT_FN = {
     stock_desc: (a, b) => b.qty_stock - a.qty_stock,
     stock_asc: (a, b) => a.qty_stock - b.qty_stock,
 };
+const GROUPS = [
+    ['all', 'สินค้าทั้งหมด'],
+    ['nobarcode', 'ไม่มีบาร์โค้ด'],
+    ['consign', 'สินค้าฝากขาย'],
+];
+const GROUP_FN = {
+    all: () => true,
+    nobarcode: (p) => !(p.barcode || '').trim(),
+    consign: (p) => p.consignor_id != null,
+};
 const METHOD_ICON = { cash: '💵', transfer: '🏦', qr: '📱', card: '💳' };
 // Touch screens: focusing the search box must not pop up the on-screen
 // keyboard every time (a barcode scanner types into it like a keyboard).
@@ -61,6 +71,7 @@ export async function render(container, { user } = {}) {
     let held = loadJson(HELD_KEY);
     let view = pref('view', 'grid');
     let sort = pref('sort', 'popular');
+    let group = pref('group', 'all');
     let keyboard = !TOUCH || pref('kb', '0') === '1';
     let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false };
     // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
@@ -94,6 +105,9 @@ export async function render(container, { user } = {}) {
           <select class="pos-sort" data-el="sort" aria-label="เรียงสินค้า">
             ${SORTS.map(([k, l]) => `<option value="${k}" ${k === sort ? 'selected' : ''}>เรียง: ${l}</option>`).join('')}
           </select>
+          <div class="pos-seg" role="group" aria-label="กลุ่มสินค้า">
+            ${GROUPS.map(([k, l]) => `<button type="button" data-group="${k}">${l}</button>`).join('')}
+          </div>
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
         <div data-el="hours"></div>
@@ -167,9 +181,9 @@ export async function render(container, { user } = {}) {
 
     function matches() {
         const term = q.value.trim().toLowerCase();
-        const list = term
-            ? products.filter((p) => p.name.toLowerCase().includes(term) || (p.barcode || '').includes(term))
-            : products.slice();
+        const inGroup = GROUP_FN[group] || GROUP_FN.all;
+        const list = products.filter((p) => inGroup(p)
+            && (!term || p.name.toLowerCase().includes(term) || (p.barcode || '').includes(term)));
         const fn = SORT_FN[sort] || SORT_FN.name;
         // Out-of-stock products (shown only when the admin allows selling them) go last.
         return list.sort((a, b) => (a.qty_stock < 1) - (b.qty_stock < 1) || fn(a, b) || a.name.localeCompare(b.name, 'th'));
@@ -181,12 +195,13 @@ export async function render(container, { user } = {}) {
 
     function drawProducts() {
         root.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+        root.querySelectorAll('[data-group]').forEach((b) => b.classList.toggle('active', b.dataset.group === group));
         root.querySelector('[data-act="clear-q"]').hidden = !q.value;
         const list = matches();
         const box = el('products');
         if (!list.length) {
             const term = q.value.trim();
-            box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
+            box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : group !== 'all' ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
             if (term && !allowShort()) {
                 if (outHints.term !== term) {
                     clearTimeout(outTimer);
@@ -670,6 +685,10 @@ export async function render(container, { user } = {}) {
             } else if (t.dataset.view) {
                 view = t.dataset.view;
                 savePref('view', view);
+                drawProducts();
+            } else if (t.dataset.group) {
+                group = t.dataset.group;
+                savePref('group', group);
                 drawProducts();
             } else if (t.dataset.inc) {
                 const line = cart[Number(t.dataset.inc)];
