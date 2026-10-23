@@ -14,7 +14,11 @@ class ReportsController
 {
     use JsonResponse;
 
-    private const TYPES = ['receive', 'return', 'sales', 'detail', 'fee', 'store_sales', 'store_stock', 'purchases', 'wages', 'after_hours'];
+    private const TYPES = [
+        'profit', 'payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
+        'receive', 'return', 'sales', 'detail', 'fee', 'withdrawals', 'balances', 'consign_stock',
+        'store_sales', 'store_stock', 'purchases', 'stock_counts',
+    ];
 
     public function show(Request $request, Response $response, array $args): Response
     {
@@ -26,9 +30,9 @@ class ReportsController
         [$from, $to] = ReportService::resolveRange($q['range'] ?? 'today', $q['from'] ?? null, $q['to'] ?? null);
 
         $service = new ReportService(Db::connection());
-        $rows = $this->rows($service, $type, $from, $to, isset($q['consignor_id']) ? (int) $q['consignor_id'] : null);
+        $rows = $this->rows($service, $type, $from, $to, $q);
 
-        return $this->json($response, ['data' => $rows, 'from' => $from, 'to' => $to]);
+        return $this->json($response, ['data' => $rows, 'from' => $from, 'to' => $to, 'labels' => ReportService::LABELS]);
     }
 
     public function export(Request $request, Response $response, array $args): Response
@@ -41,9 +45,9 @@ class ReportsController
         [$from, $to] = ReportService::resolveRange($q['range'] ?? 'today', $q['from'] ?? null, $q['to'] ?? null);
 
         $service = new ReportService(Db::connection());
-        $rows = $this->rows($service, $type, $from, $to, isset($q['consignor_id']) ? (int) $q['consignor_id'] : null);
+        $rows = $this->rows($service, $type, $from, $to, $q);
 
-        $headers = $rows[0] ?? null ? array_keys($rows[0]) : [];
+        $headers = array_map(fn ($k) => ReportService::LABELS[$k] ?? $k, $rows ? array_keys($rows[0]) : []);
         $csvRows = array_map('array_values', $rows);
         $csv = $service->toCsv($csvRows, $headers);
 
@@ -53,9 +57,21 @@ class ReportsController
             ->withHeader('Content-Disposition', "attachment; filename=\"report-{$type}-{$from}_to_{$to}.csv\"");
     }
 
-    private function rows(ReportService $service, string $type, string $from, string $to, ?int $consignorId): array
+    private function rows(ReportService $service, string $type, string $from, string $to, array $q): array
     {
+        $consignorId = isset($q['consignor_id']) ? (int) $q['consignor_id'] : null;
+        // Profit and payment reports: one row per day, week or month.
+        $group = in_array($q['group'] ?? '', ['day', 'week', 'month'], true) ? $q['group'] : 'day';
         return match ($type) {
+            'profit' => $service->profit($from, $to, $group),
+            'payments' => $service->payments($from, $to, $group),
+            'cashiers' => $service->salesByCashier($from, $to),
+            'drawers' => $service->drawers($from, $to),
+            'pos_imports' => $service->posImports($from, $to),
+            'withdrawals' => $service->withdrawals($from, $to),
+            'balances' => $service->balances($from, $to),
+            'consign_stock' => $service->consignStock(),
+            'stock_counts' => $service->stockCounts($from, $to),
             'receive' => $service->receiveLog($from, $to),
             'return' => $service->returnLog($from, $to),
             'sales' => $service->salesSummaryByConsignor($from, $to),
