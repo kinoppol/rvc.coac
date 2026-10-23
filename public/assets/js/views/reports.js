@@ -32,7 +32,7 @@ const GROUPS = [
         { key: 'purchases', label: 'รายการซื้อเข้าร้าน' },
         { key: 'wages', label: 'ค่าแรงพนักงาน' },
         { key: 'stock_counts', label: 'ผลการตรวจนับสต๊อก' },
-        { key: 'capital', label: 'งบลงทุน (เงินที่ลงทุนในกิจการ)' },
+        { key: 'capital', label: 'งบลงทุนและกำไรสุทธิรายเดือน' },
     ]},
 ];
 const TYPES = GROUPS.flatMap((g) => g.types);
@@ -48,7 +48,7 @@ const PREF = 'reports.view';
 // prices and rates.
 const isMoney = (k) => /value|fee|revenue|received|sales|cost|profit|price|income|cash|transfer|qr|card|unknown_method|diff|paid|balance/.test(k) && !/count|items|bills|cashier/.test(k);
 const isCount = (k) => /qty|count|stock$|bills|items|units/.test(k);
-const NO_TOTAL = /price|rate|unit_cost|capital_balance/;
+const NO_TOTAL = /price|rate|unit_cost|capital_balance|retained_profit/;
 
 export async function render(container, { permissions, navigate }) {
     let saved = {};

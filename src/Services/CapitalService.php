@@ -7,12 +7,14 @@ namespace App\Services;
 use PDO;
 
 /**
- * เงินลงทุน: capital put into the business and capital taken back out. Kept apart
- * from income and expenses, so it never shows up as profit.
+ * งบลงทุน: the money spent buying goods into the business (unless bought with its own
+ * profit), plus other money invested, less money withdrawn from the profit. Kept apart
+ * from income and expenses, so it never shows up as profit. This records the entries
+ * that are not purchases: other investments and withdrawals from profit.
  */
 class CapitalService
 {
-    public const TYPES = ['invest' => 'ลงทุนเพิ่ม', 'withdraw' => 'ถอนทุนคืน'];
+    public const TYPES = ['withdraw' => 'เบิกเงินออกจากกำไร', 'invest' => 'ลงทุนเพิ่ม (นอกจากการซื้อของ)'];
     public const METHODS = ['cash' => 'เงินสด', 'transfer' => 'โอนเงิน'];
 
     public function __construct(private PDO $db, private AuditLogger $audit, private DocumentNumberService $docs)
@@ -34,7 +36,7 @@ class CapitalService
         }
         $investor = mb_substr(trim((string) ($d['investor'] ?? '')), 0, 191);
         if ($investor === '') {
-            throw new \RuntimeException('กรุณาระบุผู้ลงทุน / แหล่งเงินทุน');
+            throw new \RuntimeException('กรุณาระบุผู้รับเงิน / ผู้ลงทุน');
         }
         $amount = round((float) ($d['amount'] ?? 0), 2);
         if ($amount <= 0) {
@@ -71,48 +73,46 @@ class CapitalService
         return $stmt->fetch() ?: null;
     }
 
-    /** Entries of a period (newest first) with totals, per investor, and the balance before and after. */
+    /**
+     * Entries of a period (newest first) and the monthly summary (รายงานงบลงทุน): goods bought
+     * with invested money, other money invested, withdrawals from profit, งบลงทุน left,
+     * and each month's net profit.
+     */
     public function list(string $from, string $to): array
     {
         $stmt = $this->db->prepare($this->select() . ' WHERE e.entry_date BETWEEN ? AND ? ORDER BY e.entry_date DESC, e.id DESC');
         $stmt->execute([$from, $to]);
         $rows = $stmt->fetchAll();
-        $stmt = $this->db->prepare(
-            "SELECT investor,
-                    SUM(CASE WHEN type = 'invest' THEN amount ELSE 0 END) AS invested,
-                    SUM(CASE WHEN type = 'withdraw' THEN amount ELSE 0 END) AS withdrawn
-             FROM capital_entries WHERE cancelled_at IS NULL AND entry_date <= ?
-             GROUP BY investor ORDER BY SUM(CASE WHEN type = 'invest' THEN amount ELSE -amount END) DESC"
-        );
-        $stmt->execute([$to]);
-        $byInvestor = array_map(fn ($r) => $r + ['balance' => round((float) $r['invested'] - (float) $r['withdrawn'], 2)], $stmt->fetchAll());
-        $period = ['invested' => 0.0, 'withdrawn' => 0.0];
-        foreach ($rows as $r) {
-            if ($r['cancelled_at'] === null) {
-                $period[$r['type'] === 'invest' ? 'invested' : 'withdrawn'] += (float) $r['amount'];
-            }
-        }
-        $opening = $this->balance((new \DateTimeImmutable($from))->modify('-1 day')->format('Y-m-d'));
+        $months = (new ReportService($this->db))->capital($from, $to);
+        $sum = fn (string $k) => round(array_sum(array_map(fn ($m) => (float) ($m[$k] ?? 0), array_slice($months, 1))), 2);
+        $last = end($months);
         return [
             'rows' => $rows,
-            'by_investor' => $byInvestor,
-            'opening' => $opening,
-            'invested' => round($period['invested'], 2),
-            'withdrawn' => round($period['withdrawn'], 2),
-            'closing' => round($opening + $period['invested'] - $period['withdrawn'], 2),
+            'months' => $months,
+            'opening' => (float) $months[0]['capital_balance'],
+            'capital_purchases' => $sum('capital_purchases'),
+            'other_invest' => $sum('other_invest'),
+            'profit_withdrawn' => $sum('profit_withdrawn'),
+            'net_profit' => $sum('net_profit'),
+            'closing' => (float) $last['capital_balance'],
+            'retained_profit' => (float) $last['retained_profit'],
             'investors' => $this->db->query('SELECT DISTINCT investor FROM capital_entries ORDER BY investor')->fetchAll(PDO::FETCH_COLUMN),
         ];
     }
 
-    /** Capital in the business at the end of $date (invested − withdrawn, cancelled entries left out). */
+    /**
+     * งบลงทุน at the end of $date: every purchase bought with invested money + other money
+     * invested − money withdrawn from the profit (cancelled entries and purchases left out).
+     */
     public function balance(string $date): float
     {
-        $stmt = $this->db->prepare(
-            "SELECT COALESCE(SUM(CASE WHEN type = 'invest' THEN amount ELSE -amount END), 0)
-             FROM capital_entries WHERE cancelled_at IS NULL AND entry_date <= ?"
-        );
-        $stmt->execute([$date]);
-        return round((float) $stmt->fetchColumn(), 2);
+        $report = new ReportService($this->db);
+        $first = min($report->firstDay(), $date);
+        $total = 0.0;
+        foreach ($report->capitalFlows($first, $date) as $f) {
+            $total += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) - ($f['withdraw'] ?? 0);
+        }
+        return round($total, 2);
     }
 
     private function select(): string

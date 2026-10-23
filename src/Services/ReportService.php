@@ -33,7 +33,9 @@ class ReportService
         'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
         'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
         'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า', 'note' => 'หมายเหตุ / คำอธิบาย', 'investor' => 'ผู้ลงทุน / แหล่งเงินทุน', 'invested' => 'ลงทุนเพิ่ม',
-        'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'เงินลงทุนคงเหลือ',
+        'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'งบลงทุนคงเหลือ', 'capital_purchases' => 'ซื้อของด้วยเงินลงทุน',
+        'other_invest' => 'ลงทุนเพิ่ม (อื่น ๆ)', 'profit_withdrawn' => 'เบิกเงินออกจากกำไร', 'profit_purchases' => 'ซื้อของด้วยเงินกำไร',
+        'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)',
     ];
 
     public function __construct(private PDO $db)
@@ -363,7 +365,7 @@ class ReportService
             $capNow = $capPrev = 0.0; // migration 0035 not run yet
         }
         if ($capNow != 0.0 || $capPrev != 0.0) {
-            $line('ข้อมูลประกอบ', 'เงินลงทุนในกิจการ ณ สิ้นช่วง', fn (array $s, bool $isNow) => $isNow ? $capNow : $capPrev, 'capital');
+            $line('ข้อมูลประกอบ', 'งบลงทุนคงเหลือ ณ สิ้นช่วง', fn (array $s, bool $isNow) => $isNow ? $capNow : $capPrev, 'capital');
             $line('ข้อมูลประกอบ', 'กำไรต่อเงินลงทุน (%)', fn (array $s, bool $isNow) => ($cap = $isNow ? $capNow : $capPrev) > 0 ? ($income($s) - $expense($s)) / $cap * 100 : 0);
         }
         foreach ($rows as &$r) {
@@ -373,35 +375,109 @@ class ReportService
     }
 
     /**
-     * รายงานงบลงทุน: capital put into and taken out of the business in a period, with
-     * the balance brought forward and a running balance after each entry.
+     * Money flows behind งบลงทุน, per day: goods bought with invested money (capital),
+     * goods bought with the business's profit, other money invested, and money
+     * withdrawn from the profit. Missing tables (migrations not run) count as none.
+     * @return array<string,array<string,float>> date => [cap_purchase, profit_purchase, invest, withdraw]
+     */
+    public function capitalFlows(string $from, string $to): array
+    {
+        $days = [];
+        $add = function (array $rows, string $key) use (&$days): void {
+            foreach ($rows as $r) {
+                $days[$r['d']][$key] = ($days[$r['d']][$key] ?? 0) + (float) $r['v'];
+            }
+        };
+        $q = function (string $sql) use ($from, $to): array {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([$from, $to]);
+            return $stmt->fetchAll();
+        };
+        $date = 'COALESCE(receipt_date, DATE(created_at))';
+        try {
+            $add($q("SELECT {$date} AS d, SUM(total) AS v FROM purchase_documents WHERE status = 'active' AND funding = 'capital' AND {$date} BETWEEN ? AND ? GROUP BY d"), 'cap_purchase');
+            $add($q("SELECT {$date} AS d, SUM(total) AS v FROM purchase_documents WHERE status = 'active' AND funding = 'profit' AND {$date} BETWEEN ? AND ? GROUP BY d"), 'profit_purchase');
+        } catch (\PDOException $e) {
+            // migration 0036 not run yet: every purchase was bought with invested money
+            $add($q("SELECT {$date} AS d, SUM(total) AS v FROM purchase_documents WHERE status = 'active' AND {$date} BETWEEN ? AND ? GROUP BY d"), 'cap_purchase');
+        }
+        try {
+            $add($q("SELECT entry_date AS d, SUM(amount) AS v FROM capital_entries WHERE cancelled_at IS NULL AND type = 'invest' AND entry_date BETWEEN ? AND ? GROUP BY entry_date"), 'invest');
+            $add($q("SELECT entry_date AS d, SUM(amount) AS v FROM capital_entries WHERE cancelled_at IS NULL AND type = 'withdraw' AND entry_date BETWEEN ? AND ? GROUP BY entry_date"), 'withdraw');
+        } catch (\PDOException $e) {
+            // migration 0035 not run yet
+        }
+        return $days;
+    }
+
+    /** The first day anything happened (sales, purchases, capital): where running totals start. */
+    public function firstDay(): string
+    {
+        $first = (string) $this->db->query(
+            'SELECT LEAST(COALESCE((SELECT MIN(business_date) FROM sales), CURDATE()),
+                          COALESCE((SELECT MIN(COALESCE(receipt_date, DATE(created_at))) FROM purchase_documents), CURDATE()))'
+        )->fetchColumn();
+        try {
+            $cap = $this->db->query('SELECT MIN(entry_date) FROM capital_entries')->fetchColumn();
+            if ($cap && $cap < $first) {
+                $first = (string) $cap;
+            }
+        } catch (\PDOException $e) {
+            // migration 0035 not run yet
+        }
+        return $first;
+    }
+
+    /**
+     * รายงานงบลงทุน, one row per month after the balance brought forward: งบลงทุน grows with
+     * goods bought with invested money (and other money invested) and shrinks as money is
+     * withdrawn from the profit; next to it the month's net profit and the profit still in
+     * the business after withdrawals.
      */
     public function capital(string $from, string $to): array
     {
-        try {
-            $opening = $this->db->prepare(
-                "SELECT COALESCE(SUM(CASE WHEN type = 'invest' THEN amount ELSE -amount END), 0)
-                 FROM capital_entries WHERE cancelled_at IS NULL AND entry_date < ?"
-            );
-            $opening->execute([$from]);
-            $balance = round((float) $opening->fetchColumn(), 2);
-            $stmt = $this->db->prepare(
-                "SELECT entry_date AS date, doc_no, IF(type = 'invest', 'ลงทุนเพิ่ม', 'ถอนทุนคืน') AS type, investor,
-                        IF(method = 'cash', 'เงินสด', 'โอนเงิน') AS method,
-                        IF(type = 'invest', amount, 0) AS invested, IF(type = 'withdraw', amount, 0) AS withdrawn, note
-                 FROM capital_entries WHERE cancelled_at IS NULL AND entry_date BETWEEN ? AND ?
-                 ORDER BY entry_date, id"
-            );
-            $stmt->execute([$from, $to]);
-            $rows = [['date' => null, 'doc_no' => '', 'type' => 'ยอดยกมา', 'investor' => '', 'method' => '', 'invested' => null, 'withdrawn' => null, 'note' => null, 'capital_balance' => $balance]];
-            foreach ($stmt->fetchAll() as $r) {
-                $balance = round($balance + (float) $r['invested'] - (float) $r['withdrawn'], 2);
-                $rows[] = $r + ['capital_balance' => $balance];
+        $first = min($this->firstDay(), $from);
+        $before = (new \DateTimeImmutable($from))->modify('-1 day')->format('Y-m-d');
+        $capital = 0.0;
+        $retained = 0.0;
+        if ($first <= $before) {
+            foreach ($this->capitalFlows($first, $before) as $f) {
+                $capital += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) - ($f['withdraw'] ?? 0);
+                $retained -= $f['withdraw'] ?? 0;
             }
-            return $rows;
-        } catch (\PDOException $e) {
-            return []; // migration 0035 not run yet
+            foreach ($this->profit($first, $before, 'month') as $p) {
+                $retained += $p['net_profit'];
+            }
         }
+        $buckets = [];
+        foreach (self::periods($from, $to, 'month') as $key => $label) {
+            $buckets[$key] = ['period' => $label, 'cap_purchase' => 0.0, 'invest' => 0.0, 'withdraw' => 0.0, 'profit_purchase' => 0.0];
+        }
+        foreach ($this->capitalFlows($from, $to) as $d => $f) {
+            foreach ($f as $k => $v) {
+                $buckets[self::periodKey($d, 'month')][$k] += $v;
+            }
+        }
+        $profit = array_column($this->profit($from, $to, 'month'), 'net_profit');
+        $rows = [[
+            'period' => 'ยอดยกมา', 'capital_purchases' => null, 'other_invest' => null, 'profit_withdrawn' => null,
+            'capital_balance' => round($capital, 2), 'net_profit' => null, 'profit_purchases' => null, 'retained_profit' => round($retained, 2),
+        ]];
+        foreach (array_values($buckets) as $i => $b) {
+            $capital += $b['cap_purchase'] + $b['invest'] - $b['withdraw'];
+            $retained += ($profit[$i] ?? 0) - $b['withdraw'];
+            $rows[] = [
+                'period' => $b['period'],
+                'capital_purchases' => round($b['cap_purchase'], 2),
+                'other_invest' => round($b['invest'], 2),
+                'profit_withdrawn' => round($b['withdraw'], 2),
+                'capital_balance' => round($capital, 2),
+                'net_profit' => round($profit[$i] ?? 0, 2),
+                'profit_purchases' => round($b['profit_purchase'], 2),
+                'retained_profit' => round($retained, 2),
+            ];
+        }
+        return $rows;
     }
 
     /** What a statement line means, in plain words; total lines say how they add up. */
@@ -421,7 +497,7 @@ class ReportService
             'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
             'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
             'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
-            'capital' => 'เงินที่ใส่เข้ามาลงทุนในกิจการสะสม หักที่ถอนคืนแล้ว ไม่ใช่รายได้ จึงไม่นับในกำไร',
+            'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
             'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
             'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน',
             'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน',
@@ -495,9 +571,9 @@ class ReportService
                     $p
                 )),
             ], 'drawer'],
-            'capital' => ['เงินลงทุนในกิจการ', [
-                $section('รายการลงทุน / ถอนทุน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['date', 'วันที่', 'date'], ['doc_no', 'เลขที่', 'text'], ['type', 'ประเภท', 'text'], ['investor', 'ผู้ลงทุน', 'text'], ['invested', 'ลงทุน', 'money'], ['withdrawn', 'ถอนคืน', 'money']],
-                    array_values(array_filter($this->capital('1970-01-01', $to), fn ($r) => $r['date'] !== null))),
+            'capital' => ['งบลงทุนในกิจการ', [
+                $section('สรุปรายเดือน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['period', 'เดือน', 'text'], ['capital_purchases', 'ซื้อของด้วยเงินลงทุน', 'money'], ['other_invest', 'ลงทุนอื่น', 'money'], ['profit_withdrawn', 'เบิกออกจากกำไร', 'money'], ['capital_balance', 'งบลงทุนคงเหลือ', 'money']],
+                    array_slice($this->capital($this->firstDay(), $to), 1)),
             ], 'capital'],
             'consign_sales' => ['ยอดขายสินค้าฝากขาย', [
                 $section('แยกตามผู้ฝาก', [['consignor', 'ผู้ฝาก', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย (ร้าน)', 'money'], ['cost', 'ผู้ฝากได้', 'money']], $byConsignor()),

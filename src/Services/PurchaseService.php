@@ -199,6 +199,7 @@ class PurchaseService
                 $userId,
             ]);
             $docId = (int) $this->db->lastInsertId();
+            $this->saveFunding($docId, $h['funding']);
             $result = $this->applyLines($docId, $lines, [], $userId, $ip);
 
             $this->attachments->linkToPurchase($attachments, $docId);
@@ -252,6 +253,7 @@ class PurchaseService
                 $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'],
                 $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'], $id,
             ]);
+            $this->saveFunding($id, $h['funding']);
             $keep = array_flip(array_map('strval', $keepTokens));
             $unlink = $this->db->prepare('UPDATE attachments SET purchase_document_id = NULL WHERE id = ?');
             foreach ($this->attachments->forPurchase($id) as $a) {
@@ -426,7 +428,18 @@ class PurchaseService
             'total' => isset($header['total']) && (float) $header['total'] > 0 ? round((float) $header['total'], 2) : round($subtotal - $discount, 2),
             'total_qty' => array_sum(array_map(fn ($l) => $l['item_type'] === 'stock' ? $l['units'] : 0, $lines)),
             'note' => trim((string) ($header['note'] ?? '')) ?: null,
+            'funding' => ($header['funding'] ?? 'capital') === 'profit' ? 'profit' : 'capital',
         ], $lines];
+    }
+
+    /** Bought with invested money (counts toward งบลงทุน) or with the business's profit. */
+    private function saveFunding(int $id, string $funding): void
+    {
+        try {
+            $this->db->prepare('UPDATE purchase_documents SET funding = ? WHERE id = ?')->execute([$funding, $id]);
+        } catch (\PDOException $e) {
+            // migration 0036 not run yet: every purchase counts as invested money
+        }
     }
 
     private function supplyTotal(array $lines): float

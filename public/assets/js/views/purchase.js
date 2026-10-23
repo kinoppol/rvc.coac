@@ -14,7 +14,8 @@ export const DRAFT_KEY = 'purchase.draft';
 const MAX_PHOTOS = 10;
 
 function emptyHeader() {
-    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '' };
+    // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit')
+    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital' };
 }
 function emptyItem() {
     // name = per-piece product name; qty/unit_cost/line_total = as printed (packs); sale_price = per piece
@@ -114,6 +115,7 @@ export async function render(container) {
             ...emptyHeader(),
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
             receipt_date: d.receipt_date || '', discount: Number(d.discount) || 0, vat: Number(d.vat) || 0, total: Number(d.total) || 0, note: d.note || '',
+            funding: d.funding === 'profit' ? 'profit' : 'capital',
         };
         items = d.items.map((it) => {
             const name = (it.item_type === 'stock' && it.product_name) || it.receipt_name;
@@ -205,6 +207,12 @@ export async function render(container) {
             <label class="field">เลขที่ใบเสร็จ <input data-h="receipt_no" value="${escapeHtml(header.receipt_no)}"></label>
             <label class="field">วันที่ในใบเสร็จ <input data-h="receipt_date" type="date" value="${escapeHtml(header.receipt_date)}"></label>
             <label class="field">หมายเหตุ <input data-h="note" value="${escapeHtml(header.note)}"></label>
+            <label class="field">ซื้อด้วยเงิน
+              <select data-h="funding">
+                <option value="capital" ${header.funding !== 'profit' ? 'selected' : ''}>เงินลงทุน (นับเป็นงบลงทุน)</option>
+                <option value="profit" ${header.funding === 'profit' ? 'selected' : ''}>เงินกำไรของกิจการ</option>
+              </select>
+              <span class="muted" style="font-size:11.5px;font-weight:400">ซื้อด้วยเงินกำไรของร้าน ไม่นับเพิ่มในงบลงทุน</span></label>
           </div>
         </section>
 
@@ -275,7 +283,7 @@ export async function render(container) {
             <tbody>
               ${docs.map((d) => `
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
-                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}
+                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}
                     ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}</td>
                   <td>${d.receipt_date ? fmtDate(d.receipt_date) : '-'}</td>
                   <td>${escapeHtml(d.supplier_name)}${d.receipt_no ? `<div class="muted" style="font-size:12px">${escapeHtml(d.receipt_no)}</div>` : ''}</td>
