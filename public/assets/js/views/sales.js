@@ -352,13 +352,8 @@ export async function render(container, { user, navigate } = {}) {
 
     function drawDrawerBar() {
         const box = el('drawerbar');
-        if (!drawer || (!drawer.required && !drawer.open)) { box.innerHTML = ''; return; }
-        if (drawer.open) {
-            box.innerHTML = `<div class="pos-drawer">💰 <span>เงินตั้งต้นในลิ้นชัก <b>฿${money(drawer.opening_cash)}</b>
-                · เงินสดจากการขาย <b>฿${money(drawer.cash_sales)}</b> · ควรมีในลิ้นชัก <b>฿${money(drawer.opening_cash + drawer.cash_sales)}</b></span>
-              ${navigate ? `<button type="button" class="btn secondary sm" data-drawer-act="summary">${drawer.closed ? 'ดูสรุปยอด' : 'ปิดยอด / สรุปเงิน'}</button>` : ''}</div>`;
-            return;
-        }
+        // Once the drawer is counted there is nothing to show (the summary is in the "เงินในลิ้นชัก / ปิดยอด" menu).
+        if (!drawerNeeded()) { box.innerHTML = ''; return; }
         const left = Math.max(0, Math.ceil((skipEnds - Date.now()) / 1000));
         box.innerHTML = `<div class="pos-drawer warn">⏳ <span><b>ยังไม่ได้ระบุเงินในลิ้นชัก</b>
             ${left ? `ขายได้ชั่วคราวอีก <b data-el="skipleft">${clock(left)}</b> นาที` : ''} · ระบบบันทึกการข้ามไว้</span>
@@ -822,8 +817,6 @@ export async function render(container, { user, navigate } = {}) {
             if (t.dataset.drawerAct === 'show') {
                 skipEnds = 0;
                 showDrawer();
-            } else if (t.dataset.drawerAct === 'summary') {
-                navigate('drawer');
             } else if (t.dataset.pick) {
                 const p = products.find((x) => x.id === Number(t.dataset.pick));
                 if (p) add(p);
