@@ -584,3 +584,12 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-change { font-size: 20px; margin: 8px 0; }
 .pos-change b { display: block; font-size: 44px; color: var(--ok); }
 .pos-done .btn { width: 100%; max-width: 360px; margin-top: 10px; }
+
+/* Ctrl+P on any page: the content only, without the menus, top bar and assistant;
+   scroll boxes open up so long tables print in full. */
+@media print {
+    .sidebar, .topbar, .ai-fab, .ai-panel { display: none !important; }
+    .content { padding: 0; }
+    .table-wrap { max-height: none !important; overflow: visible !important; }
+    .table-wrap thead th { position: static; }
+}

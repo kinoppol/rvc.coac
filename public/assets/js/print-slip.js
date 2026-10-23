@@ -293,6 +293,51 @@ export function printPassbook(consignor, entries, balance) {
     printHtml(html);
 }
 
+/**
+ * Prints a report on its own A4 page: title, period and print time on top, then the
+ * report body (tables already rendered by the reports page). Wide tables go landscape.
+ */
+export function printReport({ title, period, body, landscape = false }) {
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 10mm; }
+  :root { color-scheme: light; --text: #111; --muted: #555; --border: #bbb; --soft: #eef2fa; --ok: #0f7a44; --bad: #b42318; --surface2: #f1f3f7; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Sarabun', 'Tahoma', sans-serif; color: #111; background: #fff; font-size: 11.5px; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 10px; }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: #444; font-size: 12px; }
+  .meta { text-align: right; font-size: 11px; color: #444; }
+  .muted { color: var(--muted); }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+  .kpi { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  .kpi .lbl { font-size: 10.5px; color: var(--muted); }
+  .kpi .val { font-size: 15px; font-weight: 700; }
+  .kpi .sub { font-size: 10px; }
+  table { width: 100%; max-width: none !important; border-collapse: collapse; }
+  th, td { border: 1px solid var(--border); padding: 3px 5px; vertical-align: top; text-align: left; }
+  thead th { background: #eee; font-weight: 600; font-size: 10.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  tfoot td { font-weight: 700; background: #f6f6f6; }
+  .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .note { margin-top: 8px; font-size: 10.5px; color: #555; }
+  .foot { margin-top: 12px; font-size: 10px; color: #777; text-align: right; }
+</style></head><body>
+  <div class="head">
+    <div><h1>${escapeHtml(title)}</h1><div class="sub">ร้านค้าสหการ · ${escapeHtml(period)}</div></div>
+    <div class="meta">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
+  </div>
+  ${body}
+</body></html>`;
+    printHtml(html);
+}
+
 /** Prints a wage voucher (ใบสำคัญจ่ายค่าแรง) for the employee to sign for the money. */
 export function printWageSlip(w, types = {}, methods = {}) {
     const unit = { day: 'วัน', hour: 'ชั่วโมง' }[w.wage_type] || '';

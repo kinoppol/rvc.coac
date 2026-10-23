@@ -31,7 +31,8 @@ class ReportService
         'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
         'expected_cash' => 'เงินที่ควรมี', 'counted_cash' => 'นับได้ตอนปิด', 'cash_diff' => 'ขาด(−)/เกิน(+)', 'open_status' => 'ระบุเงินตั้งต้น',
         'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
-        'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)',
+        'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
+        'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า',
     ];
 
     public function __construct(private PDO $db)
@@ -297,6 +298,61 @@ class ReportService
                 'wage_cost' => $v('wages'),
                 'net_profit' => round($income - $v('supply') - $v('wages'), 2),
             ];
+        }
+        return $rows;
+    }
+
+    /**
+     * ผลประกอบการ (income statement) for the period next to the period of the same
+     * length just before it: total income − total expenses = profit.
+     * The consignors' share of their goods' sales is their money, so only the fees count as income.
+     */
+    public function statement(string $from, string $to): array
+    {
+        $days = (new \DateTimeImmutable($from))->diff(new \DateTimeImmutable($to))->days + 1;
+        $prevTo = (new \DateTimeImmutable($from))->modify('-1 day')->format('Y-m-d');
+        $prevFrom = (new \DateTimeImmutable($from))->modify("-{$days} days")->format('Y-m-d');
+        $sum = function (string $f, string $t): array {
+            $out = [];
+            foreach ($this->profit($f, $t, 'month') as $r) {
+                foreach ($r as $k => $v) {
+                    if ($k !== 'period') {
+                        $out[$k] = ($out[$k] ?? 0) + $v;
+                    }
+                }
+            }
+            return $out;
+        };
+        $now = $sum($from, $to);
+        $prev = $sum($prevFrom, $prevTo);
+
+        $rows = [];
+        $line = function (string $section, string $item, callable $value) use (&$rows, $now, $prev): void {
+            $a = round($value($now), 2);
+            $b = round($value($prev), 2);
+            $rows[] = [
+                'section' => $section, 'item' => $item, 'amount' => $a, 'prev_amount' => $b,
+                'change_percent' => $b != 0.0 ? round(($a - $b) / abs($b) * 100, 1) : null,
+            ];
+        };
+        $v = fn (string $k) => fn (array $s) => (float) ($s[$k] ?? 0);
+        $income = fn (array $s) => (float) ($s['consign_fee'] ?? 0) + (float) ($s['listing_fee_net'] ?? 0) + (float) ($s['store_sales'] ?? 0);
+        $expense = fn (array $s) => (float) ($s['store_cost'] ?? 0) + (float) ($s['supply_cost'] ?? 0) + (float) ($s['wage_cost'] ?? 0);
+
+        $line('รายได้', 'ค่าฝากขายสินค้า', $v('consign_fee'));
+        $line('รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $v('listing_fee_net'));
+        $line('รายได้', 'ยอดขายสินค้าของร้าน', $v('store_sales'));
+        $line('รายได้', 'รวมรายได้', $income);
+        $line('รายจ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $v('store_cost'));
+        $line('รายจ่าย', 'ค่าวัสดุใช้ในร้าน', $v('supply_cost'));
+        $line('รายจ่าย', 'ค่าแรงพนักงาน', $v('wage_cost'));
+        $line('รายจ่าย', 'รวมรายจ่าย', $expense);
+        $line('ผลประกอบการ', 'กำไร (ขาดทุน) สุทธิ', fn (array $s) => $income($s) - $expense($s));
+        $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'));
+        $line('ข้อมูลประกอบ', 'ยอดขายสินค้าฝากขาย (เงินของผู้ฝาก หักค่าฝากแล้วจ่ายคืน)', $v('consign_sales'));
+        $line('ข้อมูลประกอบ', 'จำนวนบิลขาย', $v('bills'));
+        foreach ($rows as &$r) {
+            $r['prev_period'] = "{$prevFrom} – {$prevTo}";
         }
         return $rows;
     }

@@ -15,7 +15,7 @@ class ReportsController
     use JsonResponse;
 
     private const TYPES = [
-        'profit', 'payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
+        'statement', 'profit', 'payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
         'receive', 'return', 'sales', 'detail', 'fee', 'withdrawals', 'balances', 'consign_stock',
         'store_sales', 'store_stock', 'purchases', 'stock_counts',
     ];
@@ -63,6 +63,7 @@ class ReportsController
         // Profit and payment reports: one row per day, week or month.
         $group = in_array($q['group'] ?? '', ['day', 'week', 'month'], true) ? $q['group'] : 'day';
         return match ($type) {
+            'statement' => $service->statement($from, $to),
             'profit' => $service->profit($from, $to, $group),
             'payments' => $service->payments($from, $to, $group),
             'cashiers' => $service->salesByCashier($from, $to),

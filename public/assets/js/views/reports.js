@@ -1,9 +1,11 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
+import { printReport } from '../print-slip.js';
 
 // Reports grouped by the part of the system they cover.
 const GROUPS = [
     { label: 'ภาพรวมและกำไร', types: [
+        { key: 'statement', label: 'ผลประกอบการ (รายได้ − รายจ่าย)' },
         { key: 'profit', label: 'กำไรขาดทุน (หลังหักค่าแรง)', grouped: true },
         { key: 'payments', label: 'ยอดขายตามวิธีชำระเงิน', grouped: true },
         { key: 'fee', label: 'รายได้ค่าธรรมเนียมของร้าน' },
@@ -49,7 +51,7 @@ const NO_TOTAL = /price|rate|unit_cost/;
 export async function render(container, { permissions }) {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) { /* private mode */ }
-    let type = TYPES.some((t) => t.key === saved.type) ? saved.type : 'profit';
+    let type = TYPES.some((t) => t.key === saved.type) ? saved.type : 'statement';
     let range = RANGES.some((r) => r.key === saved.range) ? saved.range : 'month';
     let group = PERIOD_GROUPS.some(([k]) => k === saved.group) ? saved.group : 'day';
     let from = todayISO();
@@ -105,7 +107,7 @@ export async function render(container, { permissions }) {
               ${type === 'detail' ? `<select id="sel-consignor">${options.map((o) => `<option value="${o.id}" ${o.id === consignorId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}</select>` : ''}
             </div>
             <div class="actions-row">
-              <button type="button" class="btn secondary" onclick="window.print()">พิมพ์รายงาน</button>
+              <button type="button" class="btn secondary" id="btn-print">พิมพ์รายงาน</button>
               ${canExport ? `<a class="btn" href="${api.downloadUrl(`/reports/${type}/export?${query()}`)}">ส่งออก Excel</a>` : ''}
             </div>
           </div>
@@ -113,8 +115,8 @@ export async function render(container, { permissions }) {
         ${type === 'profit' ? profitCards(res.data) : ''}
         <section class="card">
           <div class="card-head"><h2>${escapeHtml(m.label)}${m.snapshot ? '' : ` <span class="muted" style="font-size:13px;font-weight:400">${escapeHtml(fmtDate(from))}${from !== to ? ` – ${escapeHtml(fmtDate(to))}` : ''}</span>`}</h2></div>
-          <div class="table-wrap" style="max-height:70vh">${renderTable(res.data)}</div>
-          ${type === 'profit' ? `<div class="muted" style="font-size:12px;padding:10px 16px">รายได้รวมของร้าน = ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + กำไรขั้นต้นสินค้าของร้าน ·
+          <div id="report-body">${type === 'statement' ? statementHtml(res.data) : `<div class="table-wrap" style="max-height:70vh">${renderTable(res.data)}</div>`}</div>
+          ${type === 'profit' ? `<div class="muted report-note" style="font-size:12px;padding:10px 16px">รายได้รวมของร้าน = ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + กำไรขั้นต้นสินค้าของร้าน ·
             กำไรสุทธิ = รายได้รวม − ค่าวัสดุใช้ในร้าน − ค่าแรงที่จ่าย (ยอดขายสินค้าฝากขายเป็นเงินของผู้ฝาก ไม่นับเป็นรายได้ของร้าน)</div>` : ''}
         </section>`;
 
@@ -124,6 +126,59 @@ export async function render(container, { permissions }) {
         container.querySelector('#f-from')?.addEventListener('change', (e) => { from = e.target.value; range = 'custom'; load(); });
         container.querySelector('#f-to')?.addEventListener('change', (e) => { to = e.target.value; range = 'custom'; load(); });
         container.querySelector('#sel-consignor')?.addEventListener('change', (e) => { consignorId = Number(e.target.value); load(); });
+        container.querySelector('#btn-print').addEventListener('click', print);
+    }
+
+    /** Prints just the report (not the menus and buttons) on its own page. */
+    function print() {
+        const m = meta();
+        const table = container.querySelector('#report-body table');
+        const note = container.querySelector('.report-note');
+        const consignor = type === 'detail' ? options.find((o) => o.id === consignorId) : null;
+        const period = [
+            m.snapshot ? 'ข้อมูล ณ วันที่พิมพ์' : `${fmtDate(from)}${from !== to ? ` – ${fmtDate(to)}` : ''}`,
+            m.grouped ? PERIOD_GROUPS.find(([k]) => k === group)[1] : '',
+            consignor ? `ผู้ฝาก ${consignor.name}` : '',
+        ].filter(Boolean).join(' · ');
+        printReport({
+            title: m.label,
+            period,
+            body: `${type === 'profit' ? container.querySelector('.kpi-grid')?.outerHTML || '' : ''}
+              ${table ? table.outerHTML : '<p>ไม่มีข้อมูลในช่วงเวลานี้</p>'}
+              ${note ? `<div class="note">${note.innerHTML}</div>` : ''}`,
+            landscape: (table?.querySelectorAll('thead th').length || 0) > 7,
+        });
+    }
+
+    /** ผลประกอบการ as a statement: income lines, expense lines, then profit — this period next to the one before. */
+    function statementHtml(rows) {
+        if (!rows.length) return '<div class="empty">ไม่มีข้อมูล</div>';
+        const prev = rows[0].prev_period.split(' – ');
+        const amount = (v, bold) => `<b style="${bold ? '' : 'font-weight:400;'}${Number(v) < 0 ? 'color:var(--bad)' : ''}">${Number(v) < 0 ? '(' : ''}${money(Math.abs(v))}${Number(v) < 0 ? ')' : ''}</b>`;
+        // Green when the change is good for the store: more income, less expense.
+        const change = (r) => (r.change_percent === null ? '<span class="muted">–</span>'
+            : `<span style="color:var(${(r.change_percent >= 0) !== (r.section === 'รายจ่าย') ? '--ok' : '--bad'})">${r.change_percent >= 0 ? '▲' : '▼'} ${Math.abs(r.change_percent).toFixed(1)}%</span>`);
+        let section = '';
+        const body = rows.map((r) => {
+            const total = /^รวม|กำไร/.test(r.item);
+            const info = r.section === 'ข้อมูลประกอบ';
+            const head = r.section !== section ? `<tr><td colspan="4" style="padding-top:16px;font-weight:700;border-top:${section ? '1px solid var(--border)' : '0'}">${escapeHtml(r.section)}</td></tr>` : '';
+            section = r.section;
+            const fmt = (v) => (r.item === 'จำนวนบิลขาย' ? count(v) : amount(v, total));
+            const profitRow = r.section === 'ผลประกอบการ';
+            return `${head}<tr style="${profitRow ? 'background:var(--soft);font-size:16px' : ''}${info ? ';color:var(--muted)' : ''}">
+              <td style="padding-left:${total ? 14 : 30}px;${total ? 'font-weight:700' : ''}">${escapeHtml(r.item)}</td>
+              <td class="num" style="${total ? 'border-top:1px solid var(--text)' : ''}${profitRow ? ';border-bottom:3px double var(--text)' : ''}">${fmt(r.amount)}</td>
+              <td class="num muted">${fmt(r.prev_amount)}</td>
+              <td class="num">${info ? '' : change(r)}</td></tr>`;
+        }).join('');
+        return `<div class="table-wrap"><table style="max-width:920px">
+          <thead><tr><th>รายการ</th><th class="num">${escapeHtml(fmtDate(from))}${from !== to ? ` – ${escapeHtml(fmtDate(to))}` : ''} (บาท)</th>
+            <th class="num">ช่วงก่อนหน้า ${escapeHtml(fmtDate(prev[0]))}${prev[0] !== prev[1] ? ` – ${escapeHtml(fmtDate(prev[1]))}` : ''}</th><th class="num">เปลี่ยนแปลง</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table></div>
+        <div class="muted report-note" style="font-size:12px;padding:10px 16px">รายได้ของร้านจากสินค้าฝากขายคือค่าฝากขายและค่าทำข้อมูลเท่านั้น ยอดขายสินค้าฝากขายส่วนที่เหลือเป็นเงินของผู้ฝาก ·
+          ค่าวัสดุใช้ในร้านนับตามวันที่ในใบเสร็จ · ค่าแรงนับตามวันที่จ่าย · ตัวเลขในวงเล็บคือติดลบ</div>`;
     }
 
     function profitCards(rows) {
