@@ -44,6 +44,34 @@ class ReceiveController
         return $this->json($response, ['data' => $calc->priceFor($cost)]);
     }
 
+    /**
+     * Products this consignor has deposited before (one row per name, latest lot first),
+     * so the receive form can refill the name / price / barcode of a repeat item.
+     */
+    public function history(Request $request, Response $response): Response
+    {
+        $params = $request->getQueryParams();
+        $consignorId = (int) ($params['consignor_id'] ?? 0);
+        $q = trim((string) ($params['q'] ?? ''));
+        if (!$consignorId) {
+            return $this->json($response, ['data' => []]);
+        }
+        $db = Db::connection();
+        $stmt = $db->prepare(
+            "SELECT p.name, p.cost_price, p.sale_price, p.barcode, p.created_at AS last_at, h.lots
+             FROM products p
+             JOIN (
+                SELECT MAX(id) AS id, COUNT(*) AS lots FROM products
+                WHERE consignor_id = ? AND name LIKE ?
+                GROUP BY name
+             ) h ON h.id = p.id
+             ORDER BY p.id DESC
+             LIMIT 20"
+        );
+        $stmt->execute([$consignorId, '%' . addcslashes($q, '%_\\') . '%']);
+        return $this->json($response, ['data' => $stmt->fetchAll()]);
+    }
+
     /** Consignors' requests waiting to be checked (or recent ones with ?status=all). */
     public function requests(Request $request, Response $response): Response
     {

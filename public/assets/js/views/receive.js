@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
-import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
+import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 export async function render(container, { permissions = [] } = {}) {
@@ -79,7 +79,12 @@ export async function render(container, { permissions = [] } = {}) {
               <div class="step-title"><span class="step-num">2</span><h2>เพิ่มรายการสินค้า</h2></div>
               ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
               <div class="form-grid">
-                <label class="field" style="grid-column:span 2">ชื่อสินค้า <input id="f-name" placeholder="เช่น ขนมทองม้วนสมุนไพร"></label>
+                <div class="field" style="grid-column:span 2"><label for="f-name">ชื่อสินค้า</label>
+                  <div class="ac">
+                    <input id="f-name" placeholder="พิมพ์ค้นหาจากรายการฝากเดิม หรือชื่อสินค้าใหม่" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="f-name-list">
+                    <div class="ac-list" id="f-name-list" role="listbox" hidden></div>
+                  </div>
+                </div>
                 <label class="field">ราคาที่ผู้ฝากต้องการได้ (บาท) * <input id="f-cost" type="number" step="0.25" min="0"></label>
                 <div class="field">ราคาขายหน้าร้าน <div id="f-price" class="price-preview">-</div></div>
                 <label class="field">จำนวนที่ฝาก (ชิ้น) * <input id="f-qty" type="number" min="1" value="1"></label>
@@ -138,6 +143,7 @@ export async function render(container, { permissions = [] } = {}) {
             note.textContent = `บันทึกย้อนหลังเป็นวันที่ ${receiveDate}`;
         });
         container.querySelector('#f-cost').addEventListener('input', updateQuote);
+        wireNameSearch();
         container.querySelector('#btn-clear').addEventListener('click', () => { draw(); });
         container.querySelector('#btn-add').addEventListener('click', addItem);
         container.querySelector('#btn-unload')?.addEventListener('click', () => {
@@ -180,6 +186,90 @@ export async function render(container, { permissions = [] } = {}) {
         container.querySelectorAll('[data-reject]').forEach((btn) => btn.addEventListener('click', () => rejectRequest(Number(btn.dataset.reject))));
         const submitBtn = container.querySelector('#btn-submit');
         if (submitBtn) submitBtn.addEventListener('click', submit);
+    }
+
+    /**
+     * Product name box: lists what this consignor has deposited before; picking one refills
+     * the name, price and barcode. A name not in the list is added as a new product.
+     */
+    function wireNameSearch() {
+        const input = container.querySelector('#f-name');
+        const list = container.querySelector('#f-name-list');
+        let items = []; // history rows shown, then the "new product" choice (null)
+        let active = -1;
+        let timer;
+        let seq = 0;
+
+        const close = () => {
+            list.hidden = true;
+            input.setAttribute('aria-expanded', 'false');
+            active = -1;
+        };
+        const show = (rows) => {
+            const term = input.value.trim();
+            const exact = rows.some((r) => r.name.trim().toLowerCase() === term.toLowerCase());
+            items = term && !exact ? [...rows, null] : rows;
+            active = -1;
+            list.innerHTML = (rows.length ? '' : `<div class="ac-note">${term ? 'ไม่พบในรายการฝากเดิมของผู้ฝากนี้' : 'ผู้ฝากนี้ยังไม่มีรายการฝากเดิม'}</div>`)
+                + items.map((r, i) => r
+                    ? `<div class="ac-item" role="option" data-i="${i}">
+                         <span>${escapeHtml(r.name)}</span>
+                         <small>ราคาผู้ฝาก ฿${money(r.cost_price)} · ขาย ฿${money(r.sale_price)}${r.barcode ? ` · ${escapeHtml(r.barcode)}` : ''} · ฝากล่าสุด ${fmtDate(r.last_at)}${Number(r.lots) > 1 ? ` (${Number(r.lots)} ครั้ง)` : ''}</small>
+                       </div>`
+                    : `<div class="ac-item ac-new" role="option" data-i="${i}">+ เพิ่มเป็นสินค้าใหม่: <b>${escapeHtml(term)}</b></div>`).join('');
+            list.hidden = !list.innerHTML;
+            input.setAttribute('aria-expanded', String(!list.hidden));
+        };
+        const search = async () => {
+            const s = ++seq;
+            const term = input.value.trim();
+            const res = await api.get(`/receive/history?consignor_id=${encodeURIComponent(consignorId ?? '')}&q=${encodeURIComponent(term)}`).catch(() => ({ data: [] }));
+            if (s !== seq || document.activeElement !== input) return;
+            show(res.data);
+        };
+        const pick = (i) => {
+            const r = items[i];
+            close();
+            if (r) {
+                input.value = r.name;
+                container.querySelector('#f-cost').value = Number(r.cost_price);
+                container.querySelector('#f-barcode').value = r.barcode || '';
+                updateQuote();
+                container.querySelector('#f-qty').focus();
+                container.querySelector('#f-qty').select();
+            } else {
+                container.querySelector('#f-cost').focus();
+            }
+        };
+        const highlight = () => list.querySelectorAll('.ac-item').forEach((el, i) => el.classList.toggle('active', i === active));
+
+        input.addEventListener('focus', search);
+        input.addEventListener('input', () => {
+            clearTimeout(timer);
+            timer = setTimeout(search, 200);
+        });
+        input.addEventListener('blur', () => setTimeout(close, 150));
+        input.addEventListener('keydown', (e) => {
+            if (list.hidden) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const n = items.length;
+                if (!n) return;
+                active = e.key === 'ArrowDown' ? (active + 1) % n : (active - 1 + n) % n;
+                highlight();
+            } else if (e.key === 'Enter' && active >= 0) {
+                e.preventDefault();
+                pick(active);
+            } else if (e.key === 'Escape') {
+                close();
+            }
+        });
+        list.addEventListener('mousedown', (e) => {
+            const el = e.target.closest('.ac-item');
+            if (!el) return;
+            e.preventDefault();
+            pick(Number(el.dataset.i));
+        });
     }
 
     async function loadRequest(id) {
