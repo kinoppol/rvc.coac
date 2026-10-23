@@ -61,7 +61,7 @@ function beep(ok) {
     } catch (e) { /* no audio */ }
 }
 
-export async function render(container, { user, navigate } = {}) {
+export async function render(container, { user } = {}) {
     // The open cart and held carts live in this browser per user, so they survive
     // leaving the page or a reload until the sale is finished or cleared.
     const CART_KEY = `pos.cart.${user?.id ?? 0}`;
