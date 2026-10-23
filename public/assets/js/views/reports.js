@@ -10,6 +10,7 @@ const TYPES = [
     { key: 'store_sales', label: 'ยอดขาย/กำไรสินค้าของร้าน' },
     { key: 'store_stock', label: 'สต๊อกสินค้าของร้าน' },
     { key: 'purchases', label: 'รายการซื้อเข้าร้าน' },
+    { key: 'wages', label: 'ค่าแรงพนักงาน' },
     { key: 'after_hours', label: 'ขายนอกเวลาทำการ' },
 ];
 const RANGES = [

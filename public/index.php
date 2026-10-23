@@ -6,6 +6,7 @@ use App\Controllers\AiController;
 use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
 use App\Controllers\DrawerController;
+use App\Controllers\WageController;
 use App\Controllers\AttachmentController;
 use App\Controllers\AuditController;
 use App\Controllers\AuthController;
@@ -158,6 +159,13 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('drawer.manage'));
     $group->get('/drawer/behavior', [DrawerController::class, 'behavior'])
         ->add(new RoleGuard('drawer.manage'));
+
+    $group->get('/wages', [WageController::class, 'index'])
+        ->add(new RoleGuard('wages.manage'));
+    $group->post('/wages', [WageController::class, 'store'])
+        ->add(new RoleGuard('wages.manage'));
+    $group->post('/wages/{id:[0-9]+}/cancel', [WageController::class, 'cancel'])
+        ->add(new RoleGuard('wages.manage'));
 
     $group->get('/pos-import', [PosImportController::class, 'index'])
         ->add(new RoleGuard('sales.import'));

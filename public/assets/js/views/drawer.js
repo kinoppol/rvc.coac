@@ -6,6 +6,7 @@ const METHODS = { cash: 'เงินสด', transfer: 'โอนเงิน�
 const EVENT_LABEL = {
     open: ['ระบุเงินในลิ้นชักก่อนขาย', 'ok'], open_late: ['ระบุเงินในลิ้นชักหลังเริ่มขาย', 'warn'], skip: ['ข้ามการระบุเงินในลิ้นชัก', 'warn'],
     close: ['ปิดยอด', 'ok'], recount: ['นับเงินปิดยอดใหม่', 'muted'], adjust_open: ['แก้เงินตั้งต้น', 'muted'], payment_edit: ['แก้วิธีชำระเงิน', 'muted'],
+    wage_out: ['จ่ายค่าแรงจากลิ้นชัก', 'muted'], wage_cancel: ['ยกเลิกจ่ายค่าแรง', 'muted'],
 };
 
 /**
@@ -52,7 +53,7 @@ export async function render(container, { params = {} } = {}) {
           <div class="kpi"><div class="lbl">เงินสดจากการขาย</div><div class="val">฿ ${money(d.cash_sales)}</div>
             <div class="sub">รับเงินสดสุทธิหลังทอนเงิน</div></div>
           <div class="kpi"><div class="lbl">เงินสดที่ควรมีในลิ้นชัก</div><div class="val">${d.expected_cash !== null ? `฿ ${money(d.expected_cash)}` : '—'}</div>
-            <div class="sub">เงินตั้งต้น + เงินสดจากการขาย</div></div>
+            <div class="sub">เงินตั้งต้น + เงินสดจากการขาย${d.cash_out ? ` − จ่ายค่าแรงจากลิ้นชัก ฿${money(d.cash_out)}` : ''}</div></div>
           <div class="kpi"><div class="lbl">ปิดยอด</div>
             ${closed ? `<div class="val">฿ ${money(dr.counted_cash)}</div>
               <div class="sub">${diffHtml(Number(dr.counted_cash) - Number(d.expected_cash))}<br>${escapeHtml(dr.closed_by_name || '-')} · ${escapeHtml(fmtDateTime(dr.closed_at))}

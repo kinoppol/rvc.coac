@@ -11,7 +11,7 @@ const ROUTE_PERMS = {
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
-    posimport: 'sales.import', drawer: 'sales.create',
+    posimport: 'sales.import', drawer: 'sales.create', wages: 'wages.manage',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 

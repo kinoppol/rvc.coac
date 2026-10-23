@@ -105,8 +105,9 @@ class InventoryService
             'qty_sold' => (int) $sales['qty'],
             'purchase_stock_cost' => round((float) $bought['stock_cost'], 2),
             'supply_cost' => round((float) $bought['supply_cost'], 2),
+            'wage_cost' => $wages = (new WageService($this->db, new AuditLogger($this->db), new DocumentNumberService($this->db)))->total(),
             // Profit after expenses bought for use in the business (bags, straws, ...).
-            'net_profit' => round($grossProfit - (float) $bought['supply_cost'], 2),
+            'net_profit' => round($grossProfit - (float) $bought['supply_cost'] - $wages, 2),
         ];
     }
 }

@@ -96,7 +96,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="kpi"><div class="lbl">ยอดขายสะสม</div><div class="val">฿ ${money(s.sales_total)}</div>
             <div class="sub">${count(s.qty_sold)} ชิ้น · ต้นทุนขาย ฿ ${money(s.cogs_total)}</div></div>
           <div class="kpi"><div class="lbl">กำไรขั้นต้น</div><div class="val">฿ ${money(s.gross_profit)}</div>
-            <div class="sub">หักค่าวัสดุใช้ในร้าน ฿ ${money(s.supply_cost)} = กำไรสุทธิ ฿ ${money(s.net_profit)}</div></div>
+            <div class="sub">หักค่าวัสดุใช้ในร้าน ฿ ${money(s.supply_cost)}${s.wage_cost ? ` · ค่าแรง ฿ ${money(s.wage_cost)}` : ''} = กำไรสุทธิ ฿ ${money(s.net_profit)}</div></div>
         </div>
         <section class="card card-pad">
           <div class="actions-row" style="justify-content:space-between">

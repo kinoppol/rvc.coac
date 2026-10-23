@@ -293,6 +293,57 @@ export function printPassbook(consignor, entries, balance) {
     printHtml(html);
 }
 
+/** Prints a wage voucher (ใบสำคัญจ่ายค่าแรง) for the employee to sign for the money. */
+export function printWageSlip(w, types = {}, methods = {}) {
+    const unit = { day: 'วัน', hour: 'ชั่วโมง' }[w.wage_type] || '';
+    const period = w.period_from ? `${fmtDate(w.period_from)}${w.period_to && w.period_to !== w.period_from ? ` – ${fmtDate(w.period_to)}` : ''}` : '-';
+    const detail = w.units !== null && w.rate !== null ? `${Number(w.units)} ${unit} × ${money(w.rate)} บาท` : (types[w.wage_type] || '');
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>ใบสำคัญจ่ายค่าแรง ${escapeHtml(w.doc_no)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A5 landscape; margin: 10mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Sarabun', 'Tahoma', sans-serif; color: #111; background: #fff; font-size: 14px; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: #444; font-size: 13px; }
+  .meta { text-align: right; font-size: 13px; line-height: 1.6; }
+  .void { border: 2px solid #b00; color: #b00; padding: 4px 10px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #999; padding: 6px 8px; vertical-align: top; text-align: left; }
+  th { background: #eee; width: 30%; font-weight: 600; }
+  .amount { font-size: 20px; font-weight: 700; }
+  .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 40px; text-align: center; }
+  .sign .line { border-top: 1px dotted #111; margin: 0 20px 4px; padding-top: 4px; }
+  .foot { margin-top: 14px; font-size: 11px; color: #777; text-align: right; }
+</style></head><body>
+  <div class="head">
+    <div><h1>ใบสำคัญจ่ายค่าแรง</h1><div class="sub">ร้านค้าสหการ</div></div>
+    <div class="meta">เลขที่ <b>${escapeHtml(w.doc_no)}</b><br>วันที่จ่าย ${escapeHtml(fmtDate(w.pay_date))}</div>
+  </div>
+  ${w.cancelled_at ? `<div class="void"><b>ยกเลิกแล้ว</b> · เหตุผล: ${escapeHtml(w.cancel_reason || '-')}</div>` : ''}
+  <table>
+    <tr><th>ผู้รับเงิน</th><td>${escapeHtml(w.employee_name || '-')}</td></tr>
+    <tr><th>ช่วงวันที่ทำงาน</th><td>${escapeHtml(period)}</td></tr>
+    <tr><th>รายละเอียด</th><td>ค่าแรง${escapeHtml(types[w.wage_type] || '')} · ${escapeHtml(detail)}${w.note ? `<br>${escapeHtml(w.note)}` : ''}</td></tr>
+    <tr><th>วิธีจ่าย</th><td>${escapeHtml(methods[w.method] || w.method)}${w.drawer_date ? ' (จากเงินในลิ้นชัก)' : ''}</td></tr>
+    <tr><th>จำนวนเงิน</th><td class="amount">฿ ${money(w.amount)}</td></tr>
+  </table>
+  <div class="sign">
+    <div><div class="line">(${escapeHtml(w.employee_name || '.................................................')})</div>ผู้รับเงิน</div>
+    <div><div class="line">(${escapeHtml(w.created_by_name || '.................................................')})</div>ผู้จ่ายเงิน</div>
+  </div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
+</body></html>`;
+
+    printHtml(html);
+}
+
 /** Prints a standalone HTML document through a hidden iframe (no pop-up window to block). */
 function printHtml(html) {
     const frame = document.createElement('iframe');

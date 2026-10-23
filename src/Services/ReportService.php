@@ -166,6 +166,26 @@ class ReportService
         return $stmt->fetchAll();
     }
 
+    /** Wages paid to staff in a period (business expense); cancelled payments are left out. */
+    public function wages(string $from, string $to): array
+    {
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT w.pay_date AS date, w.doc_no, u.full_name AS employee,
+                        CASE w.wage_type WHEN 'day' THEN 'รายวัน' WHEN 'hour' THEN 'รายชั่วโมง' ELSE 'เหมาจ่าย' END AS type,
+                        CONCAT_WS(' – ', w.period_from, w.period_to) AS period, w.units, w.rate AS rate_price,
+                        w.amount AS wage_cost, IF(w.method = 'cash', IF(w.drawer_date IS NULL, 'เงินสด', 'เงินสดจากลิ้นชัก'), 'โอนเงิน') AS method, w.note
+                 FROM wage_payments w LEFT JOIN users u ON u.id = w.user_id
+                 WHERE w.cancelled_at IS NULL AND w.pay_date BETWEEN ? AND ?
+                 ORDER BY w.pay_date ASC, w.id ASC"
+            );
+            $stmt->execute([$from, $to]);
+            return $stmt->fetchAll();
+        } catch (\PDOException $e) {
+            return []; // migration 0034 not run yet
+        }
+    }
+
     /** Writes a UTF-8(BOM) CSV that Excel opens directly, for the "ส่งออก Excel" buttons. */
     public function toCsv(array $rows, array $headers): string
     {

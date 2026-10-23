@@ -168,7 +168,7 @@ class CashDrawerService
         if ($counted < 0) {
             throw new \RuntimeException('จำนวนเงินต้องไม่ติดลบ');
         }
-        $expected = round((float) $drawer['opening_cash'] + $this->cashSales($date), 2);
+        $expected = round((float) $drawer['opening_cash'] + $this->cashSales($date) - WageService::drawerOut($this->db, $date), 2);
         $diff = round($counted - $expected, 2);
         $note = $note !== null ? mb_substr(trim($note), 0, 500) : null;
         $this->db->prepare(
@@ -284,11 +284,13 @@ class CashDrawerService
         $other = $stmt->fetch();
 
         $cashSales = $this->cashSales($date);
+        $cashOut = WageService::drawerOut($this->db, $date);
         $out = [
             'date' => $date,
             'drawer' => $drawer,
             'cash_sales' => $cashSales,
-            'expected_cash' => $drawer ? round((float) $drawer['opening_cash'] + $cashSales, 2) : null,
+            'cash_out' => $cashOut, // wages paid out of the drawer
+            'expected_cash' => $drawer ? round((float) $drawer['opening_cash'] + $cashSales - $cashOut, 2) : null,
             'methods' => $methods,
             'unknown' => ['sales' => (int) $other['n'], 'amount' => round((float) $other['amount'], 2)],
             'total' => ['sales' => (int) $other['all_sales'], 'amount' => round((float) $other['all_amount'], 2)],
@@ -370,12 +372,12 @@ class CashDrawerService
     }
 
     /** Keeps a closed day's expected cash and difference in step after a correction. */
-    private function refreshClose(string $date): void
+    public function refreshClose(string $date): void
     {
         $this->db->prepare(
             'UPDATE cash_drawers SET expected_cash = ROUND(opening_cash + ?, 2), cash_diff = ROUND(counted_cash - opening_cash - ?, 2)
              WHERE business_date = ? AND closed_at IS NOT NULL'
-        )->execute([$this->cashSales($date), $this->cashSales($date), $date]);
+        )->execute([$net = round($this->cashSales($date) - WageService::drawerOut($this->db, $date), 2), $net, $date]);
     }
 
     private function event(string $date, int $userId, string $event, ?float $amount, ?string $detail, ?int $subject = null): void
