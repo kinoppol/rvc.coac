@@ -196,6 +196,103 @@ export function printPurchaseDoc(d) {
     printHtml(html);
 }
 
+const LEDGER_CODE = { open: 'ยกมา', sale: 'ขาย', fee: 'ค่าฝาก', listing_fee: 'ค่าทำข้อมูล', listing_fee_refund: 'คืนค่าข้อมูล', withdrawal: 'เบิกเงิน' };
+
+/** dd/mm/yy in the Buddhist year, like a bank passbook line. */
+function shortDate(s) {
+    const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${String(Number(m[1]) + 543).slice(-2)}` : '';
+}
+
+/**
+ * Prints a consignor's ledger as a bank-style passbook (สมุดคู่ฝาก): account box on top,
+ * then one compact numbered line per entry — date, code, withdrawal, deposit, balance.
+ */
+export function printPassbook(consignor, entries, balance) {
+    const totalIn = entries.reduce((s, e) => s + Number(e.amount_in), 0);
+    const totalOut = entries.reduce((s, e) => s + Number(e.amount_out), 0);
+    const amt = (v) => (Number(v) ? money(v) : '');
+
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>สมุดคู่ฝาก ${escapeHtml(consignor.code)} ${escapeHtml(consignor.name)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4; margin: 12mm 12mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Sarabun', 'Tahoma', sans-serif; color: #111; background: #fff; font-size: 13px; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .book { border: 2px solid #1d3f8f; border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+  .book-head { background: #1d3f8f; color: #fff; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .book-head h1 { font-size: 19px; margin: 0; letter-spacing: .5px; }
+  .book-head span { font-size: 12px; opacity: .9; }
+  .acct { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 6px 18px; padding: 10px 14px; }
+  .acct small { display: block; color: #666; font-size: 11px; }
+  .acct b { font-size: 15px; }
+  .acct .no { font-family: ui-monospace, 'Consolas', monospace; font-size: 17px; letter-spacing: 1px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  thead th { border-top: 2px solid #1d3f8f; border-bottom: 2px solid #1d3f8f; padding: 6px 6px; font-size: 12px; font-weight: 700; color: #1d3f8f; }
+  td { padding: 5px 6px; border-bottom: 1px dotted #9aa6c4; white-space: nowrap; vertical-align: top; }
+  tbody tr:nth-child(even) td { background: #f3f6fc; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  tr { page-break-inside: avoid; }
+  .n { text-align: right; color: #666; width: 30px; }
+  .d { width: 72px; font-family: ui-monospace, 'Consolas', monospace; }
+  .code { width: 82px; font-weight: 600; }
+  .desc { white-space: normal; color: #444; font-size: 11.5px; }
+  .ref { font-family: ui-monospace, 'Consolas', monospace; font-size: 10.5px; color: #777; }
+  .num { text-align: right; width: 92px; font-family: ui-monospace, 'Consolas', monospace; font-size: 13px; }
+  .out { color: #b42318; }
+  .bal { font-weight: 700; }
+  tfoot td { border-top: 2px solid #1d3f8f; border-bottom: 0; font-weight: 700; padding-top: 7px; background: none; }
+  .legend { margin-top: 10px; font-size: 11px; color: #666; }
+  .foot { margin-top: 18px; display: flex; justify-content: space-between; font-size: 11px; color: #777; }
+  .sign { margin-top: 36px; width: 260px; margin-left: auto; text-align: center; font-size: 12.5px; }
+  .sign .line { border-top: 1px dotted #111; padding-top: 4px; }
+</style></head><body>
+  <div class="book">
+    <div class="book-head"><h1>สมุดคู่ฝาก · ร้านค้าสหการ</h1><span>ระบบฝากขายสินค้า</span></div>
+    <div class="acct">
+      <div><small>ชื่อบัญชี</small><b>${escapeHtml(consignor.name)}</b></div>
+      <div><small>เลขที่บัญชี (รหัสผู้ฝาก)</small><span class="no">${escapeHtml(consignor.code)}</span></div>
+      <div><small>ยอดคงเหลือที่เบิกได้</small><b>฿ ${money(balance)}</b></div>
+      <div><small>ประเภท</small>${escapeHtml(consignor.type || '-')}</div>
+      <div><small>ช่องทางรับเงิน</small>${escapeHtml(consignor.pay_channel || '-')}</div>
+      <div><small>ข้อมูล ณ วันที่</small>${escapeHtml(fmtNow({ dateStyle: 'medium' }))}</div>
+    </div>
+  </div>
+  <table>
+    <thead><tr>
+      <th class="n">ที่</th><th class="d" style="text-align:left">วันที่</th><th class="code" style="text-align:left">รายการ</th>
+      <th style="text-align:left">รายละเอียด</th>
+      <th class="num">ถอน / จ่าย</th><th class="num">ฝาก / รับ</th><th class="num">คงเหลือ</th>
+    </tr></thead>
+    <tbody>${entries.map((e, i) => `
+      <tr>
+        <td class="n">${i + 1}</td>
+        <td class="d">${shortDate(e.entry_date || e.created_at)}</td>
+        <td class="code">${escapeHtml(LEDGER_CODE[e.type] || e.type)}</td>
+        <td class="desc">${escapeHtml(e.description)}<div class="ref">${escapeHtml(e.ref_no)}</div></td>
+        <td class="num out">${amt(e.amount_out)}</td>
+        <td class="num">${amt(e.amount_in)}</td>
+        <td class="num bal">${money(e.balance_after)}</td>
+      </tr>`).join('')}
+    </tbody>
+    <tfoot><tr>
+      <td colspan="4">รวม ${entries.length} รายการ</td>
+      <td class="num out">${money(totalOut)}</td><td class="num">${money(totalIn)}</td><td class="num">${money(balance)}</td>
+    </tr></tfoot>
+  </table>
+  <div class="legend">ขาย = รายรับจากสินค้าที่ขายได้ · ค่าฝาก = ค่าฝากขายที่ร้านหัก · ค่าทำข้อมูล / คืนค่าข้อมูล = ค่าทำข้อมูลสินค้าใหม่และการคืนเมื่อขายได้ตามเกณฑ์ · เบิกเงิน = รับเงินออกจากบัญชี</div>
+  <div class="sign"><div class="line">(.................................................)</div>เจ้าหน้าที่ร้าน</div>
+  <div class="foot"><span>${escapeHtml(consignor.code)} · ${escapeHtml(consignor.name)}</span><span>พิมพ์เมื่อ ${escapeHtml(fmtNow())}</span></div>
+</body></html>`;
+
+    printHtml(html);
+}
+
 /** Prints a standalone HTML document through a hidden iframe (no pop-up window to block). */
 function printHtml(html) {
     const frame = document.createElement('iframe');

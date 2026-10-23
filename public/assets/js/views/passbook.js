@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
+import { printPassbook } from '../print-slip.js';
 
 export async function render(container, { params, user }) {
     const options = (await api.get('/consignors/options')).data;
@@ -120,7 +121,7 @@ export async function render(container, { params, user }) {
             <div style="width:140px;height:140px;margin:16px auto;background:var(--surface2);border:1px dashed var(--border);border-radius:12px;display:grid;place-items:center;color:var(--muted);font-size:12px">
               QR<br>สแกนดูยอดเอง
             </div>
-            <button type="button" class="btn secondary" onclick="window.print()">พิมพ์สมุดคู่ฝาก</button>
+            <button type="button" class="btn secondary" id="btn-print">พิมพ์สมุดคู่ฝาก</button>
             ${checkHtml()}
           </section>
         </div>`;
@@ -130,6 +131,7 @@ export async function render(container, { params, user }) {
             check = null;
             load();
         });
+        container.querySelector('#btn-print').addEventListener('click', () => printPassbook(consignor, entries, balance));
         container.querySelector('#btn-check')?.addEventListener('click', runCheck);
         container.querySelector('#btn-claim')?.addEventListener('click', claim);
     }

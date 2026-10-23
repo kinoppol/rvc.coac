@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
+import { printPassbook } from '../print-slip.js';
 
 /** Consignor view: the signed-in person's own passbook (read-only). */
 export async function render(container) {
@@ -40,7 +41,8 @@ export async function render(container) {
         <div class="muted" style="font-size:12.5px">ยอดคงเหลือที่เบิกได้</div>
         <div style="font-size:30px;font-weight:700;margin:8px 0">฿ ${money(balance)}</div>
         <div class="muted" style="font-size:12.5px;margin-bottom:14px">ติดต่อเบิกเงินได้ที่ร้านค้าสหการ</div>
-        <button type="button" class="btn secondary" onclick="window.print()">พิมพ์สมุดคู่ฝาก</button>
+        <button type="button" class="btn secondary" id="btn-print">พิมพ์สมุดคู่ฝาก</button>
       </section>
     </div>`;
+    container.querySelector('#btn-print').addEventListener('click', () => printPassbook(consignor, entries, balance));
 }
