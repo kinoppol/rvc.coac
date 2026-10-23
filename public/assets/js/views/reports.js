@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { printReport } from '../print-slip.js';
+import { openDetailModal } from '../detail-modal.js';
 
 // Reports grouped by the part of the system they cover.
 const GROUPS = [
@@ -31,6 +32,7 @@ const GROUPS = [
         { key: 'purchases', label: 'รายการซื้อเข้าร้าน' },
         { key: 'wages', label: 'ค่าแรงพนักงาน' },
         { key: 'stock_counts', label: 'ผลการตรวจนับสต๊อก' },
+        { key: 'capital', label: 'งบลงทุน (เงินที่ลงทุนในกิจการ)' },
     ]},
 ];
 const TYPES = GROUPS.flatMap((g) => g.types);
@@ -46,9 +48,9 @@ const PREF = 'reports.view';
 // prices and rates.
 const isMoney = (k) => /value|fee|revenue|received|sales|cost|profit|price|income|cash|transfer|qr|card|unknown_method|diff|paid|balance/.test(k) && !/count|items|bills|cashier/.test(k);
 const isCount = (k) => /qty|count|stock$|bills|items|units/.test(k);
-const NO_TOTAL = /price|rate|unit_cost/;
+const NO_TOTAL = /price|rate|unit_cost|capital_balance/;
 
-export async function render(container, { permissions }) {
+export async function render(container, { permissions, navigate }) {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(PREF) || '{}'); } catch (e) { /* private mode */ }
     let type = TYPES.some((t) => t.key === saved.type) ? saved.type : 'statement';
@@ -129,6 +131,9 @@ export async function render(container, { permissions }) {
         container.querySelector('#f-to')?.addEventListener('change', (e) => { to = e.target.value; range = 'custom'; load(); });
         container.querySelector('#sel-consignor')?.addEventListener('change', (e) => { consignorId = Number(e.target.value); load(); });
         container.querySelector('#btn-print').addEventListener('click', print);
+        container.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => {
+            openDetailModal(async () => (await api.get(`/reports/statement/source?line=${encodeURIComponent(b.dataset.src)}&${query()}`)).data, navigate);
+        }));
     }
 
     /** Prints just the report (not the menus and buttons) on its own page. */
@@ -164,7 +169,7 @@ export async function render(container, { permissions }) {
         const body = rows.map((r) => {
             const total = /^รวม|กำไร/.test(r.item);
             const info = r.section === 'ข้อมูลประกอบ';
-            const head = r.section !== section ? `<tr><td colspan="4" style="padding-top:16px;font-weight:700;border-top:${section ? '1px solid var(--border)' : '0'}">${escapeHtml(r.section)}</td></tr>` : '';
+            const head = r.section !== section ? `<tr><td colspan="5" style="padding-top:16px;font-weight:700;border-top:${section ? '1px solid var(--border)' : '0'}">${escapeHtml(r.section)}</td></tr>` : '';
             section = r.section;
             const fmt = (v) => (r.item === 'จำนวนบิลขาย' ? count(v) : amount(v, total));
             const profitRow = r.section === 'ผลประกอบการ';
@@ -172,11 +177,12 @@ export async function render(container, { permissions }) {
               <td style="padding-left:${total ? 14 : 30}px;${total ? 'font-weight:700' : ''}">${escapeHtml(r.item)}</td>
               <td class="num" style="${total ? 'border-top:1px solid var(--text)' : ''}${profitRow ? ';border-bottom:3px double var(--text)' : ''}">${fmt(r.amount)}</td>
               <td class="num muted">${fmt(r.prev_amount)}</td>
-              <td class="num">${info ? '' : change(r)}</td></tr>`;
+              <td class="num">${info ? '' : change(r)}</td>
+              <td class="st-note">${escapeHtml(r.note || '')}${r.key ? ` <button type="button" class="link-btn" data-src="${escapeHtml(r.key)}">ดูที่มา ›</button>` : ''}</td></tr>`;
         }).join('');
-        return `<div class="table-wrap"><table style="max-width:920px">
+        return `<div class="table-wrap"><table>
           <thead><tr><th>รายการ</th><th class="num">${escapeHtml(fmtDate(from))}${from !== to ? ` – ${escapeHtml(fmtDate(to))}` : ''} (บาท)</th>
-            <th class="num">ช่วงก่อนหน้า ${escapeHtml(fmtDate(prev[0]))}${prev[0] !== prev[1] ? ` – ${escapeHtml(fmtDate(prev[1]))}` : ''}</th><th class="num">เปลี่ยนแปลง</th></tr></thead>
+            <th class="num">ช่วงก่อนหน้า ${escapeHtml(fmtDate(prev[0]))}${prev[0] !== prev[1] ? ` – ${escapeHtml(fmtDate(prev[1]))}` : ''}</th><th class="num">เปลี่ยนแปลง</th><th>คำอธิบาย / ที่มา</th></tr></thead>
           <tbody>${body}</tbody>
         </table></div>
         <div class="muted report-note" style="font-size:12px;padding:10px 16px">รายได้ของร้านจากสินค้าฝากขายคือค่าฝากขายและค่าทำข้อมูลเท่านั้น ยอดขายสินค้าฝากขายส่วนที่เหลือเป็นเงินของผู้ฝาก ·

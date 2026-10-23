@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Controllers\AiController;
 use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
+use App\Controllers\CapitalController;
 use App\Controllers\DrawerController;
 use App\Controllers\WageController;
 use App\Controllers\AttachmentController;
@@ -222,6 +223,15 @@ $app->group('/api', function ($group) {
     $group->post('/stockcounts/{id}/approve', [StockCountController::class, 'approve'])
         ->add(new RoleGuard('stockcount.approve'));
 
+    $group->get('/capital', [CapitalController::class, 'index'])
+        ->add(new RoleGuard('capital.manage'));
+    $group->post('/capital', [CapitalController::class, 'store'])
+        ->add(new RoleGuard('capital.manage'));
+    $group->post('/capital/{id:[0-9]+}/cancel', [CapitalController::class, 'cancel'])
+        ->add(new RoleGuard('capital.manage'));
+
+    $group->get('/reports/statement/source', [ReportsController::class, 'statementSource'])
+        ->add(new RoleGuard('reports.view'));
     $group->get('/reports/{type}', [ReportsController::class, 'show'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/reports/{type}/export', [ReportsController::class, 'export'])

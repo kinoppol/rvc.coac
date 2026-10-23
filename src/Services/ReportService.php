@@ -32,7 +32,8 @@ class ReportService
         'expected_cash' => 'เงินที่ควรมี', 'counted_cash' => 'นับได้ตอนปิด', 'cash_diff' => 'ขาด(−)/เกิน(+)', 'open_status' => 'ระบุเงินตั้งต้น',
         'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
         'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
-        'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า',
+        'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า', 'note' => 'หมายเหตุ / คำอธิบาย', 'investor' => 'ผู้ลงทุน / แหล่งเงินทุน', 'invested' => 'ลงทุนเพิ่ม',
+        'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'เงินลงทุนคงเหลือ',
     ];
 
     public function __construct(private PDO $db)
@@ -327,34 +328,183 @@ class ReportService
         $prev = $sum($prevFrom, $prevTo);
 
         $rows = [];
-        $line = function (string $section, string $item, callable $value) use (&$rows, $now, $prev): void {
-            $a = round($value($now), 2);
-            $b = round($value($prev), 2);
+        $line = function (string $section, string $item, callable $value, string $key = '') use (&$rows, $now, $prev): void {
+            $a = round($value($now, true), 2);
+            $b = round($value($prev, false), 2);
             $rows[] = [
                 'section' => $section, 'item' => $item, 'amount' => $a, 'prev_amount' => $b,
                 'change_percent' => $b != 0.0 ? round(($a - $b) / abs($b) * 100, 1) : null,
+                'note' => $this->statementNote($key ?: $item),
+                'key' => $key, // statementSource() lists the records behind this line
             ];
         };
         $v = fn (string $k) => fn (array $s) => (float) ($s[$k] ?? 0);
         $income = fn (array $s) => (float) ($s['consign_fee'] ?? 0) + (float) ($s['listing_fee_net'] ?? 0) + (float) ($s['store_sales'] ?? 0);
         $expense = fn (array $s) => (float) ($s['store_cost'] ?? 0) + (float) ($s['supply_cost'] ?? 0) + (float) ($s['wage_cost'] ?? 0);
 
-        $line('รายได้', 'ค่าฝากขายสินค้า', $v('consign_fee'));
-        $line('รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $v('listing_fee_net'));
-        $line('รายได้', 'ยอดขายสินค้าของร้าน', $v('store_sales'));
+        $line('รายได้', 'ค่าฝากขายสินค้า', $v('consign_fee'), 'consign_fee');
+        $line('รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $v('listing_fee_net'), 'listing_fee');
+        $line('รายได้', 'ยอดขายสินค้าของร้าน', $v('store_sales'), 'store_sales');
         $line('รายได้', 'รวมรายได้', $income);
-        $line('รายจ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $v('store_cost'));
-        $line('รายจ่าย', 'ค่าวัสดุใช้ในร้าน', $v('supply_cost'));
-        $line('รายจ่าย', 'ค่าแรงพนักงาน', $v('wage_cost'));
+        $line('รายจ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $v('store_cost'), 'store_cost');
+        $line('รายจ่าย', 'ค่าวัสดุใช้ในร้าน', $v('supply_cost'), 'supply');
+        $line('รายจ่าย', 'ค่าแรงพนักงาน', $v('wage_cost'), 'wages');
         $line('รายจ่าย', 'รวมรายจ่าย', $expense);
         $line('ผลประกอบการ', 'กำไร (ขาดทุน) สุทธิ', fn (array $s) => $income($s) - $expense($s));
-        $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'));
-        $line('ข้อมูลประกอบ', 'ยอดขายสินค้าฝากขาย (เงินของผู้ฝาก หักค่าฝากแล้วจ่ายคืน)', $v('consign_sales'));
-        $line('ข้อมูลประกอบ', 'จำนวนบิลขาย', $v('bills'));
+        $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'), 'total_sales');
+        $line('ข้อมูลประกอบ', 'ยอดขายสินค้าฝากขาย (เงินของผู้ฝาก หักค่าฝากแล้วจ่ายคืน)', $v('consign_sales'), 'consign_sales');
+        $line('ข้อมูลประกอบ', 'จำนวนบิลขาย', $v('bills'), 'bills');
+        // Capital is not income: shown for reference, with the profit it earned.
+        $capital = new CapitalService($this->db, new AuditLogger($this->db), new DocumentNumberService($this->db));
+        try {
+            $capNow = $capital->balance($to);
+            $capPrev = $capital->balance($prevTo);
+        } catch (\PDOException $e) {
+            $capNow = $capPrev = 0.0; // migration 0035 not run yet
+        }
+        if ($capNow != 0.0 || $capPrev != 0.0) {
+            $line('ข้อมูลประกอบ', 'เงินลงทุนในกิจการ ณ สิ้นช่วง', fn (array $s, bool $isNow) => $isNow ? $capNow : $capPrev, 'capital');
+            $line('ข้อมูลประกอบ', 'กำไรต่อเงินลงทุน (%)', fn (array $s, bool $isNow) => ($cap = $isNow ? $capNow : $capPrev) > 0 ? ($income($s) - $expense($s)) / $cap * 100 : 0);
+        }
         foreach ($rows as &$r) {
             $r['prev_period'] = "{$prevFrom} – {$prevTo}";
         }
         return $rows;
+    }
+
+    /**
+     * รายงานงบลงทุน: capital put into and taken out of the business in a period, with
+     * the balance brought forward and a running balance after each entry.
+     */
+    public function capital(string $from, string $to): array
+    {
+        try {
+            $opening = $this->db->prepare(
+                "SELECT COALESCE(SUM(CASE WHEN type = 'invest' THEN amount ELSE -amount END), 0)
+                 FROM capital_entries WHERE cancelled_at IS NULL AND entry_date < ?"
+            );
+            $opening->execute([$from]);
+            $balance = round((float) $opening->fetchColumn(), 2);
+            $stmt = $this->db->prepare(
+                "SELECT entry_date AS date, doc_no, IF(type = 'invest', 'ลงทุนเพิ่ม', 'ถอนทุนคืน') AS type, investor,
+                        IF(method = 'cash', 'เงินสด', 'โอนเงิน') AS method,
+                        IF(type = 'invest', amount, 0) AS invested, IF(type = 'withdraw', amount, 0) AS withdrawn, note
+                 FROM capital_entries WHERE cancelled_at IS NULL AND entry_date BETWEEN ? AND ?
+                 ORDER BY entry_date, id"
+            );
+            $stmt->execute([$from, $to]);
+            $rows = [['date' => null, 'doc_no' => '', 'type' => 'ยอดยกมา', 'investor' => '', 'method' => '', 'invested' => null, 'withdrawn' => null, 'note' => null, 'capital_balance' => $balance]];
+            foreach ($stmt->fetchAll() as $r) {
+                $balance = round($balance + (float) $r['invested'] - (float) $r['withdrawn'], 2);
+                $rows[] = $r + ['capital_balance' => $balance];
+            }
+            return $rows;
+        } catch (\PDOException $e) {
+            return []; // migration 0035 not run yet
+        }
+    }
+
+    /** What a statement line means, in plain words; total lines say how they add up. */
+    private function statementNote(string $key): string
+    {
+        $settings = new SettingsService($this->db);
+        return match ($key) {
+            'consign_fee' => 'ส่วนที่ร้านหักไว้จากสินค้าฝากขายทุกชิ้นที่ขายได้ (ราคาขาย − ราคาที่ผู้ฝากได้) เป็นรายได้ของร้าน',
+            'listing_fee' => 'ค่าทำข้อมูลสินค้าที่เก็บจากผู้ฝากตอนรับฝากสินค้ารายการใหม่ ('
+                . number_format((float) ($settings->get('listing_fee') ?? 5), 2) . ' บาท/รายการ ผู้ฝากแต่ละรายฟรี '
+                . (int) ($settings->get('free_listings') ?? 5) . ' รายการแรก) หักด้วยเงินที่คืนให้ผู้ฝากเมื่อสินค้ารายการนั้นขายได้เกิน '
+                . (int) ($settings->get('waive_qty') ?? 20) . ' ชิ้น',
+            'store_sales' => 'ยอดขายสินค้าที่ร้านซื้อมาขายเอง (ไม่รวมสินค้าฝากขาย)',
+            'store_cost' => 'ต้นทุนของสินค้าของร้านเฉพาะชิ้นที่ขายออกไปในช่วงนี้ (ทุนเฉลี่ย ณ ตอนขาย)',
+            'supply' => 'ของที่ซื้อมาใช้ในร้าน ไม่ได้ซื้อมาขาย เช่น ถุง หลอด นับตามวันที่ในใบเสร็จ',
+            'wages' => 'ค่าแรงที่จ่ายให้พนักงานและผู้จัดการ นับตามวันที่จ่าย (ไม่รวมรายการที่ยกเลิก)',
+            'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
+            'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
+            'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
+            'capital' => 'เงินที่ใส่เข้ามาลงทุนในกิจการสะสม หักที่ถอนคืนแล้ว ไม่ใช่รายได้ จึงไม่นับในกำไร',
+            'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
+            'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน',
+            'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน',
+            'กำไร (ขาดทุน) สุทธิ' => 'รวมรายได้ − รวมรายจ่าย',
+            default => '',
+        };
+    }
+
+    /**
+     * The records behind one ผลประกอบการ line for the period, as tables for a detail
+     * dialog (same shape as DashboardService::detail).
+     */
+    public function statementSource(string $key, string $from, string $to): array
+    {
+        $q = function (string $sql, array $params): array {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll();
+        };
+        $section = fn (string $title, array $columns, array $rows) => ['title' => $title, 'columns' => $columns, 'rows' => $rows];
+        $p = [$from, $to];
+        $byProduct = fn (string $where) => $q(
+            "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, SUM(si.qty) AS qty,
+                    SUM(si.qty * si.unit_price) AS sales, SUM(si.fee_amount) AS fee, SUM(si.cost_amount) AS cost
+             FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
+             LEFT JOIN consignors c ON c.id = si.consignor_id
+             WHERE {$where} AND s.business_date BETWEEN ? AND ?
+             GROUP BY p.id, p.name, c.name ORDER BY sales DESC",
+            $p
+        );
+        $byConsignor = fn () => $q(
+            'SELECT c.name AS consignor, SUM(si.qty) AS qty, SUM(si.qty * si.unit_price) AS sales, SUM(si.fee_amount) AS fee, SUM(si.cost_amount) AS cost
+             FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN consignors c ON c.id = si.consignor_id
+             WHERE s.business_date BETWEEN ? AND ? GROUP BY c.id, c.name ORDER BY sales DESC',
+            $p
+        );
+        [$title, $sections, $link] = match ($key) {
+            'consign_fee' => ['ค่าฝากขายสินค้า', [
+                $section('แยกตามผู้ฝาก', [['consignor', 'ผู้ฝาก', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย', 'money']], $byConsignor()),
+                $section('แยกตามสินค้า', [['product', 'สินค้า', 'text'], ['owner', 'ผู้ฝาก', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย', 'money']], $byProduct('si.consignor_id IS NOT NULL')),
+            ], 'passbook'],
+            'listing_fee' => ['ค่าทำข้อมูลสินค้า', [
+                $section('รายการในสมุดบัญชีผู้ฝาก', [['date', 'วันที่', 'date'], ['ref_no', 'เลขอ้างอิง', 'text'], ['consignor', 'ผู้ฝาก', 'text'], ['description', 'รายการ', 'text'], ['charged', 'เก็บ', 'money'], ['refunded', 'คืน', 'money']], $q(
+                    "SELECT l.entry_date AS date, l.ref_no, c.name AS consignor, l.description,
+                            IF(l.type = 'listing_fee', l.amount_out, 0) AS charged, IF(l.type = 'listing_fee_refund', l.amount_in, 0) AS refunded
+                     FROM ledger_entries l JOIN consignors c ON c.id = l.consignor_id
+                     WHERE l.type IN ('listing_fee', 'listing_fee_refund') AND l.entry_date BETWEEN ? AND ? ORDER BY l.entry_date, l.id",
+                    $p
+                )),
+            ], 'receive'],
+            'store_sales', 'store_cost' => [$key === 'store_sales' ? 'ยอดขายสินค้าของร้าน' : 'ต้นทุนสินค้าของร้านที่ขายไป', [
+                $section('แยกตามสินค้า', [['product', 'สินค้า', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['cost', 'ต้นทุน', 'money']], $byProduct('si.consignor_id IS NULL')),
+            ], 'inventory'],
+            'supply' => ['ค่าวัสดุใช้ในร้าน', [
+                $section('รายการซื้อ', [['date', 'วันที่ใบเสร็จ', 'date'], ['doc_no', 'เลขที่', 'text'], ['supplier', 'ร้าน/ผู้ขาย', 'text'], ['item', 'รายการ', 'text'], ['qty', 'จำนวน', 'qty'], ['total', 'รวม', 'money']], $q(
+                    "SELECT COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, pd.doc_no, pd.supplier_name AS supplier, pi.receipt_name AS item, pi.units AS qty, pi.line_total AS total
+                     FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                     WHERE pi.item_type = 'supply' AND pd.status = 'active' AND COALESCE(pd.receipt_date, DATE(pd.created_at)) BETWEEN ? AND ?
+                     ORDER BY date, pd.id",
+                    $p
+                )),
+            ], 'purchase'],
+            'wages' => ['ค่าแรงพนักงาน', [
+                $section('รายการจ่ายค่าแรง', [['date', 'วันที่จ่าย', 'date'], ['doc_no', 'เลขที่', 'text'], ['employee', 'พนักงาน', 'text'], ['type', 'ประเภท', 'text'], ['amount', 'จำนวนเงิน', 'money']],
+                    array_map(fn ($r) => ['date' => $r['date'], 'doc_no' => $r['doc_no'], 'employee' => $r['employee'], 'type' => $r['type'], 'amount' => $r['wage_cost']], $this->wages($from, $to))),
+            ], 'wages'],
+            'total_sales', 'bills' => [$key === 'bills' ? 'บิลขาย' : 'ยอดขายทั้งร้าน', [
+                $section('แยกตามวัน', [['date', 'วันที่', 'date'], ['bills', 'บิล', 'qty'], ['sales', 'ยอดขาย', 'money']], $q(
+                    'SELECT business_date AS date, COUNT(*) AS bills, SUM(total_value) AS sales FROM sales
+                     WHERE business_date BETWEEN ? AND ? GROUP BY business_date ORDER BY business_date',
+                    $p
+                )),
+            ], 'drawer'],
+            'capital' => ['เงินลงทุนในกิจการ', [
+                $section('รายการลงทุน / ถอนทุน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['date', 'วันที่', 'date'], ['doc_no', 'เลขที่', 'text'], ['type', 'ประเภท', 'text'], ['investor', 'ผู้ลงทุน', 'text'], ['invested', 'ลงทุน', 'money'], ['withdrawn', 'ถอนคืน', 'money']],
+                    array_values(array_filter($this->capital('1970-01-01', $to), fn ($r) => $r['date'] !== null))),
+            ], 'capital'],
+            'consign_sales' => ['ยอดขายสินค้าฝากขาย', [
+                $section('แยกตามผู้ฝาก', [['consignor', 'ผู้ฝาก', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย (ร้าน)', 'money'], ['cost', 'ผู้ฝากได้', 'money']], $byConsignor()),
+            ], 'passbook'],
+            default => throw new \RuntimeException('ไม่พบที่มาของรายการนี้'),
+        };
+        return ['title' => "ที่มา: {$title}", 'note' => $this->statementNote($key), 'link' => $link, 'sections' => $sections];
     }
 
     /** Sales per day / week / month by payment method (imported sales have none recorded). */
