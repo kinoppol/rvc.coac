@@ -7,6 +7,8 @@ namespace App\Controllers;
 use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use App\Services\AuditLogger;
+use App\Services\DocumentNumberService;
+use App\Services\LedgerService;
 use App\Services\InventoryService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -68,9 +70,15 @@ class InventoryController
         if (!$consignorId || !(new ConsignorRepo($db, $audit))->find($consignorId)) {
             return $this->error($response, 'กรุณาเลือกผู้ฝากขาย', 422);
         }
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        $repo = new ProductRepo($db, $audit);
+        $claimed = null;
         $db->beginTransaction();
         try {
-            (new ProductRepo($db, $audit))->convertToConsignment((int) $args['id'], $consignorId, (float) $body['cost_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $repo->convertToConsignment((int) $args['id'], $consignorId, (float) $body['cost_price'], (int) $user['id'], $ip);
+            if (!empty($body['include_past_sales'])) {
+                $claimed = $repo->claimStoreSales((int) $args['id'], new LedgerService($db), new DocumentNumberService($db), (int) $user['id'], $ip);
+            }
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
@@ -79,6 +87,31 @@ class InventoryController
             }
             throw $e;
         }
-        return $this->json($response, ['ok' => true]);
+        return $this->json($response, ['ok' => true, 'claimed' => $claimed]);
+    }
+
+    /** Admin only: credit the consignor with sales made before the product became theirs. */
+    public function claimStoreSales(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        $db = Db::connection();
+        $db->beginTransaction();
+        try {
+            $claimed = (new ProductRepo($db, new AuditLogger($db)))->claimStoreSales(
+                (int) $args['id'], new LedgerService($db), new DocumentNumberService($db),
+                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            if ($e instanceof \RuntimeException) {
+                return $this->error($response, $e->getMessage(), 422);
+            }
+            throw $e;
+        }
+        return $this->json($response, ['data' => $claimed]);
     }
 }

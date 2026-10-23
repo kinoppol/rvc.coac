@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
-import { confirmDialog } from '../dialog.js';
+import { alertDialog, confirmDialog } from '../dialog.js';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -132,6 +132,23 @@ export async function render(container, { navigate, permissions, user }) {
             try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
             draw();
         }));
+        container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
+            const p = res.data.find((x) => String(x.id) === b.dataset.claim);
+            const ok = await confirmDialog(
+                `ยอดขาย «${p.name}» ${count(p.store_sold_qty)} ชิ้นที่ขายก่อนเปลี่ยนเป็นสินค้าฝากขาย จะย้ายจากกำไรของร้านไปเป็นรายรับในบัญชีของ ${p.consignor_name} (หักค่าฝากขายแล้ว)`,
+                { title: 'โอนยอดขายเดิมเข้าบัญชีผู้ฝาก?', okText: 'โอนยอดขาย' }
+            );
+            if (!ok) return;
+            b.disabled = true;
+            try {
+                const r = (await api.post(`/inventory/${p.id}/claim-sales`)).data;
+                await alertDialog(`โอนยอดขาย ${count(r.qty)} ชิ้น ฿${money(r.sale)} หักค่าฝากขาย ฿${money(r.fee)} เข้าบัญชี ${p.consignor_name} แล้ว`, { title: 'โอนยอดขายแล้ว' });
+                await load();
+            } catch (err) {
+                b.disabled = false;
+                alertDialog(err.message, { tone: 'error' });
+            }
+        }));
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
@@ -140,6 +157,7 @@ export async function render(container, { navigate, permissions, user }) {
             editing = {
                 id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })),
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
+                pastQty: Number(p.store_sold_qty), claimPast: true,
                 error: null, busy: false,
             };
             if (!editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
@@ -152,7 +170,9 @@ export async function render(container, { navigate, permissions, user }) {
     function row(p) {
         const low = Number(p.qty_stock) <= 3;
         return `<tr>
-          <td>${escapeHtml(p.name)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}</td>
+          <td>${escapeHtml(p.name)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
+            ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
+                ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span></div>`).join('')}
@@ -230,7 +250,12 @@ export async function render(container, { navigate, permissions, user }) {
                   <div class="price-preview" id="cs-fee">${Number.isFinite(fee) && fee >= 0 ? `฿ ${money(fee)}` : '-'}</div>
                 </div>
               </div>
-              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายคงเดิม ฿${money(e.salePrice)} · ไม่คิดค่าทำข้อมูล</div>` : ''}
+              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายคงเดิม ฿${money(e.salePrice)} · ไม่คิดค่าทำข้อมูล</div>
+              ${e.pastQty > 0 ? `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:13px;cursor:pointer">
+                <input type="checkbox" id="cs-past" ${e.claimPast ? 'checked' : ''}>
+                <span>โอนยอดขายที่ขายไปแล้ว ${count(e.pastQty)} ชิ้น เข้าบัญชีผู้ฝากด้วย
+                  <span class="muted" style="display:block;font-size:12px">ยอดขายเดิมจะย้ายจากกำไรของร้านไปเป็นรายรับของผู้ฝาก (หักค่าฝากขายแล้ว)</span></span>
+              </label>` : ''}` : ''}
           </div>`;
     }
 
@@ -238,6 +263,7 @@ export async function render(container, { navigate, permissions, user }) {
         const e = editing;
         container.querySelector('#cs-on')?.addEventListener('change', (ev) => { e.consign = ev.target.checked; draw(); });
         container.querySelector('#cs-consignor')?.addEventListener('change', (ev) => { e.consignorId = ev.target.value; });
+        container.querySelector('#cs-past')?.addEventListener('change', (ev) => { e.claimPast = ev.target.checked; });
         container.querySelector('#cs-cost')?.addEventListener('input', (ev) => {
             e.consignCost = ev.target.value;
             const fee = e.salePrice - Number(ev.target.value);
@@ -292,7 +318,9 @@ export async function render(container, { navigate, permissions, user }) {
                 p.barcode = out.data.barcode;
                 p.pack_barcodes = out.data.pack_barcodes;
                 if (consignor) {
-                    await api.post(`/inventory/${e.id}/consign`, { consignor_id: consignor.id, cost_price: Number(e.consignCost) });
+                    await api.post(`/inventory/${e.id}/consign`, {
+                        consignor_id: consignor.id, cost_price: Number(e.consignCost), include_past_sales: e.pastQty > 0 && e.claimPast,
+                    });
                     editing = null;
                     await load(); // the product left the store's stock: refresh list and totals
                     return;

@@ -220,6 +220,65 @@ class ProductRepo
         );
     }
 
+    /**
+     * Sales of a consignment product made while it was still recorded as the store's
+     * (before convertToConsignment): move them to the consignor and credit the ledger,
+     * the same way a sale of it would today. Call inside a transaction.
+     *
+     * @return array{lines:int, qty:int, sale:float, fee:float}
+     */
+    public function claimStoreSales(int $productId, \App\Services\LedgerService $ledger, \App\Services\DocumentNumberService $docs, ?int $userId, ?string $ip): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+        $stmt->execute([$productId]);
+        $product = $stmt->fetch();
+        if (!$product || $product['consignor_id'] === null) {
+            throw new \RuntimeException('สินค้านี้ยังไม่ใช่สินค้าฝากขาย');
+        }
+        $stmt = $this->db->prepare('SELECT id, qty, unit_price FROM sale_items WHERE product_id = ? AND consignor_id IS NULL FOR UPDATE');
+        $stmt->execute([$productId]);
+        $lines = $stmt->fetchAll();
+        $out = ['lines' => count($lines), 'qty' => 0, 'sale' => 0.0, 'fee' => 0.0];
+        if (!$lines) {
+            return $out;
+        }
+
+        $consignorId = (int) $product['consignor_id'];
+        $feePerUnit = (float) $product['fee_per_unit'] + ($product['rounding_beneficiary'] === 'store' ? (float) $product['round_per_unit'] : 0);
+        $upd = $this->db->prepare('UPDATE sale_items SET consignor_id = ?, fee_amount = ?, cost_amount = ? WHERE id = ?');
+        foreach ($lines as $l) {
+            $qty = (int) $l['qty'];
+            $unit = (float) $l['unit_price'];
+            $upd->execute([$consignorId, round($feePerUnit * $qty, 2), round(($unit - $feePerUnit) * $qty, 2), $l['id']]);
+            $out['qty'] += $qty;
+            $out['sale'] += $unit * $qty;
+            $out['fee'] += $feePerUnit * $qty;
+        }
+        $out['sale'] = round($out['sale'], 2);
+        $out['fee'] = round($out['fee'], 2);
+
+        $ledger->append(
+            $consignorId, 'sale',
+            "ขายสินค้าก่อนเปลี่ยนเป็นสินค้าฝากขาย {$out['qty']} ชิ้น - {$product['name']}",
+            $docs->next('ADJ', 'ledger_entries', 'ref_no'),
+            $out['sale'], 0, $userId
+        );
+        if ($out['fee'] > 0) {
+            $ledger->append(
+                $consignorId, 'fee',
+                "หักค่าฝากขาย {$out['qty']} ชิ้น - {$product['name']}",
+                $docs->next('FEE', 'ledger_entries', 'ref_no'),
+                0, $out['fee'], $userId
+            );
+        }
+        $this->audit->log(
+            'products', $productId, 'update', null,
+            ['note' => 'โอนยอดขายก่อนเปลี่ยนเป็นสินค้าฝากขายเข้าบัญชีผู้ฝาก', 'consignor_id' => $consignorId] + $out,
+            $userId, $ip
+        );
+        return $out;
+    }
+
     public function setImage(int $productId, string $token, ?int $userId, ?string $ip): void
     {
         $old = $this->find($productId);
