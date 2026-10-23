@@ -61,7 +61,7 @@ function beep(ok) {
     } catch (e) { /* no audio */ }
 }
 
-export async function render(container, { user } = {}) {
+export async function render(container, { user, navigate } = {}) {
     // The open cart and held carts live in this browser per user, so they survive
     // leaving the page or a reload until the sale is finished or cleared.
     const CART_KEY = `pos.cart.${user?.id ?? 0}`;
@@ -81,6 +81,10 @@ export async function render(container, { user } = {}) {
     const canShort = () => !!options.sell_out_of_stock;
     const allowShort = () => canShort() && shortMode;
     let modal = null; // the payment dialog element while open
+    // Cash drawer of the current accounting day: counted before selling, or skipped for a few minutes.
+    let drawer = null; // state from /sales/options and /drawer/*
+    let skipEnds = 0; // Date.now() when this cashier's skip runs out
+    let drawerModal = null; // the opening-count dialog while open
     let msgTimer;
     // Products matching the search that cannot be sold (stock below 1, switch off).
     let outHints = { term: '', items: [] };
@@ -111,6 +115,7 @@ export async function render(container, { user } = {}) {
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
         <div data-el="hours"></div>
+        <div data-el="drawerbar"></div>
         <div data-el="shortbar"></div>
         <div data-el="msg"></div>
         <div class="pos-main">
@@ -143,7 +148,7 @@ export async function render(container, { user } = {}) {
 
     /** Puts the cursor back in the search box unless the cashier is typing somewhere else. */
     function focusSearch() {
-        if (modal || isDialogOpen() || !root.isConnected) return;
+        if (modal || drawerModal || isDialogOpen() || !root.isConnected) return;
         const a = document.activeElement;
         if (a && a !== q && root.contains(a) && a.matches('input, select, textarea')) return;
         q.focus({ preventScroll: true });
@@ -332,8 +337,135 @@ export async function render(container, { user } = {}) {
             กำลังเปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 <small>แตะเพื่อปิด</small></label></div>` : '';
     }
 
+    // ---------- Cash drawer ----------
+
+    function setDrawer(state) {
+        drawer = state || null;
+        if (!drawer) return;
+        // Count the skip from this device's clock so a server clock difference doesn't matter.
+        skipEnds = drawer.skip_until ? Date.now() + (Date.parse(drawer.skip_until.replace(' ', 'T')) - Date.parse(drawer.now.replace(' ', 'T'))) : 0;
+    }
+    const drawerNeeded = () => !!drawer && drawer.required && !drawer.open;
+    const skipping = () => drawerNeeded() && skipEnds > Date.now();
+    const skipMinutes = () => Math.round((drawer?.skip_seconds || 300) / 60);
+    const clock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+    function drawDrawerBar() {
+        const box = el('drawerbar');
+        if (!drawer || (!drawer.required && !drawer.open)) { box.innerHTML = ''; return; }
+        if (drawer.open) {
+            box.innerHTML = `<div class="pos-drawer">💰 <span>เงินตั้งต้นในลิ้นชัก <b>฿${money(drawer.opening_cash)}</b>
+                · เงินสดจากการขาย <b>฿${money(drawer.cash_sales)}</b> · ควรมีในลิ้นชัก <b>฿${money(drawer.opening_cash + drawer.cash_sales)}</b></span>
+              ${navigate ? `<button type="button" class="btn secondary sm" data-drawer-act="summary">${drawer.closed ? 'ดูสรุปยอด' : 'ปิดยอด / สรุปเงิน'}</button>` : ''}</div>`;
+            return;
+        }
+        const left = Math.max(0, Math.ceil((skipEnds - Date.now()) / 1000));
+        box.innerHTML = `<div class="pos-drawer warn">⏳ <span><b>ยังไม่ได้ระบุเงินในลิ้นชัก</b>
+            ${left ? `ขายได้ชั่วคราวอีก <b data-el="skipleft">${clock(left)}</b> นาที` : ''} · ระบบบันทึกการข้ามไว้</span>
+          <button type="button" class="btn sm" data-drawer-act="show">ระบุเงินในลิ้นชัก</button></div>`;
+    }
+
+    function showDrawer(reason = '') {
+        if (drawerModal || !drawerNeeded()) return;
+        let busy = false;
+        let error = reason;
+        let amount = '';
+        let note = '';
+        drawerModal = document.createElement('div');
+        drawerModal.className = 'modal-backdrop pos-pay-modal';
+        root.appendChild(drawerModal);
+        function draw() {
+            const late = drawer.cash_sales > 0;
+            drawerModal.innerHTML = `
+              <div class="modal pos-modal" role="dialog" aria-modal="true" aria-label="ระบุเงินในลิ้นชัก">
+                <div class="modal-head"><h2>💰 ระบุเงินในลิ้นชักก่อนเริ่มขาย</h2></div>
+                <div class="modal-body">
+                  <p style="margin:0 0 12px">นับเงินสดทั้งหมดในลิ้นชักตอนนี้ แล้วใส่จำนวนเงิน ระบบใช้ยอดนี้คำนวณเงินสดที่ควรมีในลิ้นชักเมื่อปิดร้าน</p>
+                  ${late ? `<div class="pos-msg warn" style="margin-bottom:12px">วันนี้ขายเป็นเงินสดไปแล้ว ฿${money(drawer.cash_sales)} — นับเงินทั้งหมดที่อยู่ในลิ้นชักตอนนี้ ระบบจะหักยอดนี้ออกให้อัตโนมัติ</div>` : ''}
+                  <div class="pos-pay-line"><label>จำนวนเงินในลิ้นชัก (บาท)
+                    <input data-drawer-amt inputmode="decimal" placeholder="0.00" autocomplete="off" value="${escapeHtml(amount)}"></label></div>
+                  <label class="field" style="margin-top:10px">หมายเหตุ (ถ้ามี) <input data-drawer-note maxlength="200" value="${escapeHtml(note)}"></label>
+                  ${error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(error)}</div>` : ''}
+                  <div class="muted" style="font-size:12.5px;margin-top:10px">ปกติต้องระบุเงินในลิ้นชักก่อนขายทุกวัน การข้ามจะถูกบันทึกไว้เพื่อใช้ประเมินการทำงาน
+                    และระบบจะเตือนอีกครั้งใน ${skipMinutes()} นาที</div>
+                </div>
+                <div class="modal-foot">
+                  <button type="button" class="btn secondary pos-big" data-drawer-act="skip" ${busy ? 'disabled' : ''}>ข้ามไปก่อน ${skipMinutes()} นาที</button>
+                  <button type="button" class="btn pos-big" data-drawer-act="save" ${busy ? 'disabled' : ''}>${busy ? 'กำลังบันทึก...' : 'บันทึกเงินในลิ้นชัก'}</button>
+                </div>
+              </div>`;
+            drawerModal.querySelector('[data-drawer-amt]').focus();
+        }
+        async function act(kind) {
+            if (busy) return;
+            amount = drawerModal.querySelector('[data-drawer-amt]').value.trim();
+            note = drawerModal.querySelector('[data-drawer-note]').value;
+            const value = Number(amount.replace(/,/g, ''));
+            if (kind === 'save' && (amount === '' || !(value >= 0))) {
+                error = 'กรุณาใส่จำนวนเงินในลิ้นชัก (ถ้าไม่มีเงินให้ใส่ 0)';
+                draw();
+                return;
+            }
+            busy = true;
+            error = '';
+            draw();
+            try {
+                const res = kind === 'save'
+                    ? await api.post('/drawer/open', { amount: value, note })
+                    : await api.post('/drawer/skip');
+                setDrawer(res.data);
+                closeDrawer();
+                message(kind === 'save' ? 'บันทึกเงินในลิ้นชักแล้ว' : `ข้ามการระบุเงินในลิ้นชักชั่วคราว ${skipMinutes()} นาที (บันทึกการข้ามไว้แล้ว)`, kind === 'save' ? 'ok' : 'warn');
+            } catch (e) {
+                busy = false;
+                error = e.message;
+                draw();
+            }
+        }
+        drawerModal.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const b = e.target.closest('[data-drawer-act]');
+            if (b) act(b.dataset.drawerAct);
+        });
+        drawerModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.matches('[data-drawer-amt], [data-drawer-note]')) {
+                e.preventDefault();
+                act('save');
+            }
+        });
+        draw();
+    }
+
+    function closeDrawer() {
+        drawerModal?.remove();
+        drawerModal = null;
+        drawDrawerBar();
+        focusSearch();
+    }
+
+    /** Asks for the count when it is needed and no skip is running (waits for an open payment). */
+    function checkDrawer() {
+        if (!root.isConnected || !drawerNeeded()) return;
+        if (!skipping()) {
+            if (!modal) showDrawer();
+            drawDrawerBar();
+            return;
+        }
+        const t = el('drawerbar').querySelector('[data-el="skipleft"]');
+        if (t) t.textContent = clock(Math.max(0, Math.ceil((skipEnds - Date.now()) / 1000)));
+        else drawDrawerBar();
+    }
+
+    async function refreshDrawer() {
+        try {
+            setDrawer((await api.get('/drawer/state')).data);
+        } catch (e) { /* keep the last state */ }
+        drawDrawerBar();
+    }
+
     function redraw() {
         drawHours();
+        drawDrawerBar();
         drawShortBar();
         drawProducts();
         drawCart();
@@ -526,6 +658,7 @@ export async function render(container, { user } = {}) {
                 loadProducts();
             }
             focusSearch();
+            checkDrawer();
         }
 
         async function confirm() {
@@ -540,8 +673,14 @@ export async function render(container, { user } = {}) {
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
                 done = res.data;
+                refreshDrawer();
             } catch (e) {
                 error = e.message;
+                if (e.status === 428) {
+                    await refreshDrawer();
+                    skipEnds = 0;
+                    showDrawer('ระบุเงินในลิ้นชักก่อน แล้วกดยืนยันการชำระเงินอีกครั้ง');
+                }
             }
             busy = false;
             draw();
@@ -680,7 +819,12 @@ export async function render(container, { user } = {}) {
         if (modal && modal.contains(e.target)) return;
         const t = e.target.closest('button');
         if (t) {
-            if (t.dataset.pick) {
+            if (t.dataset.drawerAct === 'show') {
+                skipEnds = 0;
+                showDrawer();
+            } else if (t.dataset.drawerAct === 'summary') {
+                navigate('drawer');
+            } else if (t.dataset.pick) {
                 const p = products.find((x) => x.id === Number(t.dataset.pick));
                 if (p) add(p);
             } else if (t.dataset.view) {
@@ -743,7 +887,7 @@ export async function render(container, { user } = {}) {
 
     // A scanner keeps typing even when the cashier last tapped somewhere else.
     on(document, 'keydown', (e) => {
-        if (modal || isDialogOpen() || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+        if (modal || drawerModal || isDialogOpen() || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
         const a = document.activeElement;
         if (a && a.matches('input, select, textarea') ) return;
         q.focus({ preventScroll: true });
@@ -760,10 +904,20 @@ export async function render(container, { user } = {}) {
     setKeyboard();
     drawCart();
     focusSearch();
-    const loadOptions = () => api.get('/sales/options').then((o) => { if (o.payment_methods?.length) options = o; }).catch(() => {});
+    const loadOptions = () => api.get('/sales/options').then((o) => {
+        if (o.payment_methods?.length) options = o;
+        if ('drawer' in o) setDrawer(o.drawer);
+    }).catch(() => {});
     await loadOptions();
     await loadProducts();
     focusSearch();
+    checkDrawer();
+    // Asks again when a skip runs out, and keeps its countdown moving.
+    const drawerTimer = setInterval(checkDrawer, 1000);
+    life.signal.addEventListener('abort', () => {
+        clearInterval(drawerTimer);
+        drawerModal?.remove();
+    });
     // Store hours pass while the page stays open (e.g. closing time arrives).
     const hoursTimer = setInterval(() => loadOptions().then(drawHours), 60000);
     life.signal.addEventListener('abort', () => clearInterval(hoursTimer));

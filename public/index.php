@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Controllers\AiController;
 use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
+use App\Controllers\DrawerController;
 use App\Controllers\AttachmentController;
 use App\Controllers\AuditController;
 use App\Controllers\AuthController;
@@ -140,6 +141,23 @@ $app->group('/api', function ($group) {
     $group->get('/sales/options', [SalesController::class, 'options']);
     $group->post('/sales', [SalesController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
+    $group->put('/sales/{id:[0-9]+}/payments', [DrawerController::class, 'editPayments'])
+        ->add(new RoleGuard('drawer.manage'));
+
+    $group->get('/drawer/state', [DrawerController::class, 'state'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/drawer/open', [DrawerController::class, 'open'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/drawer/skip', [DrawerController::class, 'skip'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/drawer/close', [DrawerController::class, 'close'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/drawer/summary', [DrawerController::class, 'summary'])
+        ->add(new RoleGuard('sales.create'));
+    $group->put('/drawer/{date}/opening', [DrawerController::class, 'adjustOpening'])
+        ->add(new RoleGuard('drawer.manage'));
+    $group->get('/drawer/behavior', [DrawerController::class, 'behavior'])
+        ->add(new RoleGuard('drawer.manage'));
 
     $group->get('/pos-import', [PosImportController::class, 'index'])
         ->add(new RoleGuard('sales.import'));

@@ -7,6 +7,7 @@ namespace App\Controllers;
 use App\Repositories\ProductRepo;
 use App\Services\AttachmentService;
 use App\Services\AuditLogger;
+use App\Services\CashDrawerService;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
 use App\Services\ListingFeeService;
@@ -83,8 +84,16 @@ class SalesController
     /** Payment methods the admin has turned on, and which POS switches this user's role may use. */
     public function options(Request $request, Response $response): Response
     {
-        $settings = new SettingsService(Db::connection());
-        $role = $request->getAttribute('user')['role'] ?? null;
+        $db = Db::connection();
+        $settings = new SettingsService($db);
+        $user = $request->getAttribute('user');
+        $role = $user['role'] ?? null;
+        $day = DrawerController::currentDay($settings);
+        try {
+            $drawer = (new CashDrawerService($db, new AuditLogger($db)))->state($day['date'], (int) $user['id'], $day['required']);
+        } catch (\PDOException $e) {
+            $drawer = null; // migration 0033 not run yet
+        }
         $methods = array_map(fn ($m) => ['key' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]], $settings->paymentMethods());
         return $this->json($response, [
             'payment_methods' => $methods,
@@ -96,6 +105,7 @@ class SalesController
             ],
             'business_day' => $settings->businessDay(new \DateTimeImmutable()),
             'today' => date('Y-m-d'),
+            'drawer' => $drawer,
         ]);
     }
 
@@ -120,6 +130,16 @@ class SalesController
         );
 
         $user = $request->getAttribute('user');
+        // The cash in the drawer is counted before selling (or skipped for a few minutes).
+        $drawerDay = DrawerController::currentDay($settings);
+        try {
+            $maySell = !$drawerDay['required'] || (new CashDrawerService($db, $audit))->canSell($drawerDay['date'], (int) $user['id']);
+        } catch (\PDOException $e) {
+            $maySell = true; // migration 0033 not run yet
+        }
+        if (!$maySell) {
+            return $this->error($response, 'กรุณาระบุจำนวนเงินในลิ้นชักก่อนทำการขาย', 428);
+        }
         try {
             $payments = [
                 'methods' => $settings->paymentMethods(),

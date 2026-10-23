@@ -7,6 +7,7 @@ const svg = (inner) => `<svg width="17" height="17" viewBox="0 0 24 24" fill="no
 const ICONS = {
     dashboard: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect>'),
     sales: svg('<circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"></path>'),
+    drawer: svg('<rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M2 10h20"></path><path d="M10 15h4"></path>'),
     posimport: svg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M12 11v7"></path><path d="m9 15 3 3 3-3"></path>'),
     purchase: svg('<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"></path><path d="M15 18H9"></path><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"></path><circle cx="17" cy="18" r="2"></circle><circle cx="7" cy="18" r="2"></circle>'),
     inventory: svg('<path d="M21 8l-9-5-9 5v8l9 5 9-5z"></path><path d="M3.3 7.5L12 12l8.7-4.5M12 12v9"></path>'),
@@ -31,6 +32,7 @@ const PAGES = [
     { group: 'งานประจำวัน', items: [
         { key: 'dashboard', label: 'แดชบอร์ด', perm: 'dashboard.view' },
         { key: 'sales', label: 'ขายสินค้า (POS)', perm: 'sales.create' },
+        { key: 'drawer', label: 'เงินในลิ้นชัก / ปิดยอด', perm: 'sales.create' },
         { key: 'posimport', label: 'นำเข้ายอดขายจาก POS', perm: 'sales.import' },
         { key: 'purchase', label: 'ซื้อสินค้าเข้าร้าน', perm: 'purchase.create' },
         { key: 'inventory', label: 'สต๊อกสินค้าของร้าน', perm: 'reports.view' },
@@ -61,6 +63,7 @@ const PAGES = [
 const PAGE_TITLES = {
     dashboard: ['หน้าแรก', 'แดชบอร์ดภาพรวม'],
     sales: ['งานประจำวัน', 'ขายสินค้า (POS)'],
+    drawer: ['งานประจำวัน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
     posimport: ['งานประจำวัน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
     purchase: ['งานประจำวัน', 'ซื้อสินค้าเข้าร้าน'],
     inventory: ['งานประจำวัน', 'สต๊อก ต้นทุน และกำไรสินค้าของร้าน'],
