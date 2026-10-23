@@ -358,16 +358,17 @@ export async function render(container) {
         const net = round2(subtotal - discount);
         const printed = Number(header.total) || 0;
         const mismatch = printed > 0 && Math.abs(net - printed) > 0.009;
+        // [data-sum] parts are the figures; redrawSummary() swaps only those while an amount is being typed.
         return `
-          ${supplyTotal() > 0 ? `<span class="muted">เพื่อขาย ฿${money(subtotal - supplyTotal())} · ใช้ในกิจการ ฿${money(supplyTotal())}</span>` : ''}
-          <label>รวมตามรายการ <b>฿ ${money(subtotal)}</b></label>
+          <span data-sum="split" class="muted">${supplyTotal() > 0 ? `เพื่อขาย ฿${money(subtotal - supplyTotal())} · ใช้ในกิจการ ฿${money(supplyTotal())}` : ''}</span>
+          <label>รวมตามรายการ <b data-sum="subtotal">฿ ${money(subtotal)}</b></label>
           <label>ส่วนลดท้ายบิล <input data-h="discount" type="number" min="0" step="0.01" value="${header.discount}"></label>
           <label>VAT (ถ้ามี) <input data-h="vat" type="number" min="0" step="0.01" value="${header.vat}"></label>
           <label>ยอดสุทธิตามใบเสร็จ <input data-h="total" type="number" min="0" step="0.01" value="${header.total}"></label>
-          <div class="${mismatch ? 'pc-diff bad' : 'pc-diff'}">${printed > 0
+          <div data-sum="diff" class="${mismatch ? 'pc-diff bad' : 'pc-diff'}">${printed > 0
             ? (mismatch ? `⚠ ยอดรายการหลังหักส่วนลด ฿${money(net)} ไม่ตรงกับใบเสร็จ (ต่าง ฿${money(net - printed)})` : '✓ ยอดตรงกับใบเสร็จ')
             : `ยอดสุทธิ ฿${money(net)}`}</div>
-          ${vatGap(subtotal) ? `<button type="button" class="btn sm" data-add-vat>บวก VAT ฿${money(vatGap(subtotal))} เข้าราคาทุกรายการ</button>` : ''}`;
+          <span data-sum="vat">${vatGap(subtotal) ? `<button type="button" class="btn sm" data-add-vat>บวก VAT ฿${money(vatGap(subtotal))} เข้าราคาทุกรายการ</button>` : ''}</span>`;
     }
 
     /** Receipt prices are before VAT when lines − discount + VAT = printed total; returns that VAT, else 0. */
@@ -446,14 +447,17 @@ export async function render(container) {
         const el = container.querySelector('#pc-summary');
         if (!el) return;
         const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
-        const focused = document.activeElement?.dataset?.h;
-        const pos = document.activeElement?.selectionStart;
+        // Typing in a summary amount: leave its box alone (rebuilding a number box puts the
+        // caret back at the start, so digits came out reversed) and refresh the figures only.
+        if (el.contains(document.activeElement) && document.activeElement.dataset.h) {
+            const fresh = document.createElement('div');
+            fresh.innerHTML = summaryHtml(subtotal);
+            fresh.querySelectorAll('[data-sum]').forEach((part) => el.querySelector(`[data-sum="${part.dataset.sum}"]`)?.replaceWith(part));
+            el.querySelector('[data-add-vat]')?.addEventListener('click', addVatToLines);
+            return;
+        }
         el.innerHTML = summaryHtml(subtotal);
         bindHeaderInputs(el);
-        if (focused) {
-            const inp = el.querySelector(`[data-h="${focused}"]`);
-            if (inp) { inp.focus(); try { inp.setSelectionRange(pos, pos); } catch (e) { /* number inputs */ } }
-        }
     }
 
     // ---------------- Events ----------------
