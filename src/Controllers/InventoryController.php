@@ -30,6 +30,26 @@ class InventoryController
         ]);
     }
 
+    /** Admin / manager: store sales with no cost that a first purchase can now cost (preview). */
+    public function zeroCost(Request $request, Response $response): Response
+    {
+        if (!in_array($request->getAttribute('user')['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบหรือผู้จัดการร้าน', 403);
+        }
+        return $this->json($response, ['data' => (new InventoryService(Db::connection()))->zeroCostSales()]);
+    }
+
+    /** Admin / manager: give those sales the first purchase's piece cost. */
+    public function fillZeroCost(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบหรือผู้จัดการร้าน', 403);
+        }
+        $result = (new InventoryService(Db::connection()))->fillZeroCost((int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        return $this->json($response, ['data' => $result]);
+    }
+
     /** Name, piece barcode (scanned at the POS) and the pack barcodes of one store product. */
     public function updateBarcodes(Request $request, Response $response, array $args): Response
     {

@@ -72,6 +72,67 @@ class InventoryService
         return $rows;
     }
 
+    /**
+     * Store sales booked with no cost (sold before the goods were ever bought in, so the
+     * product had no cost yet), per product, priced at the piece cost of the product's
+     * first purchase. Products never bought in are left out: there is no cost to use.
+     */
+    public function zeroCostSales(): array
+    {
+        return $this->db->query(
+            "SELECT p.id AS product_id, p.name AS product, COUNT(si.id) AS line_count, SUM(si.qty) AS qty,
+                    SUM(si.qty * si.unit_price) AS sales, fp.piece_cost, ROUND(SUM(si.qty) * fp.piece_cost, 2) AS cost,
+                    fp.doc_no AS first_purchase
+             FROM sale_items si
+             JOIN products p ON p.id = si.product_id
+             JOIN (
+                SELECT pi.product_id, pi.piece_cost, pd.doc_no,
+                       ROW_NUMBER() OVER (PARTITION BY pi.product_id
+                                          ORDER BY COALESCE(pd.receipt_date, DATE(pd.created_at)), pd.id, pi.id) AS rn
+                FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                WHERE pi.item_type = 'stock' AND pd.status = 'active' AND pi.piece_cost > 0
+             ) fp ON fp.product_id = si.product_id AND fp.rn = 1
+             WHERE si.consignor_id IS NULL AND si.cost_amount = 0 AND si.qty > 0
+             GROUP BY p.id, p.name, fp.piece_cost, fp.doc_no
+             ORDER BY cost DESC"
+        )->fetchAll();
+    }
+
+    /**
+     * Gives those sales the first purchase's piece cost (cost and margin of each sale line),
+     * so gross profit stops counting them as all profit.
+     * @return array{products:int, lines:int, qty:int, cost:float}
+     */
+    public function fillZeroCost(int $userId, ?string $ip): array
+    {
+        $rows = $this->zeroCostSales();
+        $audit = new AuditLogger($this->db);
+        $upd = $this->db->prepare(
+            'UPDATE sale_items SET cost_amount = ROUND(qty * ?, 2), fee_amount = ROUND(qty * unit_price - qty * ?, 2)
+             WHERE product_id = ? AND consignor_id IS NULL AND cost_amount = 0 AND qty > 0'
+        );
+        $out = ['products' => 0, 'lines' => 0, 'qty' => 0, 'cost' => 0.0];
+        $this->db->beginTransaction();
+        try {
+            foreach ($rows as $r) {
+                $upd->execute([$r['piece_cost'], $r['piece_cost'], $r['product_id']]);
+                $out['products']++;
+                $out['lines'] += $upd->rowCount();
+                $out['qty'] += (int) $r['qty'];
+                $out['cost'] = round($out['cost'] + (float) $r['cost'], 2);
+                $audit->log('products', (int) $r['product_id'], 'update', null, [
+                    'note' => 'เติมต้นทุนย้อนหลังให้ยอดขายที่ต้นทุนเป็น 0 จากใบซื้อแรก ' . $r['first_purchase'],
+                    'piece_cost' => (float) $r['piece_cost'], 'qty' => (int) $r['qty'], 'cost' => (float) $r['cost'],
+                ], $userId, $ip);
+            }
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        return $out;
+    }
+
     public function summary(): array
     {
         $stock = $this->db->query(

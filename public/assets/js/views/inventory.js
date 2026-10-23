@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
+import { openDetailModal } from '../detail-modal.js';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -36,6 +37,9 @@ export async function render(container, { navigate, permissions, user }) {
     let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], consign, consignorId, consignCost, error, busy }
     const canEdit = permissions.includes('purchase.create');
     const canConsign = canEdit && user?.role === 'admin';
+    // Admin / manager: sales booked with no cost (sold before the first purchase) that can now be costed.
+    const canFixCost = ['admin', 'manager'].includes(user?.role);
+    let zeroCost = [];
     let consignors = null; // loaded the first time an admin opens the editor
     let sort = { key: 'name', dir: 'asc' };
     try {
@@ -81,6 +85,7 @@ export async function render(container, { navigate, permissions, user }) {
     async function load() {
         const q = search ? `&q=${encodeURIComponent(search)}` : '';
         res = await api.get(`/inventory?consigned=1${q}`);
+        if (canFixCost) zeroCost = (await api.get('/inventory/zero-cost').catch(() => ({ data: [] }))).data;
         draw();
     }
 
@@ -98,6 +103,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="kpi"><div class="lbl">กำไรขั้นต้น</div><div class="val">฿ ${money(s.gross_profit)}</div>
             <div class="sub">หักค่าวัสดุใช้ในร้าน ฿ ${money(s.supply_cost)}${s.wage_cost ? ` · ค่าแรง ฿ ${money(s.wage_cost)}` : ''} = กำไรสุทธิ ฿ ${money(s.net_profit)}</div></div>
         </div>
+        ${zeroCost.length ? zeroCostHtml() : ''}
         <section class="card card-pad">
           <div class="actions-row" style="justify-content:space-between">
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
@@ -149,6 +155,12 @@ export async function render(container, { navigate, permissions, user }) {
                 alertDialog(err.message, { tone: 'error' });
             }
         }));
+        container.querySelector('#zc-view')?.addEventListener('click', () => openDetailModal(async () => ({
+            title: 'ยอดขายที่ต้นทุนเป็น 0',
+            note: 'สินค้าเหล่านี้ขายไปก่อนบันทึกใบซื้อครั้งแรก ตอนขายยังไม่มีต้นทุน ระบบจึงบันทึกต้นทุนเป็น 0 ทำให้กำไรสูงเกินจริง ต้นทุนที่จะเติมคิดจากทุน/ชิ้นในใบซื้อแรกของสินค้านั้น',
+            sections: [{ title: 'แยกตามสินค้า', columns: [['product', 'สินค้า', 'text'], ['first_purchase', 'ใบซื้อแรก', 'text'], ['qty', 'ชิ้นที่ขาย', 'qty'], ['sales', 'ยอดขาย', 'money'], ['piece_cost', 'ทุน/ชิ้น', 'money'], ['cost', 'ต้นทุนที่จะเติม', 'money']], rows: zeroCost }],
+        })));
+        container.querySelector('#zc-fill')?.addEventListener('click', fillZeroCost);
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
@@ -165,6 +177,33 @@ export async function render(container, { navigate, permissions, user }) {
             container.querySelector('#bc-name')?.focus();
         }));
         if (editing) bindEdit();
+    }
+
+    function zeroCostHtml() {
+        const qty = zeroCost.reduce((s, r) => s + Number(r.qty), 0);
+        const cost = zeroCost.reduce((s, r) => s + Number(r.cost), 0);
+        return `
+        <div class="hint" style="align-items:center">
+          <div class="dot">!</div>
+          <div style="flex:1">มียอดขาย <b>${count(zeroCost.length)} สินค้า (${count(qty)} ชิ้น)</b> ที่ขายไปก่อนบันทึกใบซื้อ จึงบันทึกต้นทุนเป็น 0 —
+            เติมต้นทุนย้อนหลังจากใบซื้อแรกได้ ฿ ${money(cost)} (กำไรขั้นต้นจะลดลงเท่ากัน)</div>
+          <button type="button" class="btn secondary sm" id="zc-view">ดูรายการ</button>
+          <button type="button" class="btn sm" id="zc-fill">เติมต้นทุนย้อนหลัง</button>
+        </div>`;
+    }
+
+    async function fillZeroCost() {
+        const cost = zeroCost.reduce((s, r) => s + Number(r.cost), 0);
+        const ok = await confirmDialog(
+            `ยอดขาย ${zeroCost.length} สินค้าที่ต้นทุนเป็น 0 จะได้ต้นทุนตามทุน/ชิ้นของใบซื้อแรก รวม ฿${money(cost)} กำไรขั้นต้นสะสมจะลดลงเท่ากัน (บันทึกในประวัติการแก้ไข)`,
+            { title: 'เติมต้นทุนย้อนหลัง?', okText: 'เติมต้นทุน' }
+        );
+        if (!ok) return;
+        try {
+            const r = (await api.post('/inventory/zero-cost')).data;
+            await load();
+            alertDialog(`เติมต้นทุนให้ ${count(r.products)} สินค้า ${count(r.lines)} รายการขาย (${count(r.qty)} ชิ้น) รวม ฿${money(r.cost)} แล้ว`, { title: 'เติมต้นทุนย้อนหลังแล้ว' });
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
     }
 
     function row(p) {

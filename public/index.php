@@ -239,6 +239,10 @@ $app->group('/api', function ($group) {
 
     $group->get('/inventory', [InventoryController::class, 'index'])
         ->add(new RoleGuard('reports.view'));
+    $group->get('/inventory/zero-cost', [InventoryController::class, 'zeroCost'])
+        ->add(new RoleGuard('reports.view'));
+    $group->post('/inventory/zero-cost', [InventoryController::class, 'fillZeroCost'])
+        ->add(new RoleGuard('reports.view'));
     $group->put('/inventory/{id:[0-9]+}/barcodes', [InventoryController::class, 'updateBarcodes'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/consign', [InventoryController::class, 'convertToConsignment'])
