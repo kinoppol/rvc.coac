@@ -167,7 +167,7 @@ export async function renderOaPanel(el) {
 
     async function load() {
         const [oa, m] = await Promise.all([api.get('/oa/status'), api.get('/auth/methods')]);
-        draw(oa, m.login_methods);
+        draw(oa, m.login_methods, !!m.qr_login);
     }
 
     function syncLine(oa) {
@@ -199,7 +199,7 @@ export async function renderOaPanel(el) {
             </form>`;
     }
 
-    function draw(oa, methods) {
+    function draw(oa, methods, qrLogin) {
         el.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:16px">
           ${message || !oa.secret_configured ? `<div style="display:flex;flex-direction:column;gap:8px">
@@ -216,6 +216,15 @@ export async function renderOaPanel(el) {
             <div class="actions-row">${Object.entries(METHOD_LABEL).map(([k, v]) =>
                 `<button type="button" class="tab-btn ${k === methods ? 'active' : ''}" data-method="${k}">${escapeHtml(v)}</button>`).join('')}</div>
             <div class="muted" style="font-size:12px">${escapeHtml(METHOD_HINT[methods] || '')}</div>
+          </section>
+          <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+            <h2>ลงชื่อเข้าใช้ด้วยการสแกน QR-Code</h2>
+            <div class="actions-row">
+              <button type="button" class="tab-btn ${qrLogin ? 'active' : ''}" data-qr-login="1">เปิด</button>
+              <button type="button" class="tab-btn ${qrLogin ? '' : 'active'}" data-qr-login="0">ปิด</button>
+            </div>
+            <div class="muted" style="font-size:12px">เปิดแล้ว หน้าเข้าสู่ระบบ (เช่น เครื่อง POS) จะแสดง QR-Code ให้ผู้ใช้ที่ลงชื่อเข้าใช้ในมือถือของตัวเองไว้แล้ว สแกนและกดอนุมัติเพื่อเข้าสู่ระบบด้วยบัญชีของตน ·
+              QR-Code แต่ละอันใช้ได้ครั้งเดียว ไม่เกิน 5 นาที และเปลี่ยนใหม่อัตโนมัติ · ตั้งค่านี้แยกจากวิธีเข้าสู่ระบบด้านบน</div>
           </section>
           <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px;font-size:13px">
             <h2>ซิงค์รายชื่อผู้ใช้</h2>
@@ -254,6 +263,9 @@ export async function renderOaPanel(el) {
             if (v === 'password' && !(await confirmDialog('ผู้ใช้ที่ได้สิทธิ์จาก RVC-ONE (ไม่มีรหัสผ่าน) จะเข้าระบบไม่ได้', { title: 'ปิดการเข้าสู่ระบบผ่าน RVC-ONE?', okText: 'ปิด RVC-ONE', danger: true }))) return;
             act(() => api.put('/settings', { login_methods: v }), 'บันทึกวิธีเข้าสู่ระบบแล้ว');
         }));
+        el.querySelectorAll('[data-qr-login]').forEach((btn) => btn.addEventListener('click', () =>
+            act(() => api.put('/settings', { qr_login: btn.dataset.qrLogin }),
+                btn.dataset.qrLogin === '1' ? 'เปิดการลงชื่อเข้าใช้ด้วย QR-Code แล้ว' : 'ปิดการลงชื่อเข้าใช้ด้วย QR-Code แล้ว')));
         el.querySelectorAll('[data-sync-type]').forEach((btn) => btn.addEventListener('click', () =>
             act(() => api.put('/oa/sync-type', { sync_type: btn.dataset.syncType }),
                 'บันทึกแล้ว — กด «ซิงค์รายชื่อตอนนี้» เพื่อดึงรายชื่อ')));

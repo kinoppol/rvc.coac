@@ -25,6 +25,7 @@ class SettingsService
         'ai_markdown_min_chars' => '1000',
         'ai_markdown_min_table_rows' => '10',
         'login_methods' => 'both',
+        'qr_login' => '0', // '1' = signed-out screens offer sign-in by scanning a QR-Code with a signed-in phone
         'timezone' => '', // '' = app.timezone from config/config.php
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)
         'pos_payment_methods' => 'cash,transfer,qr,card', // comma list of PAYMENT_METHODS accepted at the POS

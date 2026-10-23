@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Repositories\UserRepo;
 use App\Services\AuditLogger;
+use App\Services\QrLoginService;
 use App\Services\SettingsService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -44,20 +45,106 @@ class AuthController
             return $this->error($response, 'บัญชีนี้ยังไม่ได้ผูกกับผู้ฝากขาย กรุณาติดต่อผู้ดูแลระบบ', 403);
         }
 
+        return $this->json($response, $this->startSession($userRepo, $user, $roles));
+    }
+
+    /** Signs this browser session in as $user (roles already checked); returns what the SPA needs. */
+    private function startSession(UserRepo $userRepo, array $user, array $roles): array
+    {
         session_regenerate_id(true);
-        unset($_SESSION['impersonator_id'], $_SESSION['active_role']);
+        unset($_SESSION['impersonator_id'], $_SESSION['active_role'], $_SESSION['qr_login_id']);
         $_SESSION['user_id'] = (int) $user['id'];
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 
         $user['role'] = $roles[0];
         $user['roles'] = $roles;
-        return $this->json($response, $this->sessionPayload($userRepo, $user, null));
+        return $this->sessionPayload($userRepo, $user, null);
+    }
+
+    private function qrEnabled(): bool
+    {
+        return (new SettingsService(Db::connection()))->get('qr_login') === '1';
+    }
+
+    /** Public: a new sign-in QR-Code for this (signed-out) browser; usable for 5 minutes. */
+    public function qrStart(Request $request, Response $response): Response
+    {
+        if (!$this->qrEnabled()) {
+            return $this->error($response, 'ระบบไม่ได้เปิดให้ลงชื่อเข้าใช้ด้วย QR-Code', 403);
+        }
+        $qr = (new QrLoginService(Db::connection()))->create(
+            $request->getServerParams()['REMOTE_ADDR'] ?? null,
+            $request->getHeaderLine('User-Agent') ?: null
+        );
+        // Only this browser session can sign in with the code.
+        $_SESSION['qr_login_id'] = $qr['id'];
+        return $this->json($response, ['code' => $qr['code'], 'expires_in' => $qr['expires_in']]);
+    }
+
+    /** Public: has a phone approved this browser's code? Signs the session in when it has. */
+    public function qrStatus(Request $request, Response $response): Response
+    {
+        $id = (int) ($_SESSION['qr_login_id'] ?? 0);
+        if (!$id || !$this->qrEnabled()) {
+            return $this->json($response, ['status' => 'expired']);
+        }
+        $claim = (new QrLoginService(Db::connection()))->claim($id);
+        if ($claim['status'] !== 'approved') {
+            return $this->json($response, ['status' => $claim['status']]);
+        }
+        $userRepo = new UserRepo(Db::connection());
+        $user = $userRepo->find($claim['user_id']);
+        $roles = $user && UserRepo::canSignIn($user) ? $userRepo->rolesOf($user) : [];
+        if (!$roles) {
+            return $this->json($response, ['status' => 'expired']);
+        }
+        (new AuditLogger(Db::connection()))->log('users', (int) $user['id'], 'update', null, ['event' => 'qr_login'],
+            (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        return $this->json($response, ['status' => 'approved'] + $this->startSession($userRepo, $user, $roles));
+    }
+
+    /** Signed-in phone: which screen is asking, so the user can tell it is the one in front of them. */
+    public function qrInfo(Request $request, Response $response): Response
+    {
+        if (!$this->qrEnabled()) {
+            return $this->error($response, 'ระบบไม่ได้เปิดให้ลงชื่อเข้าใช้ด้วย QR-Code', 403);
+        }
+        $row = (new QrLoginService(Db::connection()))->pending((string) ($request->getQueryParams()['c'] ?? ''));
+        if (!$row) {
+            return $this->error($response, 'QR-Code นี้หมดอายุหรือถูกใช้ไปแล้ว ให้สแกน QR-Code ใหม่ที่หน้าจอ', 404);
+        }
+        return $this->json($response, ['data' => [
+            'requester_ip' => $row['requester_ip'], 'requester_agent' => $row['requester_agent'],
+            'created_at' => $row['created_at'], 'expires_at' => $row['expires_at'],
+        ]]);
+    }
+
+    /** Signed-in phone: approve signing that screen in as me. */
+    public function qrApprove(Request $request, Response $response): Response
+    {
+        if (!$this->qrEnabled()) {
+            return $this->error($response, 'ระบบไม่ได้เปิดให้ลงชื่อเข้าใช้ด้วย QR-Code', 403);
+        }
+        if (!empty($_SESSION['impersonator_id'])) {
+            return $this->error($response, 'ไม่สามารถอนุมัติขณะสวมสิทธิ์ผู้ใช้อื่น', 403);
+        }
+        $user = $request->getAttribute('user');
+        $ok = (new QrLoginService(Db::connection()))->approve(
+            (string) (((array) $request->getParsedBody())['code'] ?? ''),
+            (int) $user['id'],
+            $request->getServerParams()['REMOTE_ADDR'] ?? null
+        );
+        if (!$ok) {
+            return $this->error($response, 'QR-Code นี้หมดอายุหรือถูกใช้ไปแล้ว ให้สแกน QR-Code ใหม่ที่หน้าจอ', 422);
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     /** Public: which sign-in options the login page should offer. */
     public function methods(Request $request, Response $response): Response
     {
-        return $this->json($response, ['login_methods' => (new SettingsService(Db::connection()))->loginMethods()]);
+        $settings = new SettingsService(Db::connection());
+        return $this->json($response, ['login_methods' => $settings->loginMethods(), 'qr_login' => $settings->get('qr_login') === '1']);
     }
 
     public function logout(Request $request, Response $response): Response

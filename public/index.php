@@ -80,6 +80,8 @@ $app->addErrorMiddleware(false, true, true)
 // ---- Public routes ----
 $app->post('/api/auth/login', [AuthController::class, 'login']);
 $app->get('/api/auth/methods', [AuthController::class, 'methods']);
+$app->post('/api/auth/qr', [AuthController::class, 'qrStart']);
+$app->get('/api/auth/qr/status', [AuthController::class, 'qrStatus']);
 $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
 
 // ---- Sign-in through RVC-ONE (SSO) ----
@@ -92,6 +94,8 @@ $app->group('/api', function ($group) {
     $group->post('/auth/logout', [AuthController::class, 'logout']);
     $group->get('/auth/me', [AuthController::class, 'me']);
     $group->post('/auth/role', [AuthController::class, 'switchRole']);
+    $group->get('/auth/qr/info', [AuthController::class, 'qrInfo']);
+    $group->post('/auth/qr/approve', [AuthController::class, 'qrApprove']);
 
     $group->get('/my/passbook', [MyConsignorController::class, 'passbook'])
         ->add(new RoleGuard('consignor.portal'));

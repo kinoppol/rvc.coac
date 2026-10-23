@@ -87,11 +87,75 @@ let loginMethods = 'both';
 // In SSO-only mode the password form is the admin fallback, hidden behind a link.
 let adminFormOpen = new URLSearchParams(location.search).get('login') === 'password';
 
+// Sign-in by scanning a QR-Code with a phone that is already signed in (admin switch).
+let qrLogin = false;
+const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
+let qrTimers = [];
+function stopQr() {
+    qrTimers.forEach((t) => clearInterval(t));
+    qrTimers = [];
+}
+
 async function showLogin(message) {
     try {
-        loginMethods = (await api.get('/auth/methods')).login_methods || 'both';
+        const m = await api.get('/auth/methods');
+        loginMethods = m.login_methods || 'both';
+        qrLogin = !!m.qr_login;
     } catch (e) { /* keep last known */ }
     renderLogin(message);
+}
+
+/** Shows a fresh sign-in QR-Code, counts down its 5 minutes (then makes a new one) and waits for a phone to approve it. */
+async function startQr() {
+    stopQr();
+    const box = document.getElementById('qr-login');
+    if (!box) return;
+    let qr;
+    try {
+        qr = await api.post('/auth/qr');
+    } catch (e) {
+        box.innerHTML = `<div class="muted" style="font-size:12.5px">${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    const url = `${location.origin}${location.pathname}#/qr-approve?c=${qr.code}`;
+    let svg = '';
+    try {
+        const { default: qrcode } = await import(QR_LIB);
+        const code = qrcode(0, 'M');
+        code.addData(url);
+        code.make();
+        svg = code.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
+    } catch (e) {
+        svg = '<div class="muted" style="font-size:12px">โหลดตัวสร้าง QR-Code ไม่ได้ (ต้องต่ออินเทอร์เน็ต)</div>';
+    }
+    if (!document.getElementById('qr-login')) return; // left the login page meanwhile
+    const ends = Date.now() + qr.expires_in * 1000;
+    box.innerHTML = `
+      <div class="qr-login-img">${svg}</div>
+      <div class="muted" style="font-size:12.5px;text-align:center">เปิดกล้องมือถือที่ลงชื่อเข้าใช้ระบบนี้ไว้แล้ว สแกน QR-Code แล้วกดอนุมัติ</div>
+      <div class="muted" style="font-size:12px;text-align:center">QR-Code ใช้ได้อีก <b data-qr-left></b> นาที · เปลี่ยนใหม่ให้อัตโนมัติ</div>`;
+    const left = box.querySelector('[data-qr-left]');
+    const tick = () => {
+        const s = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
+        left.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        if (s === 0) startQr(); // expired: a new code
+    };
+    tick();
+    let polling = false;
+    qrTimers.push(setInterval(tick, 1000), setInterval(async () => {
+        if (polling) return;
+        polling = true;
+        try {
+            const res = await api.get('/auth/qr/status');
+            if (res.status === 'approved') {
+                stopQr();
+                onAuthenticated(res);
+            } else if (res.status === 'expired' && Date.now() < ends - 2000) {
+                startQr(); // the code was used up or cancelled elsewhere
+            }
+        } catch (e) { /* network hiccup: keep waiting */ }
+        polling = false;
+    }, 2000));
 }
 
 function renderLogin(message) {
@@ -126,8 +190,13 @@ function renderLogin(message) {
         <p class="sub">ระบบฝากขาย ร้านค้าสหการ</p>
         ${message ? `<div class="error-box" style="margin-bottom:14px">${escapeHtml(message)}</div>` : ''}
         ${body}
+        ${qrLogin ? `
+          <div class="muted" style="text-align:center;font-size:12.5px;margin:16px 0 10px">หรือ สแกน QR-Code ด้วยมือถือ</div>
+          <div id="qr-login" class="qr-login"><div class="muted" style="font-size:12.5px">กำลังสร้าง QR-Code...</div></div>` : ''}
       </div>
     </div>`;
+    if (qrLogin) startQr();
+    else stopQr();
 
     document.getElementById('admin-login-toggle')?.addEventListener('click', (e) => {
         e.preventDefault();
@@ -150,6 +219,13 @@ function renderLogin(message) {
 }
 
 function onAuthenticated(data) {
+    stopQr();
+    // A sign-in QR scanned while signed out: back to approving it after signing in.
+    try {
+        const pendingQr = sessionStorage.getItem('qr-approve');
+        sessionStorage.removeItem('qr-approve');
+        if (pendingQr && !location.hash.startsWith('#/qr-approve')) location.hash = pendingQr;
+    } catch (e) { /* private mode */ }
     state.user = data.user;
     state.permissions = data.permissions || [];
     setCsrfToken(data.csrf_token);
@@ -199,6 +275,10 @@ window.addEventListener('app:unauthorized', () => { unmountAssistant(); renderLo
         const data = await api.get('/auth/me');
         onAuthenticated(data);
     } catch (e) {
+        // Scanned a sign-in QR-Code while signed out here: remember it across the sign-in (also via RVC-ONE).
+        if (location.hash.startsWith('#/qr-approve')) {
+            try { sessionStorage.setItem('qr-approve', location.hash); } catch (err) { /* private mode */ }
+        }
         showLogin();
     }
 })();
