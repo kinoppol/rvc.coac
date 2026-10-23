@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, todayISO } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { openDetailModal } from '../detail-modal.js';
 
 /**
  * งบลงทุน: purchases bought with invested money (counted automatically) plus other money
@@ -44,14 +45,14 @@ export async function render(container) {
               <th class="num">งบลงทุนคงเหลือ</th><th class="num">กำไรสุทธิ</th><th class="num">ซื้อของด้วยเงินกำไร</th><th class="num">กำไรสะสมคงเหลือ (หลังเบิก)</th></tr></thead>
             <tbody>${d.months.map((m, i) => `<tr style="${i === 0 ? 'color:var(--muted)' : ''}">
               <td>${escapeHtml(m.period)}</td>
-              ${['capital_purchases', 'other_invest', 'profit_withdrawn'].map((k) => `<td class="num">${m[k] === null ? '' : money(m[k])}</td>`).join('')}
+              ${['capital_purchases', 'other_invest', 'profit_withdrawn'].map((k) => `<td class="num">${figure(m, i, k)}</td>`).join('')}
               <td class="num" style="font-weight:600">${money(m.capital_balance)}</td>
-              <td class="num" style="${Number(m.net_profit) < 0 ? 'color:var(--bad)' : ''}">${m.net_profit === null ? '' : money(m.net_profit)}</td>
-              <td class="num">${m.profit_purchases === null ? '' : money(m.profit_purchases)}</td>
+              <td class="num" style="${Number(m.net_profit) < 0 ? 'color:var(--bad)' : ''}">${figure(m, i, 'net_profit')}</td>
+              <td class="num">${figure(m, i, 'profit_purchases')}</td>
               <td class="num" style="font-weight:600;${Number(m.retained_profit) < 0 ? 'color:var(--bad)' : ''}">${money(m.retained_profit)}</td></tr>`).join('')}</tbody>
           </table></div>
           <div class="muted" style="font-size:12px;padding:10px 16px">กำไรสุทธิ = รายได้ของร้าน − รายจ่าย (ต้นทุนสินค้าที่ขาย ค่าวัสดุ ค่าแรง) ตามรายงานผลประกอบการ ·
-            กำไรสะสมคงเหลือ = กำไรสุทธิสะสม − เงินที่เบิกออกจากกำไร</div>
+            กำไรสะสมคงเหลือ = กำไรสุทธิสะสม − เงินที่เบิกออกจากกำไร · กดตัวเลขสีน้ำเงินเพื่อดูรายการที่มา</div>
         </section>
 
         <section class="card card-pad">
@@ -101,11 +102,21 @@ export async function render(container) {
         wire();
     }
 
+    /** A month's figure; one that adds up records opens them. */
+    function figure(m, i, key) {
+        if (m[key] === null) return '';
+        return Number(m[key]) && m._from ? `<button type="button" class="link-btn" data-drill="${key}" data-month="${i}" title="ดูรายการที่มาของยอดนี้">${money(m[key])}</button>` : money(m[key]);
+    }
+
     function wire() {
         const $ = (s) => container.querySelector(s);
         [['#c-type', 'type'], ['#c-date', 'entry_date'], ['#c-investor', 'investor'], ['#c-amount', 'amount'], ['#c-method', 'method'], ['#c-note', 'note']]
             .forEach(([sel, key]) => $(sel).addEventListener('input', (e) => { form[key] = e.target.value; }));
         $('#c-type').addEventListener('change', draw); // labels follow the type
+        container.querySelectorAll('[data-drill]').forEach((b) => b.addEventListener('click', () => {
+            const m = data.months[Number(b.dataset.month)];
+            openDetailModal(async () => (await api.get(`/reports/capital/source?column=${b.dataset.drill}&from=${m._from}&to=${m._to}`)).data);
+        }));
         $('#c-save').addEventListener('click', save);
         $('#f-from').addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; load(); } });
         $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; load(); } });

@@ -327,7 +327,8 @@ export function printReport({ title, period, body, landscape = false }) {
   tfoot td { font-weight: 700; background: #f6f6f6; }
   .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .note { margin-top: 8px; font-size: 10.5px; color: #555; }
-  .link-btn { display: none; }
+  .link-btn[data-src] { display: none; }
+  .link-btn[data-drill] { border: 0; background: none; padding: 0; font: inherit; color: inherit; }
   .st-note { font-size: 10px; color: #555; }
   .foot { margin-top: 12px; font-size: 10px; color: #777; text-align: right; }
 </style></head><body>

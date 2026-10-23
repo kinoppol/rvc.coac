@@ -32,7 +32,11 @@ class ReportsController
         $service = new ReportService(Db::connection());
         $rows = $this->rows($service, $type, $from, $to, $q);
 
-        return $this->json($response, ['data' => $rows, 'from' => $from, 'to' => $to, 'labels' => ReportService::LABELS]);
+        return $this->json($response, [
+            'data' => $rows, 'from' => $from, 'to' => $to, 'labels' => ReportService::LABELS,
+            // columns whose figures open the records behind them (rows carry _from/_to)
+            'drill' => $type === 'capital' ? ReportService::CAPITAL_DRILL : [],
+        ]);
     }
 
     public function export(Request $request, Response $response, array $args): Response
@@ -49,7 +53,8 @@ class ReportsController
 
         $rows = array_map(function ($r) {
             unset($r['key']); // internal: which statement line can be opened
-            return $r;
+            // internal: _from/_to are the days a row's figures can be opened for
+            return array_filter($r, fn ($k) => !str_starts_with((string) $k, '_'), ARRAY_FILTER_USE_KEY);
         }, $rows);
         $headers = array_map(fn ($k) => ReportService::LABELS[$k] ?? $k, $rows ? array_keys($rows[0]) : []);
         $csvRows = array_map('array_values', $rows);
@@ -59,6 +64,19 @@ class ReportsController
         return $response
             ->withHeader('Content-Type', 'text/csv; charset=utf-8')
             ->withHeader('Content-Disposition', "attachment; filename=\"report-{$type}-{$from}_to_{$to}.csv\"");
+    }
+
+    /** The records behind one figure of รายงานงบลงทุน (?column=capital_purchases&from=…&to=…). */
+    public function capitalSource(Request $request, Response $response): Response
+    {
+        $q = $request->getQueryParams();
+        $date = fn ($v) => preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $v) ? (string) $v : null;
+        $from = $date($q['from'] ?? null);
+        $to = $date($q['to'] ?? null);
+        if (!$from || !$to || !in_array($q['column'] ?? '', ReportService::CAPITAL_DRILL, true)) {
+            return $this->error($response, 'ไม่พบที่มาของตัวเลขนี้', 404);
+        }
+        return $this->json($response, ['data' => (new ReportService(Db::connection()))->capitalSource((string) $q['column'], $from, $to)]);
     }
 
     /** The records behind one ผลประกอบการ line (?line=consign_fee&range=…). */

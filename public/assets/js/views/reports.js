@@ -46,7 +46,7 @@ const PREF = 'reports.view';
 
 // Amount and count columns get number formatting; the "รวม" row adds them up, except
 // prices and rates.
-const isMoney = (k) => /value|fee|revenue|received|sales|cost|profit|price|income|cash|transfer|qr|card|unknown_method|diff|paid|balance/.test(k) && !/count|items|bills|cashier/.test(k);
+const isMoney = (k) => /value|fee|revenue|received|sales|cost|profit|price|income|cash|transfer|qr|card|unknown_method|diff|paid|balance|purchases|invest|withdrawn/.test(k) && !/count|items|bills|cashier/.test(k);
 const isCount = (k) => /qty|count|stock$|bills|items|units/.test(k);
 const NO_TOTAL = /price|rate|unit_cost|capital_balance|retained_profit/;
 
@@ -116,6 +116,7 @@ export async function render(container, { permissions, navigate }) {
         <section class="card">
           <div class="card-head"><h2>${escapeHtml(m.label)}${m.snapshot ? '' : ` <span class="muted" style="font-size:13px;font-weight:400">${escapeHtml(fmtDate(from))}${from !== to ? ` – ${escapeHtml(fmtDate(to))}` : ''}</span>`}</h2></div>
           <div id="report-body">${type === 'statement' ? statementHtml(res.data) : `<div class="table-wrap" style="max-height:70vh">${renderTable(res.data)}</div>`}</div>
+          ${type === 'capital' ? '<div class="muted" style="font-size:12px;padding:10px 16px">กดตัวเลขสีน้ำเงินเพื่อดูรายการที่มาของยอดนั้น (ใบซื้อ รายการเบิก/ลงทุน หรือรายได้−รายจ่ายของเดือน)</div>' : ''}
           ${type === 'profit' ? `<div class="muted report-note" style="font-size:12px;padding:10px 16px">รายได้รวมของร้าน = ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + กำไรขั้นต้นสินค้าของร้าน ·
             กำไรสุทธิ = รายได้รวม − ค่าวัสดุใช้ในร้าน − ค่าแรงที่จ่าย (ยอดขายสินค้าฝากขายเป็นเงินของผู้ฝาก ไม่นับเป็นรายได้ของร้าน)</div>` : ''}
         </section>`;
@@ -131,6 +132,11 @@ export async function render(container, { permissions, navigate }) {
         container.querySelector('#f-to')?.addEventListener('change', (e) => { to = e.target.value; range = 'custom'; load(); });
         container.querySelector('#sel-consignor')?.addEventListener('change', (e) => { consignorId = Number(e.target.value); load(); });
         container.querySelector('#btn-print').addEventListener('click', print);
+        container.querySelectorAll('[data-drill]').forEach((b) => b.addEventListener('click', () => {
+            // The รวม row opens the whole report range.
+            const r = b.dataset.row === 'total' ? { _from: res.from, _to: res.to } : res.data[Number(b.dataset.row)];
+            openDetailModal(async () => (await api.get(`/reports/${type}/source?column=${encodeURIComponent(b.dataset.drill)}&from=${r._from}&to=${r._to}`)).data, navigate);
+        }));
         container.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => {
             openDetailModal(async () => (await api.get(`/reports/statement/source?line=${encodeURIComponent(b.dataset.src)}&${query()}`)).data, navigate);
         }));
@@ -209,13 +215,23 @@ export async function render(container, { permissions, navigate }) {
     function renderTable(rows) {
         if (!rows.length) return `<div class="empty">ไม่มีข้อมูลในช่วงเวลานี้</div>`;
         const labels = res.labels || {};
-        const headers = Object.keys(rows[0]);
+        // _from/_to and other _fields are not columns: they say which days a figure opens
+        const headers = Object.keys(rows[0]).filter((h) => !h.startsWith('_'));
+        const drill = res.drill || [];
         const numeric = (h) => isMoney(h) || isCount(h);
         const totals = headers.map((h) => (numeric(h) && !NO_TOTAL.test(h) ? rows.reduce((s, r) => s + (Number(r[h]) || 0), 0) : null));
         return `<table>
           <thead><tr>${headers.map((h) => `<th class="${numeric(h) ? 'num' : ''}">${escapeHtml(labels[h] || h)}</th>`).join('')}</tr></thead>
-          <tbody>${rows.map((r) => `<tr>${headers.map((h) => `<td class="${numeric(h) ? 'num' : ''}"${isMoney(h) && Number(r[h]) < 0 ? ' style="color:var(--bad)"' : ''}>${escapeHtml(formatCell(h, r[h]))}</td>`).join('')}</tr>`).join('')}</tbody>
-          ${rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${headers.map((h, i) => `<td class="${numeric(h) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? '' : escapeHtml(formatCell(h, totals[i]))}</td>`).join('')}</tr></tfoot>` : ''}
+          <tbody>${rows.map((r, i) => `<tr>${headers.map((h) => {
+              const text = escapeHtml(formatCell(h, r[h]));
+              // A figure that adds up records opens them (click to see where the total comes from).
+              const open = drill.includes(h) && r._from && r[h] !== null && Number(r[h]) !== 0;
+              return `<td class="${numeric(h) ? 'num' : ''}"${isMoney(h) && Number(r[h]) < 0 ? ' style="color:var(--bad)"' : ''}>${open
+                  ? `<button type="button" class="link-btn" data-drill="${escapeHtml(h)}" data-row="${i}" title="ดูรายการที่มาของยอดนี้">${text}</button>` : text}</td>`;
+          }).join('')}</tr>`).join('')}</tbody>
+          ${rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${headers.map((h, i) => `<td class="${numeric(h) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? ''
+              : drill.includes(h) && totals[i] ? `<button type="button" class="link-btn" data-drill="${escapeHtml(h)}" data-row="total" title="ดูรายการที่มาของยอดรวม">${escapeHtml(formatCell(h, totals[i]))}</button>`
+              : escapeHtml(formatCell(h, totals[i]))}</td>`).join('')}</tr></tfoot>` : ''}
         </table>`;
     }
 

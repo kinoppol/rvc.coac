@@ -21,7 +21,7 @@ function cell(type, v) {
 
 function sectionHtml(sec) {
     const num = (c) => c[2] === 'money' || c[2] === 'qty';
-    const totals = sec.columns.map((c) => (num(c) && c[0] !== 'cost_price' ? sec.rows.reduce((s, r) => s + (Number(r[c[0]]) || 0), 0) : null));
+    const totals = sec.columns.map((c) => (sec.total !== false && num(c) && c[0] !== 'cost_price' ? sec.rows.reduce((s, r) => s + (Number(r[c[0]]) || 0), 0) : null));
     return `
       <h3 style="margin:16px 0 8px;font-size:14.5px">${escapeHtml(sec.title)} <span class="muted" style="font-weight:400">(${count(sec.rows.length)})</span></h3>
       ${sec.rows.length ? `<div class="table-wrap" style="max-height:340px;border:1px solid var(--border);border-radius:10px"><table>

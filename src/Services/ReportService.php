@@ -451,7 +451,9 @@ class ReportService
         }
         $buckets = [];
         foreach (self::periods($from, $to, 'month') as $key => $label) {
-            $buckets[$key] = ['period' => $label, 'cap_purchase' => 0.0, 'invest' => 0.0, 'withdraw' => 0.0, 'profit_purchase' => 0.0];
+            $buckets[$key] = ['period' => $label, 'cap_purchase' => 0.0, 'invest' => 0.0, 'withdraw' => 0.0, 'profit_purchase' => 0.0,
+                // the days of this month inside the report range: what capitalSource() lists
+                '_from' => max("{$key}-01", $from), '_to' => min((new \DateTimeImmutable("{$key}-01"))->format('Y-m-t'), $to)];
         }
         foreach ($this->capitalFlows($from, $to) as $d => $f) {
             foreach ($f as $k => $v) {
@@ -475,9 +477,61 @@ class ReportService
                 'net_profit' => round($profit[$i] ?? 0, 2),
                 'profit_purchases' => round($b['profit_purchase'], 2),
                 'retained_profit' => round($retained, 2),
+                '_from' => $b['_from'],
+                '_to' => $b['_to'],
             ];
         }
         return $rows;
+    }
+
+    /** Figures of รายงานงบลงทุน that open the records they add up (capitalSource). */
+    public const CAPITAL_DRILL = ['capital_purchases', 'other_invest', 'profit_withdrawn', 'net_profit', 'profit_purchases'];
+
+    /** The records behind one figure of รายงานงบลงทุน for $from–$to, as tables for a detail dialog. */
+    public function capitalSource(string $column, string $from, string $to): array
+    {
+        $section = fn (string $title, array $columns, array $rows) => ['title' => $title, 'columns' => $columns, 'rows' => $rows];
+        $q = function (string $sql, array $params): array {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll();
+        };
+        $date = 'COALESCE(pd.receipt_date, DATE(pd.created_at))';
+        $purchases = function (string $funding) use ($q, $date, $from, $to): array {
+            $sql = "SELECT {$date} AS date, pd.doc_no, pd.supplier_name AS supplier, pd.receipt_no,
+                           (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_document_id = pd.id) AS items, pd.total
+                    FROM purchase_documents pd
+                    WHERE pd.status = 'active' AND {$date} BETWEEN ? AND ?";
+            try {
+                return $q($sql . ' AND pd.funding = ? ORDER BY date, pd.id', [$from, $to, $funding]);
+            } catch (\PDOException $e) {
+                return $funding === 'capital' ? $q($sql . ' ORDER BY date, pd.id', [$from, $to]) : []; // migration 0036 not run yet
+            }
+        };
+        $entries = function (string $type) use ($q, $from, $to): array {
+            try {
+                return $q(
+                    "SELECT entry_date AS date, doc_no, investor, IF(method = 'cash', 'เงินสด', 'โอนเงิน') AS method, note, amount
+                     FROM capital_entries WHERE cancelled_at IS NULL AND type = ? AND entry_date BETWEEN ? AND ? ORDER BY entry_date, id",
+                    [$type, $from, $to]
+                );
+            } catch (\PDOException $e) {
+                return []; // migration 0035 not run yet
+            }
+        };
+        $purchaseCols = [['date', 'วันที่ใบเสร็จ', 'date'], ['doc_no', 'เลขที่', 'text'], ['supplier', 'ร้าน/ผู้ขาย', 'text'], ['receipt_no', 'เลขที่ใบเสร็จ', 'text'], ['items', 'รายการ', 'qty'], ['total', 'ยอดสุทธิ', 'money']];
+        $entryCols = [['date', 'วันที่', 'date'], ['doc_no', 'เลขที่', 'text'], ['investor', 'ผู้รับเงิน / ผู้ลงทุน', 'text'], ['method', 'วิธี', 'text'], ['note', 'หมายเหตุ', 'text'], ['amount', 'จำนวนเงิน', 'money']];
+        [$title, $note, $sections, $link] = match ($column) {
+            'capital_purchases' => ['ซื้อของด้วยเงินลงทุน', 'ใบซื้อที่ระบุว่าซื้อด้วยเงินลงทุน (ยอดสุทธิตามใบเสร็จ) นับเพิ่มในงบลงทุน', [$section('ใบซื้อ', $purchaseCols, $purchases('capital'))], 'purchase'],
+            'profit_purchases' => ['ซื้อของด้วยเงินกำไร', 'ใบซื้อที่ระบุว่าซื้อด้วยเงินกำไรของกิจการ ไม่นับเพิ่มในงบลงทุน', [$section('ใบซื้อ', $purchaseCols, $purchases('profit'))], 'purchase'],
+            'other_invest' => ['ลงทุนเพิ่ม (อื่น ๆ)', 'เงินลงทุนที่ไม่ได้ผ่านใบซื้อ', [$section('รายการลงทุนเพิ่ม', $entryCols, $entries('invest'))], 'capital'],
+            'profit_withdrawn' => ['เบิกเงินออกจากกำไร', 'เงินที่เบิกออกจากกำไร หักออกจากงบลงทุนคงเหลือ', [$section('รายการเบิก', $entryCols, $entries('withdraw'))], 'capital'],
+            'net_profit' => ['กำไรสุทธิ', 'รวมรายได้ − รวมรายจ่าย (เหมือนรายงานผลประกอบการ)', [['total' => false] + $section('รายได้และรายจ่าย', [['section', 'หมวด', 'text'], ['item', 'รายการ', 'text'], ['amount', 'จำนวนเงิน', 'money']],
+                array_map(fn ($r) => ['section' => $r['section'], 'item' => $r['item'], 'amount' => $r['amount']],
+                    array_values(array_filter($this->statement($from, $to), fn ($r) => in_array($r['section'], ['รายได้', 'รายจ่าย', 'ผลประกอบการ'], true)))))], null],
+            default => throw new \RuntimeException('ไม่พบที่มาของตัวเลขนี้'),
+        };
+        return ['title' => "ที่มา: {$title}", 'note' => "{$note} · " . self::thaiDate($from) . ($from !== $to ? ' – ' . self::thaiDate($to) : ''), 'link' => $link, 'sections' => $sections];
     }
 
     /** What a statement line means, in plain words; total lines say how they add up. */

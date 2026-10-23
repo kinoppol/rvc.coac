@@ -230,6 +230,8 @@ $app->group('/api', function ($group) {
     $group->post('/capital/{id:[0-9]+}/cancel', [CapitalController::class, 'cancel'])
         ->add(new RoleGuard('capital.manage'));
 
+    $group->get('/reports/capital/source', [ReportsController::class, 'capitalSource'])
+        ->add(new RoleGuard('reports.view'));
     $group->get('/reports/statement/source', [ReportsController::class, 'statementSource'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/reports/{type}', [ReportsController::class, 'show'])
