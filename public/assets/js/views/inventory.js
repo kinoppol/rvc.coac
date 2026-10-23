@@ -18,6 +18,14 @@ const COLUMNS = [
     ['last_purchase', 'ซื้อล่าสุด', '', 'date'],
 ];
 const SORT_KEY = 'inventory.sort';
+const FILTER_KEY = 'inventory.filter';
+const FILTERS = [
+    ['all', 'ทั้งหมด', () => true],
+    ['nobarcode', 'ไม่มีบาร์โค้ด', (p) => !(p.barcode || '').trim()],
+    ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
+    ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
+    ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
+];
 const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
 export async function render(container, { navigate, permissions, user }) {
@@ -34,6 +42,11 @@ export async function render(container, { navigate, permissions, user }) {
         const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
         if (saved && COLUMNS.some(([k]) => k === saved.key) && ['asc', 'desc'].includes(saved.dir)) sort = saved;
     } catch (e) { /* private mode / bad value */ }
+    let filter = 'all';
+    try {
+        const saved = localStorage.getItem(FILTER_KEY);
+        if (FILTERS.some(([k]) => k === saved)) filter = saved;
+    } catch (e) { /* private mode */ }
 
     function sortValue(p, key) {
         if (key === 'packs') return p.pack_barcodes[0]?.barcode ?? '';
@@ -66,8 +79,8 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     async function load() {
-        const q = search ? `?q=${encodeURIComponent(search)}` : '';
-        res = await api.get(`/inventory${q}`);
+        const q = search ? `&q=${encodeURIComponent(search)}` : '';
+        res = await api.get(`/inventory?consigned=1${q}`);
         draw();
     }
 
@@ -87,14 +100,19 @@ export async function render(container, { navigate, permissions, user }) {
         </div>
         <section class="card card-pad">
           <div class="actions-row" style="justify-content:space-between">
-            <input type="search" id="q" placeholder="ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}" style="max-width:320px">
+            <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
           </div>
+          <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
+            ${FILTERS.map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}">${l} (${count(res.data.filter(fn).length)})</button>`).join('')}
+          </div>
+          ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr>${headHtml()}</tr></thead>
-            <tbody>${sorted(res.data).map(row).join('') || `<tr><td colspan="12" class="empty">ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน</td></tr>`}</tbody>
+            <tbody>${sorted(res.data.filter(FILTERS.find(([k]) => k === filter)[2])).map(row).join('')
+                || `<tr><td colspan="12" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
           </table></div>
         </section>
         ${editing ? editHtml() : ''}`;
@@ -107,6 +125,11 @@ export async function render(container, { navigate, permissions, user }) {
             // Same column flips; a new column starts A→ก for text, biggest/newest first for numbers and dates.
             sort = sort.key === key ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: type === 'text' ? 'asc' : 'desc' };
             try { localStorage.setItem(SORT_KEY, JSON.stringify(sort)); } catch (e) { /* private mode */ }
+            draw();
+        }));
+        container.querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', () => {
+            filter = b.dataset.filter;
+            try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
             draw();
         }));
         const buy = container.querySelector('#go-buy');
@@ -129,11 +152,11 @@ export async function render(container, { navigate, permissions, user }) {
     function row(p) {
         const low = Number(p.qty_stock) <= 3;
         return `<tr>
-          <td>${escapeHtml(p.name)}</td>
+          <td>${escapeHtml(p.name)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span></div>`).join('')}
-            ${canEdit ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
+            ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>

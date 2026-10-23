@@ -20,10 +20,11 @@ class InventoryController
     public function index(Request $request, Response $response): Response
     {
         $service = new InventoryService(Db::connection());
-        $search = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        $params = $request->getQueryParams();
+        $search = trim((string) ($params['q'] ?? ''));
         return $this->json($response, [
             'summary' => $service->summary(),
-            'data' => $service->products($search),
+            'data' => $service->products($search, !empty($params['consigned'])),
         ]);
     }
 

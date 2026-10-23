@@ -17,23 +17,30 @@ class InventoryService
     {
     }
 
-    public function products(string $search = ''): array
+    /**
+     * @param bool $withConsigned also list consignors' lots still holding stock (cost = what the
+     *        consignor gets, profit = the store's fee, last_purchase = the day it was received)
+     */
+    public function products(string $search = '', bool $withConsigned = false): array
     {
-        $sql = "SELECT p.id, p.name, p.barcode,
+        $sql = "SELECT p.id, p.name, p.barcode, p.image_token, p.consignor_id, c.name AS consignor_name,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price,
                        ROUND(p.qty_stock * p.cost_price, 2) AS stock_cost_value,
                        ROUND(p.qty_stock * p.sale_price, 2) AS stock_retail_value,
                        COALESCE(sl.sales, 0) AS sales_total, COALESCE(sl.cogs, 0) AS cogs_total,
-                       (SELECT MAX(pd.receipt_date) FROM purchase_items pi
-                          JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
-                         WHERE pi.product_id = p.id) AS last_purchase
+                       IF(p.consignor_id IS NULL,
+                          (SELECT MAX(pd.receipt_date) FROM purchase_items pi
+                             JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                            WHERE pi.product_id = p.id),
+                          DATE(p.created_at)) AS last_purchase
                 FROM products p
+                LEFT JOIN consignors c ON c.id = p.consignor_id
                 LEFT JOIN (
                     SELECT product_id, SUM(qty * unit_price) AS sales, SUM(cost_amount) AS cogs
-                    FROM sale_items WHERE consignor_id IS NULL GROUP BY product_id
+                    FROM sale_items GROUP BY product_id
                 ) sl ON sl.product_id = p.id
-                WHERE p.consignor_id IS NULL";
+                WHERE " . ($withConsigned ? '(p.consignor_id IS NULL OR p.qty_stock <> 0)' : 'p.consignor_id IS NULL');
         $params = [];
         if ($search !== '') {
             $sql .= ' AND (p.name LIKE ? OR p.barcode = ? OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))';
