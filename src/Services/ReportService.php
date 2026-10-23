@@ -487,6 +487,36 @@ class ReportService
     /** Figures of รายงานงบลงทุน that open the records they add up (capitalSource). */
     public const CAPITAL_DRILL = ['capital_purchases', 'other_invest', 'profit_withdrawn', 'net_profit', 'profit_purchases'];
 
+    /**
+     * Net profit as one table with income and expenses in their own columns (its รวม row
+     * gives total income and total expenses), then total income − total expenses.
+     */
+    private function profitSections(string $from, string $to): array
+    {
+        $rows = [];
+        $in = 0.0;
+        $out = 0.0;
+        foreach ($this->statement($from, $to) as $r) {
+            if (!in_array($r['section'], ['รายได้', 'รายจ่าย'], true) || str_starts_with($r['item'], 'รวม')) {
+                continue;
+            }
+            $isIncome = $r['section'] === 'รายได้';
+            $rows[] = ['item' => $r['item'], 'note' => $r['note'], 'income' => $isIncome ? $r['amount'] : null, 'expense' => $isIncome ? null : $r['amount']];
+            $isIncome ? $in += $r['amount'] : $out += $r['amount'];
+        }
+        $net = round($in - $out, 2);
+        return [
+            ['title' => 'รายรับ – รายจ่าย', 'rows' => $rows,
+                'columns' => [['item', 'รายการ', 'text'], ['note', 'คำอธิบาย', 'text'], ['income', 'รายรับ', 'money'], ['expense', 'รายจ่าย', 'money']]],
+            ['title' => $net < 0 ? 'ขาดทุนสุทธิ' : 'กำไรสุทธิ', 'total' => false,
+                'columns' => [['item', 'รายการ', 'text'], ['amount', 'จำนวนเงิน', 'money']], 'rows' => [
+                    ['item' => 'รวมรายรับ', 'amount' => round($in, 2)],
+                    ['item' => 'หัก รวมรายจ่าย', 'amount' => round(-$out, 2)],
+                    ['item' => $net < 0 ? 'ขาดทุนสุทธิ' : 'กำไรสุทธิ', 'amount' => $net],
+                ]],
+        ];
+    }
+
     /** The records behind one figure of รายงานงบลงทุน for $from–$to, as tables for a detail dialog. */
     public function capitalSource(string $column, string $from, string $to): array
     {
@@ -526,9 +556,7 @@ class ReportService
             'profit_purchases' => ['ซื้อของด้วยเงินกำไร', 'ใบซื้อที่ระบุว่าซื้อด้วยเงินกำไรของกิจการ ไม่นับเพิ่มในงบลงทุน', [$section('ใบซื้อ', $purchaseCols, $purchases('profit'))], 'purchase'],
             'other_invest' => ['ลงทุนเพิ่ม (อื่น ๆ)', 'เงินลงทุนที่ไม่ได้ผ่านใบซื้อ', [$section('รายการลงทุนเพิ่ม', $entryCols, $entries('invest'))], 'capital'],
             'profit_withdrawn' => ['เบิกเงินออกจากกำไร', 'เงินที่เบิกออกจากกำไร หักออกจากงบลงทุนคงเหลือ', [$section('รายการเบิก', $entryCols, $entries('withdraw'))], 'capital'],
-            'net_profit' => ['กำไรสุทธิ', 'รวมรายได้ − รวมรายจ่าย (เหมือนรายงานผลประกอบการ)', [['total' => false] + $section('รายได้และรายจ่าย', [['section', 'หมวด', 'text'], ['item', 'รายการ', 'text'], ['amount', 'จำนวนเงิน', 'money']],
-                array_map(fn ($r) => ['section' => $r['section'], 'item' => $r['item'], 'amount' => $r['amount']],
-                    array_values(array_filter($this->statement($from, $to), fn ($r) => in_array($r['section'], ['รายได้', 'รายจ่าย', 'ผลประกอบการ'], true)))))], null],
+            'net_profit' => ['กำไรสุทธิ', 'รวมรายได้ − รวมรายจ่าย (เหมือนรายงานผลประกอบการ)', $this->profitSections($from, $to), null],
             default => throw new \RuntimeException('ไม่พบที่มาของตัวเลขนี้'),
         };
         return ['title' => "ที่มา: {$title}", 'note' => "{$note} · " . self::thaiDate($from) . ($from !== $to ? ' – ' . self::thaiDate($to) : ''), 'link' => $link, 'sections' => $sections];
