@@ -76,8 +76,14 @@ export async function render(container, { params = {} } = {}) {
           </section>
 
           <section class="card card-pad">
-            <h2 style="margin-bottom:10px">${closed ? 'นับเงินปิดยอดใหม่' : 'ปิดยอด (นับเงินในลิ้นชักเมื่อปิดร้าน)'}</h2>
-            ${!dr ? '<div class="muted">ต้องระบุเงินในลิ้นชักตอนเปิดร้านก่อน (ที่หน้าขายสินค้า)</div>'
+            <h2 style="margin-bottom:10px">${!dr ? 'ระบุเงินในลิ้นชักตอนเปิดร้าน' : closed ? 'นับเงินปิดยอดใหม่' : 'ปิดยอด (นับเงินในลิ้นชักเมื่อปิดร้าน)'}</h2>
+            ${!dr && d.date === d.today ? `
+                 <div class="muted" style="margin-bottom:10px">ยังไม่ได้ระบุเงินในลิ้นชักของวันนี้ — นับเงินสดทั้งหมดในลิ้นชักแล้วใส่จำนวนเงิน
+                   ${d.cash_sales > 0 ? `<br><b>วันนี้ขายเป็นเงินสดไปแล้ว ฿${money(d.cash_sales)}</b> ระบบจะหักยอดนี้ออกจากเงินที่นับได้ให้อัตโนมัติ` : ''}</div>
+                 <label class="field">เงินในลิ้นชัก (บาท) <input id="dr-open" inputmode="decimal" placeholder="0.00"></label>
+                 <label class="field" style="margin-top:10px">หมายเหตุ (ถ้ามี) <input id="dr-open-note" maxlength="200"></label>
+                 <button type="button" class="btn" id="dr-open-save" style="width:100%;margin-top:12px">บันทึกเงินในลิ้นชักตอนเปิดร้าน</button>`
+              : !dr ? '<div class="muted">วันนี้ไม่มีการระบุเงินในลิ้นชัก</div>'
               : closed && !d.can_manage ? '<div class="pill ok">ปิดยอดของวันนี้แล้ว</div>'
               : `<label class="field">เงินสดที่นับได้ในลิ้นชัก (บาท) <input id="dr-count" inputmode="decimal" placeholder="0.00"></label>
                  <div id="dr-diff" class="muted" style="margin:8px 0;font-size:13.5px">เงินที่ควรมี ฿${money(d.expected_cash)}</div>
@@ -189,6 +195,15 @@ export async function render(container, { params = {} } = {}) {
             if (!e.target.value) return;
             date = e.target.value;
             load();
+        });
+        container.querySelector('#dr-open-save')?.addEventListener('click', async () => {
+            const raw = container.querySelector('#dr-open').value.trim().replace(/,/g, '');
+            const v = Number(raw);
+            if (raw === '' || !(v >= 0)) { alertDialog('กรุณาใส่จำนวนเงินในลิ้นชัก (ถ้าไม่มีเงินให้ใส่ 0)', { tone: 'error' }); return; }
+            try {
+                await api.post('/drawer/open', { amount: v, note: container.querySelector('#dr-open-note').value });
+                await load();
+            } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         });
         const countEl = container.querySelector('#dr-count');
         countEl?.addEventListener('input', () => {
