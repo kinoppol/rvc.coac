@@ -178,6 +178,48 @@ class ProductRepo
     }
 
     /** Sets the product photo (an attachment token). */
+    /**
+     * A store product that is really a consignor's goods (never went through receiving):
+     * hand it to the consignor. The sale price stays; the consignor gets $costPrice per piece
+     * and the rest is the store's fee. Sales already made stay store sales.
+     */
+    public function convertToConsignment(int $productId, int $consignorId, float $costPrice, ?int $userId, ?string $ip): void
+    {
+        $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+        $stmt->execute([$productId]);
+        $old = $stmt->fetch();
+        if (!$old) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        if ($old['consignor_id'] !== null) {
+            throw new \RuntimeException('สินค้านี้เป็นสินค้าฝากขายอยู่แล้ว');
+        }
+        $salePrice = (float) $old['sale_price'];
+        $costPrice = round($costPrice, 2);
+        if ($costPrice < 0 || $costPrice > $salePrice) {
+            throw new \RuntimeException('ราคาที่ผู้ฝากได้ต้องไม่ติดลบและไม่เกินราคาขาย ฿' . number_format($salePrice, 2));
+        }
+        $new = [
+            'consignor_id' => $consignorId,
+            'cost_price' => $costPrice,
+            'fee_per_unit' => round($salePrice - $costPrice, 2),
+            'round_per_unit' => 0,
+            'rounding_beneficiary' => 'store',
+            'listing_fee_status' => 'waived',
+            'listing_fee_amount' => 0,
+        ];
+        $this->db->prepare(
+            'UPDATE products SET consignor_id = ?, cost_price = ?, fee_per_unit = ?, round_per_unit = ?,
+                rounding_beneficiary = ?, listing_fee_status = ?, listing_fee_amount = ? WHERE id = ?'
+        )->execute([...array_values($new), $productId]);
+        $this->audit->log(
+            'products', $productId, 'update',
+            array_intersect_key($old, $new),
+            $new + ['note' => 'เปลี่ยนสินค้าของร้านเป็นสินค้าฝากขาย'],
+            $userId, $ip
+        );
+    }
+
     public function setImage(int $productId, string $token, ?int $userId, ?string $ip): void
     {
         $old = $this->find($productId);

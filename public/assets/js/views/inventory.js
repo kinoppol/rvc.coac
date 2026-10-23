@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
+import { confirmDialog } from '../dialog.js';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -19,12 +20,15 @@ const COLUMNS = [
 const SORT_KEY = 'inventory.sort';
 const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
-export async function render(container, { navigate, permissions }) {
+export async function render(container, { navigate, permissions, user }) {
     let search = '';
     let res = null;
     // Barcode editor: piece barcode (scanned at the POS) + any number of pack barcodes.
-    let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], error, busy }
+    // Admins can also hand the product to a consignor (goods that skipped receiving).
+    let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], consign, consignorId, consignCost, error, busy }
     const canEdit = permissions.includes('purchase.create');
+    const canConsign = canEdit && user?.role === 'admin';
+    let consignors = null; // loaded the first time an admin opens the editor
     let sort = { key: 'name', dir: 'asc' };
     try {
         const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
@@ -107,9 +111,14 @@ export async function render(container, { navigate, permissions }) {
         }));
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
-        container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
+        container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.edit);
-            editing = { id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })), error: null, busy: false };
+            if (canConsign && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
+            editing = {
+                id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })),
+                consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
+                error: null, busy: false,
+            };
             if (!editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
             draw();
             container.querySelector('#bc-name')?.focus();
@@ -165,6 +174,7 @@ export async function render(container, { navigate, permissions }) {
                 </tr>`).join('')}
               </tbody></table>
               <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
+              ${canConsign ? consignHtml(e) : ''}
               ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
             </div>
             <div class="modal-foot"><button type="button" class="btn secondary" data-close-edit>ยกเลิก</button>
@@ -173,8 +183,43 @@ export async function render(container, { navigate, permissions }) {
         </div>`;
     }
 
+    /** Admin section: turn this store product into a consignor's product. */
+    function consignHtml(e) {
+        const cost = Number(e.consignCost);
+        const fee = e.salePrice - cost;
+        return `
+          <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+            <label style="display:flex;gap:8px;align-items:center;font-weight:600;cursor:pointer">
+              <input type="checkbox" id="cs-on" ${e.consign ? 'checked' : ''}> เปลี่ยนเป็นสินค้าฝากขาย <span class="pill muted">ผู้ดูแลระบบ</span>
+            </label>
+            <div class="muted" style="font-size:12.5px;margin-top:4px">สำหรับสินค้าของผู้ฝากที่ไม่ได้ผ่านขั้นตอนรับฝาก — ยอดขายต่อจากนี้จะเข้าบัญชีผู้ฝาก ยอดขายก่อนหน้ายังเป็นของร้าน</div>
+            ${e.consign ? `
+              <div class="form-grid" style="margin-top:10px">
+                <label class="field" style="grid-column:span 2">ผู้ฝากขาย *
+                  <select id="cs-consignor"><option value="">— เลือกผู้ฝากขาย —</option>
+                    ${(consignors || []).map((o) => `<option value="${o.id}" ${String(o.id) === String(e.consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}
+                  </select>
+                </label>
+                <label class="field">ราคาที่ผู้ฝากได้/ชิ้น (บาท) *
+                  <input id="cs-cost" type="number" min="0" step="0.25" max="${e.salePrice}" value="${escapeHtml(e.consignCost)}">
+                </label>
+                <div class="field">ค่าฝากขายของร้าน/ชิ้น
+                  <div class="price-preview" id="cs-fee">${Number.isFinite(fee) && fee >= 0 ? `฿ ${money(fee)}` : '-'}</div>
+                </div>
+              </div>
+              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายคงเดิม ฿${money(e.salePrice)} · ไม่คิดค่าทำข้อมูล</div>` : ''}
+          </div>`;
+    }
+
     function bindEdit() {
         const e = editing;
+        container.querySelector('#cs-on')?.addEventListener('change', (ev) => { e.consign = ev.target.checked; draw(); });
+        container.querySelector('#cs-consignor')?.addEventListener('change', (ev) => { e.consignorId = ev.target.value; });
+        container.querySelector('#cs-cost')?.addEventListener('input', (ev) => {
+            e.consignCost = ev.target.value;
+            const fee = e.salePrice - Number(ev.target.value);
+            container.querySelector('#cs-fee').textContent = ev.target.value !== '' && fee >= 0 ? `฿ ${money(fee)}` : '-';
+        });
         container.querySelector('#bc-name').addEventListener('input', (ev) => { e.name = ev.target.value; });
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
@@ -194,6 +239,22 @@ export async function render(container, { navigate, permissions }) {
         container.querySelectorAll('[data-close-edit]').forEach((b) => b.addEventListener('click', () => { editing = null; draw(); }));
         container.querySelector('#bc-save').addEventListener('click', async () => {
             if (!e.name.trim()) { e.error = 'กรุณากรอกชื่อสินค้า'; draw(); return; }
+            let consignor = null;
+            if (e.consign) {
+                consignor = (consignors || []).find((o) => String(o.id) === String(e.consignorId));
+                const cost = Number(e.consignCost);
+                if (!consignor) { e.error = 'กรุณาเลือกผู้ฝากขาย'; draw(); return; }
+                if (e.consignCost === '' || !(cost >= 0) || cost > e.salePrice) {
+                    e.error = `ราคาที่ผู้ฝากได้ต้องอยู่ระหว่าง 0 ถึง ${money(e.salePrice)} บาท`;
+                    draw();
+                    return;
+                }
+                const ok = await confirmDialog(
+                    `«${e.name.trim()}» จะย้ายไปเป็นสินค้าฝากขายของ ${consignor.code} - ${consignor.name} และหายไปจากรายการสต๊อกสินค้าของร้าน`,
+                    { title: 'เปลี่ยนเป็นสินค้าฝากขาย?', okText: 'เปลี่ยนเป็นสินค้าฝากขาย' }
+                );
+                if (!ok) return;
+            }
             e.busy = true; e.error = null; draw();
             try {
                 const out = await api.put(`/inventory/${e.id}/barcodes`, {
@@ -207,6 +268,12 @@ export async function render(container, { navigate, permissions }) {
                 p.name = out.data.name;
                 p.barcode = out.data.barcode;
                 p.pack_barcodes = out.data.pack_barcodes;
+                if (consignor) {
+                    await api.post(`/inventory/${e.id}/consign`, { consignor_id: consignor.id, cost_price: Number(e.consignCost) });
+                    editing = null;
+                    await load(); // the product left the store's stock: refresh list and totals
+                    return;
+                }
                 editing = null;
             } catch (err) {
                 e.busy = false;
