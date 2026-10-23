@@ -396,7 +396,7 @@ export async function render(container) {
         const search = async () => {
             const res = await api.get(`/purchases/products?q=${encodeURIComponent(q.value.trim())}`).catch(() => ({ data: [] }));
             rows = res.data;
-            list.innerHTML = rows.length ? `<table><thead><tr><th>สินค้า</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">ราคาขาย</th><th></th></tr></thead><tbody>
+            list.innerHTML = rows.length ? `${res.matched ? `<div class="muted" style="font-size:12.5px;margin-bottom:6px">ไม่พบคำเต็ม แสดงผลที่มีคำว่า "<b>${escapeHtml(res.matched)}</b>"</div>` : ''}<table><thead><tr><th>สินค้า</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">ราคาขาย</th><th></th></tr></thead><tbody>
               ${rows.map((p, i) => `<tr><td>${escapeHtml(p.name)}<div class="muted" style="font-size:11.5px">${escapeHtml([p.barcode, p.packs].filter(Boolean).join(' · ') || 'ไม่มีบาร์โค้ด')}</div></td>
                 <td class="num" style="${Number(p.qty_stock) < 0 ? 'color:var(--bad);font-weight:600' : ''}">${Number(p.qty_stock)}</td>
                 <td class="num">${money(p.cost_price)}</td><td class="num">${money(p.sale_price)}</td>
@@ -415,7 +415,7 @@ export async function render(container) {
         };
         q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
         box.querySelector('[data-x]').addEventListener('click', close);
-        box.addEventListener('click', (e) => { if (e.target === box) close(); });
+        // Closed with the ✕ button only, so a stray click outside never closes it.
         q.focus();
         q.select();
         search();

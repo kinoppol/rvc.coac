@@ -683,7 +683,6 @@ export async function render(container, { user } = {}) {
 
         modal.addEventListener('click', (e) => {
             const t = e.target.closest('button');
-            if (e.target === modal && !done) return close();
             if (!t) return;
             const act = t.dataset.pay;
             if (act === 'close' || act === 'next') return close();

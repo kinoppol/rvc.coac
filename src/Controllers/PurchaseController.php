@@ -73,8 +73,20 @@ class PurchaseController
                    OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))
              ORDER BY p.qty_stock < 0 DESC, p.name LIMIT 40"
         );
-        $stmt->execute([$q, '%' . addcslashes($q, '%_\\') . '%', $q, $q]);
-        return $this->json($response, ['data' => $stmt->fetchAll()]);
+        // Thai names have no spaces and spellings vary (สตรอเบอร์รี่ / สตรอว์เบอร์รี่), so when the
+        // whole text finds nothing, retry with a shorter start of it (down to 3 letters).
+        $term = $q;
+        while (true) {
+            $stmt->execute([$term, '%' . addcslashes($term, '%_\\') . '%', $term, $term]);
+            $rows = $stmt->fetchAll();
+            $len = mb_strlen($term);
+            if ($rows || $len <= 3) {
+                break;
+            }
+            $term = mb_substr($term, 0, max(3, $len - max(2, intdiv($len, 4))));
+        }
+        // 'matched' tells the picker it is showing results for a shorter word.
+        return $this->json($response, ['data' => $rows, 'matched' => $rows && $term !== $q ? $term : null]);
     }
 
     public function store(Request $request, Response $response): Response

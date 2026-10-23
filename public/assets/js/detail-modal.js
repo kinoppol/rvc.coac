@@ -39,7 +39,7 @@ export async function openDetailModal(load, navigate) {
     const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     document.addEventListener('keydown', onKey);
-    box.addEventListener('click', (e) => { if (e.target === box) close(); });
+    // Closed with its buttons (or Esc) only, so a stray click outside never closes it.
     let d;
     try {
         d = await load();
