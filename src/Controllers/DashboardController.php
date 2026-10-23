@@ -28,6 +28,15 @@ class DashboardController
         ]);
     }
 
+    /** Tables behind one KPI card, for the dashboard's detail dialog. */
+    public function detail(Request $request, Response $response, array $args): Response
+    {
+        if (!in_array($args['key'], DashboardService::DETAILS, true)) {
+            return $this->error($response, 'ไม่พบรายละเอียดนี้', 404);
+        }
+        return $this->json($response, ['data' => (new DashboardService(Db::connection()))->detail($args['key'])]);
+    }
+
     /** ?period=week|month|year&date=Y-m-d (any day inside the period; default today). */
     public function salesChart(Request $request, Response $response): Response
     {

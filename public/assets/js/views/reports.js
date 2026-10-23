@@ -89,27 +89,25 @@ export async function render(container, { permissions }) {
     function draw() {
         const m = meta();
         container.innerHTML = `
-        <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px">
-          ${GROUPS.map((g) => `
-            <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
-              <div class="muted" style="font-size:12px;font-weight:600;min-width:170px">${escapeHtml(g.label)}</div>
-              <div class="tabs">${g.types.map((t) => `<button type="button" class="tab-btn ${type === t.key ? 'active' : ''}" data-type="${t.key}">${escapeHtml(t.label)}</button>`).join('')}</div>
-            </div>`).join('')}
-        </section>
-        <section class="card card-pad">
-          <div class="actions-row" style="justify-content:space-between">
-            <div class="actions-row">
-              ${m.snapshot ? '<span class="muted">ข้อมูล ณ ปัจจุบัน</span>' : `
-              ${RANGES.map((r) => `<button type="button" class="tab-btn ${range === r.key ? 'active' : ''}" data-range="${r.key}">${r.label}</button>`).join('')}
-              <label class="field" style="flex-direction:row;align-items:center;gap:6px">ตั้งแต่ <input type="date" id="f-from" value="${from}" style="padding:6px 8px"></label>
-              <label class="field" style="flex-direction:row;align-items:center;gap:6px">ถึง <input type="date" id="f-to" value="${to}" style="padding:6px 8px"></label>`}
-              ${m.grouped ? `<div class="tabs" style="margin-left:6px">${PERIOD_GROUPS.map(([k, l]) => `<button type="button" class="tab-btn ${group === k ? 'active' : ''}" data-group="${k}">${l}</button>`).join('')}</div>` : ''}
-              ${type === 'detail' ? `<select id="sel-consignor">${options.map((o) => `<option value="${o.id}" ${o.id === consignorId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}</select>` : ''}
-            </div>
-            <div class="actions-row">
+        <section class="card card-pad report-picker">
+          <div class="report-row">
+            <label class="report-type">รายงาน
+              <select id="sel-type">${GROUPS.map((g) => `<optgroup label="${escapeHtml(g.label)}">${g.types.map((t) => `<option value="${t.key}" ${type === t.key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}</optgroup>`).join('')}</select>
+            </label>
+            <div class="actions-row" style="margin-left:auto">
               <button type="button" class="btn secondary" id="btn-print">พิมพ์รายงาน</button>
               ${canExport ? `<a class="btn" href="${api.downloadUrl(`/reports/${type}/export?${query()}`)}">ส่งออก Excel</a>` : ''}
             </div>
+          </div>
+          <div class="report-row">
+            ${m.snapshot ? '<span class="muted">ข้อมูล ณ ปัจจุบัน (ไม่ขึ้นกับช่วงเวลา)</span>' : `
+            <label>ช่วงเวลา
+              <select id="sel-range">${RANGES.map((r) => `<option value="${r.key}" ${range === r.key ? 'selected' : ''}>${r.label}</option>`).join('')}
+                <option value="custom" ${range === 'custom' ? 'selected' : ''}>กำหนดเอง</option></select></label>
+            <label>ตั้งแต่ <input type="date" id="f-from" value="${from}"></label>
+            <label>ถึง <input type="date" id="f-to" value="${to}"></label>`}
+            ${m.grouped ? `<div class="tabs">${PERIOD_GROUPS.map(([k, l]) => `<button type="button" class="tab-btn ${group === k ? 'active' : ''}" data-group="${k}">${l}</button>`).join('')}</div>` : ''}
+            ${type === 'detail' ? `<label>ผู้ฝาก <select id="sel-consignor">${options.map((o) => `<option value="${o.id}" ${o.id === consignorId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}</select></label>` : ''}
           </div>
         </section>
         ${type === 'profit' ? profitCards(res.data) : ''}
@@ -120,8 +118,12 @@ export async function render(container, { permissions }) {
             กำไรสุทธิ = รายได้รวม − ค่าวัสดุใช้ในร้าน − ค่าแรงที่จ่าย (ยอดขายสินค้าฝากขายเป็นเงินของผู้ฝาก ไม่นับเป็นรายได้ของร้าน)</div>` : ''}
         </section>`;
 
-        container.querySelectorAll('[data-type]').forEach((btn) => btn.addEventListener('click', () => { type = btn.dataset.type; load(); }));
-        container.querySelectorAll('[data-range]').forEach((btn) => btn.addEventListener('click', () => { range = btn.dataset.range; load(); }));
+        container.querySelector('#sel-type').addEventListener('change', (e) => { type = e.target.value; load(); });
+        container.querySelector('#sel-range')?.addEventListener('change', (e) => {
+            range = e.target.value;
+            if (range === 'custom') container.querySelector('#f-from').focus();
+            else load();
+        });
         container.querySelectorAll('[data-group]').forEach((btn) => btn.addEventListener('click', () => { group = btn.dataset.group; load(); }));
         container.querySelector('#f-from')?.addEventListener('change', (e) => { from = e.target.value; range = 'custom'; load(); });
         container.querySelector('#f-to')?.addEventListener('change', (e) => { to = e.target.value; range = 'custom'; load(); });

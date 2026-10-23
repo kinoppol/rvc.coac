@@ -89,6 +89,131 @@ class DashboardService
         ];
     }
 
+    /** Card keys the dashboard can open in detail. */
+    public const DETAILS = ['sales_today', 'fee_today', 'outstanding', 'consign_stock', 'purchases', 'store_sales_today', 'store_stock'];
+
+    /**
+     * What lies behind one KPI card, as tables for the detail dialog:
+     * ['title', 'note', 'link' => route, 'sections' => [['title', 'columns' => [[key, label, type]], 'rows']]].
+     * type: text | money | qty | date | datetime.
+     */
+    public function detail(string $key): array
+    {
+        $today = date('Y-m-d');
+        $q = function (string $sql, array $params = []): array {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll();
+        };
+        $section = fn (string $title, array $columns, array $rows) => ['title' => $title, 'columns' => $columns, 'rows' => $rows];
+
+        return match ($key) {
+            'sales_today' => [
+                'title' => 'ยอดขายวันนี้', 'link' => 'drawer',
+                'sections' => [
+                    $section('แยกตามวิธีชำระเงิน', [['label', 'วิธีชำระ', 'text'], ['bills', 'บิล', 'qty'], ['amount', 'ยอดเงิน', 'money']], $q(
+                        "SELECT CASE sp.method WHEN 'cash' THEN 'เงินสด' WHEN 'transfer' THEN 'โอนเงิน' WHEN 'qr' THEN 'สแกน QR-Code' ELSE 'บัตรเครดิต' END AS label,
+                                COUNT(DISTINCT sp.sale_id) AS bills, SUM(sp.amount) AS amount
+                         FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id WHERE s.business_date = ?
+                         GROUP BY sp.method
+                         UNION ALL
+                         SELECT 'ไม่ทราบ (นำเข้าจาก POS)', COUNT(*), COALESCE(SUM(total_value), 0) FROM sales s
+                         WHERE s.business_date = ? AND NOT EXISTS (SELECT 1 FROM sale_payments sp WHERE sp.sale_id = s.id)
+                         HAVING COUNT(*) > 0",
+                        [$today, $today]
+                    )),
+                    $section('แยกตามสินค้า', [['product', 'สินค้า', 'text'], ['owner', 'เจ้าของ', 'text'], ['qty', 'ชิ้น', 'qty'], ['value', 'ยอดขาย', 'money']], $q(
+                        "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, SUM(si.qty) AS qty, SUM(si.qty * si.unit_price) AS value
+                         FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
+                         LEFT JOIN consignors c ON c.id = si.consignor_id
+                         WHERE s.business_date = ? GROUP BY p.id, p.name, c.name ORDER BY value DESC",
+                        [$today]
+                    )),
+                ],
+            ],
+            'fee_today' => [
+                'title' => 'ค่าฝากขายที่ร้านได้รับวันนี้', 'link' => 'passbook',
+                'sections' => [$section('แยกตามผู้ฝากขาย', [['code', 'รหัส', 'text'], ['consignor', 'ผู้ฝากขาย', 'text'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย', 'money'], ['listing_fee', 'ค่าทำข้อมูล', 'money']], $q(
+                    "SELECT c.code, c.name AS consignor,
+                            SUM(CASE WHEN l.type = 'sale' THEN l.amount_in ELSE 0 END) AS sales,
+                            SUM(CASE WHEN l.type = 'fee' THEN l.amount_out ELSE 0 END) AS fee,
+                            SUM(CASE WHEN l.type = 'listing_fee' THEN l.amount_out WHEN l.type = 'listing_fee_refund' THEN -l.amount_in ELSE 0 END) AS listing_fee
+                     FROM ledger_entries l JOIN consignors c ON c.id = l.consignor_id
+                     WHERE l.entry_date = ? AND l.type IN ('sale', 'fee', 'listing_fee', 'listing_fee_refund')
+                     GROUP BY c.id, c.code, c.name ORDER BY fee DESC",
+                    [$today]
+                ))],
+            ],
+            'outstanding' => [
+                'title' => 'ยอดคงเหลือค้างจ่ายผู้ฝาก', 'link' => 'withdraw',
+                'sections' => [$section('ผู้ฝากที่มีเงินคงเหลือ', [['code', 'รหัส', 'text'], ['consignor', 'ผู้ฝากขาย', 'text'], ['pay_channel', 'ช่องทางรับเงิน', 'text'], ['last_entry', 'เคลื่อนไหวล่าสุด', 'date'], ['balance', 'คงเหลือ', 'money']], $q(
+                    "SELECT c.code, c.name AS consignor, c.pay_channel, t.entry_date AS last_entry, t.balance_after AS balance
+                     FROM (SELECT consignor_id, entry_date, balance_after, ROW_NUMBER() OVER (PARTITION BY consignor_id ORDER BY id DESC) rn FROM ledger_entries) t
+                     JOIN consignors c ON c.id = t.consignor_id
+                     WHERE t.rn = 1 AND t.balance_after > 0 ORDER BY t.balance_after DESC"
+                ))],
+            ],
+            'consign_stock' => [
+                'title' => 'สินค้าฝากขายในสต๊อก', 'link' => 'ret',
+                'sections' => [
+                    $section('แยกตามผู้ฝากขาย', [['code', 'รหัส', 'text'], ['consignor', 'ผู้ฝากขาย', 'text'], ['items', 'รายการ', 'qty'], ['qty', 'ชิ้น', 'qty'], ['value', 'มูลค่าตามราคาขาย', 'money']], $q(
+                        'SELECT c.code, c.name AS consignor, COUNT(*) AS items, SUM(p.qty_stock) AS qty, SUM(p.qty_stock * p.sale_price) AS value
+                         FROM products p JOIN consignors c ON c.id = p.consignor_id WHERE p.qty_stock > 0
+                         GROUP BY c.id, c.code, c.name ORDER BY value DESC'
+                    )),
+                    $section('รายการสินค้า', [['product', 'สินค้า', 'text'], ['consignor', 'ผู้ฝาก', 'text'], ['received', 'รับฝาก', 'date'], ['expiry_date', 'หมดอายุ', 'date'], ['qty', 'ชิ้น', 'qty'], ['value', 'มูลค่า', 'money']], $q(
+                        'SELECT p.name AS product, c.name AS consignor, DATE(p.created_at) AS received, p.expiry_date, p.qty_stock AS qty, p.qty_stock * p.sale_price AS value
+                         FROM products p JOIN consignors c ON c.id = p.consignor_id WHERE p.qty_stock > 0
+                         ORDER BY p.expiry_date IS NULL, p.expiry_date, c.name, p.name LIMIT 300'
+                    )),
+                ],
+            ],
+            'purchases' => [
+                'title' => 'ต้นทุนซื้อสินค้าทั้งหมด', 'link' => 'purchase',
+                'sections' => [
+                    $section('แยกตามร้าน/ผู้ขาย', [['supplier', 'ร้าน/ผู้ขาย', 'text'], ['docs', 'ใบซื้อ', 'qty'], ['stock', 'สินค้าขาย', 'money'], ['supply', 'วัสดุใช้ในร้าน', 'money'], ['total', 'รวม', 'money']], $q(
+                        "SELECT pd.supplier_name AS supplier, COUNT(DISTINCT pd.id) AS docs,
+                                SUM(CASE WHEN pi.item_type = 'supply' THEN 0 ELSE pi.line_total END) AS stock,
+                                SUM(CASE WHEN pi.item_type = 'supply' THEN pi.line_total ELSE 0 END) AS supply, SUM(pi.line_total) AS total
+                         FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                         WHERE pd.status = 'active' GROUP BY pd.supplier_name ORDER BY total DESC"
+                    )),
+                    $section('ใบซื้อล่าสุด', [['date', 'วันที่', 'date'], ['doc_no', 'เลขที่', 'text'], ['supplier', 'ร้าน/ผู้ขาย', 'text'], ['total_qty', 'ชิ้น', 'qty'], ['total', 'ยอดสุทธิ', 'money']], $q(
+                        "SELECT COALESCE(receipt_date, DATE(created_at)) AS date, doc_no, supplier_name AS supplier, total_qty, total
+                         FROM purchase_documents WHERE status = 'active' ORDER BY id DESC LIMIT 30"
+                    )),
+                ],
+            ],
+            'store_sales_today' => [
+                'title' => 'ขายสินค้าของร้านวันนี้', 'link' => 'inventory',
+                'sections' => [$section('แยกตามสินค้า', [['product', 'สินค้า', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['cost', 'ต้นทุน', 'money'], ['profit', 'กำไรขั้นต้น', 'money']], $q(
+                    'SELECT p.name AS product, SUM(si.qty) AS qty, SUM(si.qty * si.unit_price) AS sales, SUM(si.cost_amount) AS cost,
+                            SUM(si.qty * si.unit_price) - SUM(si.cost_amount) AS profit
+                     FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
+                     WHERE si.consignor_id IS NULL AND s.business_date = ? GROUP BY p.id, p.name ORDER BY sales DESC',
+                    [$today]
+                ))],
+            ],
+            'store_stock' => [
+                'title' => 'สต๊อกสินค้าของร้าน', 'link' => 'inventory',
+                'sections' => [
+                    $section('ใกล้หมด (เหลือไม่เกิน 3 ชิ้น)', [['product', 'สินค้า', 'text'], ['qty', 'คงเหลือ', 'qty'], ['sold_30d', 'ขาย 30 วัน', 'qty'], ['cost_price', 'ทุน/ชิ้น', 'money']], $q(
+                        'SELECT p.name AS product, p.qty_stock AS qty, p.cost_price,
+                                (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+                                  WHERE si.product_id = p.id AND s.business_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)) AS sold_30d
+                         FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= 3
+                         ORDER BY sold_30d DESC, p.qty_stock ASC LIMIT 100'
+                    )),
+                    $section('มูลค่าทุนคงเหลือสูงสุด', [['product', 'สินค้า', 'text'], ['qty', 'คงเหลือ', 'qty'], ['cost_price', 'ทุน/ชิ้น', 'money'], ['value', 'มูลค่าทุน', 'money']], $q(
+                        'SELECT name AS product, qty_stock AS qty, cost_price, qty_stock * cost_price AS value
+                         FROM products WHERE consignor_id IS NULL AND qty_stock > 0 ORDER BY value DESC LIMIT 50'
+                    )),
+                ],
+            ],
+            default => throw new \RuntimeException('ไม่พบรายละเอียดนี้'),
+        };
+    }
+
     public function recentSales(int $limit = 8): array
     {
         $stmt = $this->db->prepare(

@@ -111,6 +111,7 @@ $app->group('/api', function ($group) {
 
     $group->get('/dashboard', [DashboardController::class, 'index']);
     $group->get('/dashboard/sales-chart', [DashboardController::class, 'salesChart']);
+    $group->get('/dashboard/detail/{key:[a-z_]+}', [DashboardController::class, 'detail']);
 
     $group->get('/consignors', [ConsignorController::class, 'index']);
     $group->get('/consignors/options', [ConsignorController::class, 'options']);
