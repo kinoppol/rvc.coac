@@ -184,15 +184,21 @@ class DashboardService
      */
     public function salesSeries(string $period, string $date): array
     {
-        $period = in_array($period, ['week', 'month', 'year'], true) ? $period : 'week';
+        $period = in_array($period, ['day', 'week', 'month', 'year'], true) ? $period : 'week';
         $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $date) ?: new \DateTimeImmutable('today');
         [$start, $end, $step, $prev] = match ($period) {
+            'day' => [$d, $d->modify('+1 day'), '+1 hour', '-1 day'],
             'week' => [$d->modify('monday this week'), $d->modify('monday this week')->modify('+7 days'), '+1 day', '-7 days'],
             'month' => [$d->modify('first day of this month'), $d->modify('first day of next month'), '+1 day', '-1 month'],
             'year' => [$d->setDate((int) $d->format('Y'), 1, 1), $d->setDate((int) $d->format('Y') + 1, 1, 1), '+1 month', '-1 year'],
         };
         $keyFormat = $period === 'year' ? 'Y-m' : 'Y-m-d';
-        $sqlKey = $period === 'year' ? "DATE_FORMAT(s.business_date, '%Y-%m')" : 's.business_date';
+        $sqlKey = match ($period) {
+            'year' => "DATE_FORMAT(s.business_date, '%Y-%m')",
+            // One day by the hour the sale was made (a sale after closing booked on this day keeps its own hour).
+            'day' => "LPAD(HOUR(s.sale_datetime), 2, '0')",
+            default => 's.business_date',
+        };
 
         $stmt = $this->db->prepare(
             "SELECT {$sqlKey} AS k,
@@ -210,9 +216,24 @@ class DashboardService
             $rows[(string) $r['k']] = $r;
         }
 
+        $keys = [];
+        if ($period === 'day') {
+            // Store hours, widened to any hour that has sales.
+            $settings = new SettingsService($this->db);
+            $open = (int) substr((string) ($settings->get('store_open_time') ?: '07:00'), 0, 2);
+            $closeTime = (string) ($settings->get('store_close_time') ?: '18:00');
+            $close = (int) substr($closeTime, 0, 2) - (substr($closeTime, 3, 2) === '00' ? 1 : 0);
+            $hours = array_map('intval', array_keys($rows));
+            for ($h = min([$open, ...$hours]); $h <= max([$close, ...$hours]); $h++) {
+                $keys[] = str_pad((string) $h, 2, '0', STR_PAD_LEFT);
+            }
+        } else {
+            for ($t = $start; $t < $end; $t = $t->modify($step)) {
+                $keys[] = $t->format($keyFormat);
+            }
+        }
         $buckets = [];
-        for ($t = $start; $t < $end; $t = $t->modify($step)) {
-            $k = $t->format($keyFormat);
+        foreach ($keys as $k) {
             $r = $rows[$k] ?? null;
             $value = round((float) ($r['value'] ?? 0), 2);
             $store = round((float) ($r['store'] ?? 0), 2);

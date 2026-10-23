@@ -99,9 +99,9 @@ export async function render(container, { navigate }) {
 
 // ---------- ยอดขายรายวัน / รายเดือน ----------
 
-const PERIODS = [['week', 'สัปดาห์'], ['month', 'เดือน'], ['year', 'ปี']];
+const PERIODS = [['day', 'วัน'], ['week', 'สัปดาห์'], ['month', 'เดือน'], ['year', 'ปี']];
 const PERIOD_KEY = 'dashboard.salesPeriod';
-const PREV_LABEL = { week: 'สัปดาห์ก่อน', month: 'เดือนก่อน', year: 'ปีก่อน' };
+const PREV_LABEL = { day: 'วันก่อน', week: 'สัปดาห์ก่อน', month: 'เดือนก่อน', year: 'ปีก่อน' };
 
 const asDate = (ymd) => new Date(`${ymd}T00:00:00`);
 const thDate = (ymd, opts) => asDate(ymd).toLocaleDateString('th-TH', opts);
@@ -123,12 +123,14 @@ function niceScale(max) {
 }
 
 function bucketLabel(period, key, { long = false } = {}) {
+    if (period === 'day') return long ? `${key}:00–${key}:59 น.` : `${Number(key)}:00`;
     if (period === 'year') return thDate(`${key}-01`, { month: long ? 'long' : 'short', ...(long ? { year: 'numeric' } : {}) });
     if (period === 'week') return long ? thDate(key, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' }) : thDate(key, { weekday: 'short' });
     return long ? thDate(key, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : String(asDate(key).getDate());
 }
 
 function periodLabel(d) {
+    if (d.period === 'day') return thDate(d.start, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
     if (d.period === 'year') return `ปี ${thDate(d.start, { year: 'numeric' })}`;
     if (d.period === 'month') return thDate(d.start, { month: 'long', year: 'numeric' });
     return `${thDate(d.start, { day: 'numeric', month: 'short' })} – ${thDate(d.end, { day: 'numeric', month: 'short', year: 'numeric' })}`;
@@ -205,7 +207,7 @@ function mountSalesChart(el) {
 
     function tableHtml() {
         return `<div class="table-wrap" style="max-height:340px"><table>
-          <thead><tr><th>${data.period === 'year' ? 'เดือน' : 'วันที่'}</th><th class="num">ยอดขาย</th><th class="num">ฝากขาย</th><th class="num">สินค้าของร้าน</th><th class="num">ชิ้น</th><th class="num">บิล</th></tr></thead>
+          <thead><tr><th>${data.period === 'year' ? 'เดือน' : data.period === 'day' ? 'ช่วงเวลา' : 'วันที่'}</th><th class="num">ยอดขาย</th><th class="num">ฝากขาย</th><th class="num">สินค้าของร้าน</th><th class="num">ชิ้น</th><th class="num">บิล</th></tr></thead>
           <tbody>${data.buckets.map((b) => `
             <tr><td>${escapeHtml(bucketLabel(data.period, b.key, { long: true }))}</td><td class="num">${money(b.value)}</td>
                 <td class="num">${money(b.consign)}</td><td class="num">${money(b.store)}</td><td class="num">${count(b.qty)}</td><td class="num">${count(b.bills)}</td></tr>`).join('')}
@@ -231,9 +233,10 @@ function mountSalesChart(el) {
         const y = (v) => m.t + ph - (v / top) * ph;
         const base = m.t + ph;
         const today = new Date();
-        const todayKey = data.period === 'year'
-            ? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
-            : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const todayKey = data.period === 'year' ? ymd.slice(0, 7)
+            : data.period === 'day' ? (data.start === ymd ? String(today.getHours()).padStart(2, '0') : null)
+            : ymd;
         // Month view: label every k-th day so the numbers never collide.
         const every = Math.max(1, Math.ceil(26 / band));
         const maxIdx = max > 0 ? bs.findIndex((b) => b.value === max) : -1;
