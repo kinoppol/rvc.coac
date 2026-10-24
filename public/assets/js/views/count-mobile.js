@@ -66,6 +66,13 @@ function saveAccepted(set) {
     try { localStorage.setItem(ACCEPTED_KEY, JSON.stringify([...set].slice(-500))); } catch { /* private mode */ }
 }
 
+// Keypad height, smaller keys leave more of the screen for the product card. Kept per device.
+const PAD_KEY = 'count.padSize';
+const PAD_SIZES = [['', 'ปกติ'], ['s', 'เล็ก'], ['xs', 'เล็กมาก']];
+function loadPadSize() {
+    try { const v = localStorage.getItem(PAD_KEY) || ''; return PAD_SIZES.some(([k]) => k === v) ? v : ''; } catch { return ''; }
+}
+
 let audioCtx = null;
 function beep(ok = true) {
     try {
@@ -112,6 +119,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         <div class="mc-title"><b>${escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
         <button type="button" class="mc-scan" data-act="scan">📷 สแกน</button>
         ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
+        <button type="button" class="mc-icon" data-act="padsize" aria-label="ขนาดปุ่มตัวเลข" title="ขนาดปุ่มตัวเลข">⌨</button>
         <button type="button" class="mc-icon" data-act="search" aria-label="ค้นหาสินค้า">🔍</button>
       </header>
       <div class="mc-cam" data-el="cam" hidden>
@@ -130,6 +138,8 @@ export function openMobileCount({ stockCount, items, onClose }) {
       <div class="mc-actions" data-el="actions"></div>
       <input type="file" accept="image/*" capture="environment" data-el="photo" hidden>
       <div class="mc-sheet" data-el="sheet" hidden></div>`;
+    let padSize = loadPadSize();
+    if (padSize) root.classList.add(`pad-${padSize}`);
     document.body.appendChild(root);
     // Hide the page underneath (a wide table there makes phones zoom out). Fullscreen
     // is opt-in (⛶): Chrome shows an exit hint over the bottom buttons when it starts.
@@ -652,6 +662,15 @@ export function openMobileCount({ stockCount, items, onClose }) {
         if (!act) return;
         if (act === 'close') close();
         else if (act === 'search') openSearch(null);
+        else if (act === 'padsize') {
+            if (padSize) root.classList.remove(`pad-${padSize}`);
+            const i = PAD_SIZES.findIndex(([k]) => k === padSize);
+            padSize = PAD_SIZES[(i + 1) % PAD_SIZES.length][0];
+            if (padSize) root.classList.add(`pad-${padSize}`);
+            try { localStorage.setItem(PAD_KEY, padSize); } catch { /* private mode */ }
+            message = { kind: 'info', text: `ปุ่มตัวเลขขนาด${PAD_SIZES.find(([k]) => k === padSize)[1]} (กด ⌨ เพื่อเปลี่ยน)` };
+            draw();
+        }
         else if (act === 'fullscreen') {
             if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
             else root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
