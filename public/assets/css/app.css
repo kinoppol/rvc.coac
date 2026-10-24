@@ -395,6 +395,10 @@ tr.pos-skip td { color: var(--muted); }
 tr.pos-saved .pos-reason { color: var(--ok); }
 .pos-cand { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13.5px; }
 .pos-cand:hover { border-color: var(--pri); }
+.pos-repair { border: 1px solid var(--priBorder); background: var(--soft); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+.pos-repair-results { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
+.pos-repair-pick { display: flex; align-items: center; gap: 10px; border: 1px solid var(--pri); border-radius: 10px; background: var(--surface2); padding: 10px 12px; }
+.pos-repair-row td { background: var(--soft); }
 .pos-cand.current { border-color: var(--pri); box-shadow: 0 0 0 2px color-mix(in srgb, var(--pri) 25%, transparent); }
 .pos-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .pos-tags .pill { font-size: 10.5px; padding: 1px 7px; }

@@ -181,7 +181,11 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.import'));
     $group->post('/pos-import/{id:[0-9]+}/cancel', [PosImportController::class, 'cancel'])
         ->add(new RoleGuard('sales.import.cancel'));
-    $group->post('/pos-import/analyze', [PosImportController::class, 'analyze'])
+    $group->get('/pos-import/{id:[0-9]+}/items/{item:[0-9]+}/pairs', [PosImportController::class, 'linePairs'])
+        ->add(new RoleGuard('sales.import.cancel'));
+    $group->post('/pos-import/{id:[0-9]+}/items/{item:[0-9]+}/repair', [PosImportController::class, 'repair'])
+        ->add(new RoleGuard('sales.import.cancel'));
+    $group->post('/pos-import/analyze',[PosImportController::class, 'analyze'])
         ->add(new RoleGuard('sales.import'));
     $group->get('/pos-import/models', [PosImportController::class, 'models'])
         ->add(new RoleGuard('sales.import'));

@@ -39,6 +39,7 @@ export async function render(container, { permissions = [] } = {}) {
     let editing = null; // row index shown in the pairing modal
     let modalTab = 'pick';
     let viewing = null; // an earlier import opened from the "นำเข้าล่าสุด" list
+    let repairing = null; // admin re-pairing one line of `viewing`: { item, no, q, results, product, pairs, mapIds, busy, error }
     let mappings = [];
     let mapQ = '';
 
@@ -391,6 +392,7 @@ export async function render(container, { permissions = [] } = {}) {
     }
 
     async function openImport(id) {
+        repairing = null;
         viewing = { id, loading: true };
         drawModal();
         try {
@@ -414,6 +416,7 @@ export async function render(container, { permissions = [] } = {}) {
             success = `ยกเลิกการนำเข้า${res.doc_no ? ` ${res.doc_no}` : ''} แล้ว — คืนสินค้าเข้าสต๊อก ${count(res.units)} ชิ้น`
                 + (res.removed_products ? ` · ลบสินค้าที่สร้างตอนนำเข้า ${count(res.removed_products)} รายการ` : '');
             viewing = null;
+            repairing = null;
             await loadRecent();
             draw();
         } catch (e) {
@@ -426,6 +429,7 @@ export async function render(container, { permissions = [] } = {}) {
         const items = v.items || [];
         const fee = items.reduce((s, it) => s + Number(it.fee_amount || 0), 0);
         const cancelled = v.status === 'cancelled';
+        const canRepair = canCancel && !cancelled && !v.loading && !v.error && items.length > 0;
         return `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:960px">
@@ -443,10 +447,11 @@ export async function render(container, { permissions = [] } = {}) {
                 ${cancelled ? `<div class="error-box" style="margin-bottom:12px">
                   <b>การนำเข้านี้ถูกยกเลิกแล้ว</b> เมื่อ ${escapeHtml(fmtDateTime(v.cancelled_at))}${v.cancelled_by_name ? ` โดย ${escapeHtml(v.cancelled_by_name)}` : ''}
                   <div>เหตุผล: ${escapeHtml(v.cancel_reason || '-')} — รายการด้านล่างเป็นข้อมูล ณ ตอนยกเลิก ไม่นับรวมในยอดขายและสต๊อกแล้ว</div></div>` : ''}
+                ${repairing ? repairHtml() : ''}
                 <div class="table-wrap"><table>
-                  <thead><tr><th>#</th><th>สินค้าในระบบ</th><th>ชื่อใน POS / SKU</th><th>เจ้าของ</th><th class="num">จำนวน</th><th class="num">ราคา/ชิ้น</th><th class="num">รวม</th><th class="num">ค่าฝาก/กำไร</th></tr></thead>
+                  <thead><tr><th>#</th><th>สินค้าในระบบ</th><th>ชื่อใน POS / SKU</th><th>เจ้าของ</th><th class="num">จำนวน</th><th class="num">ราคา/ชิ้น</th><th class="num">รวม</th><th class="num">ค่าฝาก/กำไร</th>${canRepair ? '<th></th>' : ''}</tr></thead>
                   <tbody>${items.map((it, i) => `
-                    <tr>
+                    <tr class="${repairing?.item.id === it.id ? 'pos-repair-row' : ''}">
                       <td class="muted">${i + 1}</td>
                       <td><span class="pos-prod">${escapeHtml(it.product_name)}</span>${Number(it.is_new) ? ' <span class="pill warn">สร้างใหม่ตอนนำเข้า</span>' : ''}</td>
                       <td class="muted">${escapeHtml(it.pos_names || '-')}${it.pos_skus ? `<div class="pos-sub">SKU ${escapeHtml(it.pos_skus)}</div>` : ''}</td>
@@ -455,10 +460,11 @@ export async function render(container, { permissions = [] } = {}) {
                       <td class="num">${money(it.unit_price)}</td>
                       <td class="num">${money(it.line_total)}</td>
                       <td class="num">${money(it.fee_amount)}</td>
-                    </tr>`).join('') || '<tr><td colspan="8" class="empty">ไม่มีรายการขาย (อาจถูกลบไปแล้ว)</td></tr>'}
+                      ${canRepair ? `<td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-repair="${i}" title="จับคู่รายการนี้กับสินค้าอื่น" ${repairing ? 'disabled' : ''}>แก้คู่</button></td>` : ''}
+                    </tr>`).join('') || '<tr><td colspan="9" class="empty">ไม่มีรายการขาย (อาจถูกลบไปแล้ว)</td></tr>'}
                   </tbody>
                   <tfoot><tr style="font-weight:700"><td colspan="4">รวม</td><td class="num">${count(v.total_qty)}</td><td></td>
-                    <td class="num">${money(v.total_value)}</td><td class="num">${money(fee)}</td></tr></tfoot>
+                    <td class="num">${money(v.total_value)}</td><td class="num">${money(fee)}</td>${canRepair ? '<td></td>' : ''}</tr></tfoot>
                 </table></div>
                 <p class="muted" style="font-size:12px;margin:10px 0 0">ค่าฝาก/กำไร: สินค้าฝากขาย = ค่าฝากที่ร้านได้ · สินค้าของร้าน = กำไรขั้นต้น ·
                   ชื่อใน POS มาจากคู่สินค้าที่จับไว้ (แก้ได้ที่แท็บ คู่สินค้าที่จับไว้)</p>`}
@@ -470,13 +476,132 @@ export async function render(container, { permissions = [] } = {}) {
         </div>`;
     }
 
+    /** Admin panel: move one line of a saved import to the right product. */
+    function repairHtml() {
+        const r = repairing;
+        const it = r.item;
+        return `
+                <div class="pos-repair" id="pos-repair">
+                  <div style="font-weight:700;margin-bottom:4px">แก้การจับคู่รายการที่ ${r.no}: ${escapeHtml(it.product_name)}</div>
+                  <div class="muted" style="font-size:12.5px;margin-bottom:10px">ชื่อใน POS: ${escapeHtml(it.pos_names || '-')} · ${count(it.qty)} ชิ้น × ${money(it.unit_price)} = ${money(it.line_total)} · ${escapeHtml(it.owner)}</div>
+                  ${r.product ? `
+                    <div class="pos-repair-pick">
+                      <div style="flex:1"><div class="muted" style="font-size:12px">เปลี่ยนเป็นสินค้า</div>
+                        <span class="pos-prod">${escapeHtml(r.product.name)}</span>
+                        <div class="pos-sub">${escapeHtml(r.product.consignor_name || OWNER_STORE)}${r.product.barcode ? ` · ${escapeHtml(r.product.barcode)}` : ''} · คงเหลือ ${count(r.product.qty_stock)}</div></div>
+                      <button type="button" class="btn secondary sm" data-repair-change>เลือกใหม่</button>
+                    </div>` : `
+                    <div class="search-box">🔍 <input id="repair-q" placeholder="ค้นหาสินค้าที่ถูกต้อง (ชื่อหรือบาร์โค้ด)" value="${escapeHtml(r.q)}"></div>
+                    <div class="pos-repair-results">${(r.results || []).filter((p) => Number(p.id) !== Number(it.product_id)).map((p) => `
+                      <button type="button" class="pos-cand" data-repair-pick="${p.id}">
+                        <span style="flex:1;text-align:left"><span class="pos-prod">${escapeHtml(p.name)}</span>
+                          <div class="pos-sub">${escapeHtml(p.consignor_name || OWNER_STORE)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''} · คงเหลือ ${count(p.qty_stock)}</div></span>
+                        <span class="num" style="font-size:12.5px;white-space:nowrap">ขาย ${money(p.sale_price)}</span>
+                      </button>`).join('') || (r.q ? '<div class="muted" style="font-size:13px">ไม่พบสินค้า</div>' : '')}</div>`}
+                  ${r.pairs?.length ? `
+                    <div style="margin-top:12px;font-size:13px">
+                      <div style="font-weight:600;margin-bottom:4px">คู่ที่จับไว้ของ «${escapeHtml(it.product_name)}» — เลือกชื่อใน POS ที่ต้องย้ายไปสินค้าที่ถูกต้อง เพื่อให้นำเข้าครั้งต่อไปจับคู่ถูก</div>
+                      ${r.pairs.map((m) => `<label style="display:flex;gap:8px;align-items:center;padding:3px 0;cursor:pointer">
+                        <input type="checkbox" data-repair-map="${m.id}" ${r.mapIds.has(Number(m.id)) ? 'checked' : ''}>
+                        <span>${escapeHtml(m.pos_name)}${m.pos_sku ? ` <span class="muted">· SKU ${escapeHtml(m.pos_sku)}</span>` : ''} <span class="muted">· ใช้แล้ว ${count(m.times_used)} ครั้ง</span></span></label>`).join('')}
+                    </div>` : ''}
+                  <div class="muted" style="font-size:12px;margin-top:10px">เมื่อบันทึก: «${escapeHtml(it.product_name)}» ได้สต๊อกคืน ${count(it.qty)} ชิ้น และสินค้าที่เลือกถูกตัดสต๊อกแทน (ราคาขายเท่าเดิม)
+                    — ถ้าเป็นสินค้าฝากขาย ระบบลงรายการปรับยอดในสมุดบัญชีผู้ฝากให้ · ${Number(it.is_new) ? 'สินค้าที่สร้างตอนนำเข้านี้ ถ้าไม่ถูกใช้ที่อื่นจะถูกลบ' : ''}</div>
+                  ${r.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(r.error)}</div>` : ''}
+                  <div class="actions-row" style="margin-top:12px;justify-content:flex-end">
+                    <button type="button" class="btn secondary" data-repair-cancel>ยกเลิก</button>
+                    <button type="button" class="btn" data-repair-save ${r.product && !r.busy ? '' : 'disabled'}>${r.busy ? 'กำลังบันทึก…' : 'บันทึกการแก้คู่'}</button>
+                  </div>
+                </div>`;
+    }
+
+    async function startRepair(i) {
+        const it = viewing.items[i];
+        repairing = { item: it, no: i + 1, q: '', results: [], product: null, pairs: [], mapIds: new Set(), busy: false, error: null };
+        drawModal();
+        host().querySelector('#pos-repair')?.scrollIntoView({ block: 'nearest' });
+        host().querySelector('#repair-q')?.focus();
+        try {
+            const pairs = (await api.get(`/pos-import/${viewing.id}/items/${it.id}/pairs`)).data;
+            if (repairing?.item !== it) return;
+            repairing.pairs = pairs;
+            // A product with a single POS name: that name is the wrong pair.
+            if (pairs.length === 1) repairing.mapIds.add(Number(pairs[0].id));
+            const q = host().querySelector('#repair-q')?.value || '';
+            drawModal();
+            const input = host().querySelector('#repair-q');
+            if (input) { input.focus(); input.setSelectionRange(q.length, q.length); }
+        } catch (e) { /* pairs are optional */ }
+    }
+
+    async function saveRepair() {
+        const r = repairing;
+        const moved = r.pairs.filter((m) => r.mapIds.has(Number(m.id))).length;
+        if (!(await confirmDialog(`รายการที่ ${r.no} «${r.item.product_name}» ${count(r.item.qty)} ชิ้น จะเปลี่ยนเป็น «${r.product.name}»`
+            + (moved ? ` และย้ายคู่ที่จับไว้ ${moved} ชื่อไปที่สินค้านี้` : ''), { title: 'บันทึกการแก้คู่?', okText: 'บันทึก' }))) return;
+        r.busy = true;
+        r.error = null;
+        drawModal();
+        try {
+            const res = await api.post(`/pos-import/${viewing.id}/items/${r.item.id}/repair`, { product_id: r.product.id, mapping_ids: [...r.mapIds] });
+            viewing = res.import;
+            repairing = null;
+            success = `แก้คู่แล้ว: «${res.data.old_product || '-'}» → «${res.data.product}» ${count(res.data.qty)} ชิ้น`
+                + (res.data.moved_pairs ? ` · ย้ายคู่ที่จับไว้ ${count(res.data.moved_pairs)} ชื่อ` : '')
+                + (res.data.removed_product ? ' · ลบสินค้าที่สร้างตอนนำเข้าซึ่งไม่ถูกใช้แล้ว' : '');
+            await loadRecent();
+            draw();
+        } catch (e) {
+            r.busy = false;
+            r.error = e.message;
+            drawModal();
+        }
+    }
+
+    function bindRepair(h) {
+        h.querySelectorAll('[data-repair]').forEach((b) => b.addEventListener('click', () => startRepair(Number(b.dataset.repair))));
+        if (!repairing) return;
+        const r = repairing;
+        h.querySelector('[data-repair-cancel]')?.addEventListener('click', () => { repairing = null; drawModal(); });
+        h.querySelector('[data-repair-change]')?.addEventListener('click', () => { r.product = null; drawModal(); h.querySelector('#repair-q')?.focus(); });
+        h.querySelector('[data-repair-save]')?.addEventListener('click', saveRepair);
+        h.querySelectorAll('[data-repair-map]').forEach((c) => c.addEventListener('change', () => {
+            if (c.checked) r.mapIds.add(Number(c.dataset.repairMap)); else r.mapIds.delete(Number(c.dataset.repairMap));
+        }));
+        h.querySelectorAll('[data-repair-pick]').forEach((b) => b.addEventListener('click', () => {
+            r.product = r.results.find((p) => Number(p.id) === Number(b.dataset.repairPick));
+            drawModal();
+        }));
+        const input = h.querySelector('#repair-q');
+        let timer = null;
+        input?.addEventListener('input', () => {
+            r.q = input.value;
+            clearTimeout(timer);
+            timer = setTimeout(async () => {
+                const q = r.q.trim();
+                try {
+                    r.results = q ? (await api.get(`/pos-import/products?q=${encodeURIComponent(q)}`)).data : [];
+                } catch (e) { r.error = e.message; }
+                if (repairing !== r || r.product) return;
+                drawModal();
+                const again = host().querySelector('#repair-q');
+                if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+            }, 250);
+        });
+    }
+
+    function host() {
+        return container.querySelector('#pos-modal');
+    }
+
     function drawModal() {
         const host = container.querySelector('#pos-modal');
         if (!host) return;
         if (viewing && tab === 'import' && step === 'input') {
             host.innerHTML = importHtml();
-            host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; drawModal(); }));
+            host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; repairing = null; drawModal(); }));
             host.querySelector('[data-cancel-import]')?.addEventListener('click', () => cancelImport(viewing));
+            bindRepair(host);
             return;
         }
         if (editing === null || tab !== 'import' || step !== 'review') { host.innerHTML = ''; return; }

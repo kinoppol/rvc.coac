@@ -285,6 +285,127 @@ class PosImportService
     }
 
     /**
+     * Admin fix for a line paired with the wrong product: the line moves to
+     * another product at the same quantity and price. The wrong product gets
+     * its stock back, the right one is sold from; consignor passbooks get
+     * correcting entries (ref = the sale's doc no, so cancelling the import
+     * later still takes everything out). The chosen saved pairs move too, so
+     * the next import pairs those POS names correctly. A product this import
+     * created that is now unused is deleted.
+     * @param int[] $mappingIds saved pairs (of the wrong product) to move
+     */
+    public function repair(int $importId, int $saleItemId, int $productId, array $mappingIds, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM pos_imports WHERE id = ? FOR UPDATE');
+            $stmt->execute([$importId]);
+            $import = $stmt->fetch();
+            if (!$import || $import['status'] !== 'active' || $import['sale_id'] === null) {
+                throw new \RuntimeException('แก้ได้เฉพาะการนำเข้าที่ยังไม่ถูกยกเลิก');
+            }
+            $stmt = $this->db->prepare('SELECT si.*, s.doc_no, s.business_date FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.id = ? AND si.sale_id = ? FOR UPDATE');
+            $stmt->execute([$saleItemId, $import['sale_id']]);
+            $line = $stmt->fetch();
+            if (!$line) {
+                throw new \RuntimeException('ไม่พบรายการนี้ในการนำเข้า');
+            }
+            $oldId = (int) $line['product_id'];
+            if ($productId === $oldId) {
+                throw new \RuntimeException('สินค้าที่เลือกเป็นสินค้าเดิมของรายการนี้');
+            }
+            $lock = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $lock->execute([$productId]);
+            $new = $lock->fetch();
+            if (!$new) {
+                throw new \RuntimeException('ไม่พบสินค้าที่เลือก');
+            }
+            $lock->execute([$oldId]);
+            $old = $lock->fetch();
+            $wasNew = $old && abs(strtotime((string) $old['created_at']) - strtotime((string) $import['created_at'])) <= 300;
+
+            $qty = (int) $line['qty'];
+            $unitPrice = (float) $line['unit_price'];
+            $value = round($unitPrice * $qty, 2);
+            $docNo = $line['doc_no'];
+            $date = $line['business_date'] ?: $import['sale_date'];
+            $ledger = new LedgerService($this->db);
+
+            // 1) The wrong product: stock back, and its consignor no longer earns this sale.
+            if ($old) {
+                $this->db->prepare('UPDATE products SET qty_sold = qty_sold - ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?')
+                    ->execute([$qty, $qty, $oldId]);
+                $this->audit->log('products', $oldId, 'update', $old, $this->products->find($oldId), $userId, $ip);
+            }
+            if ($line['consignor_id'] !== null) {
+                $cid = (int) $line['consignor_id'];
+                $name = $old['name'] ?? 'สินค้า';
+                $ledger->append($cid, 'sale', "แก้การจับคู่ยอดขาย POS: นำ {$name} {$qty} ชิ้นออก (ไม่ใช่สินค้าของผู้ฝาก)", $docNo, 0, $value, $userId, $date);
+                if ((float) $line['fee_amount'] > 0) {
+                    // Named like a fee entry so cancelling the import removes it with the entry above.
+                    $ledger->append($cid, 'fee', "หักค่าฝากขาย (คืน) {$qty} ชิ้น — แก้การจับคู่", $docNo, (float) $line['fee_amount'], 0, $userId, $date);
+                }
+            }
+
+            // 2) The right product: sold from, priced as SaleService does.
+            if ($new['consignor_id'] === null) {
+                $feeOut = $unitPrice - (float) $new['cost_price'];
+                $cost = round((float) $new['cost_price'] * $qty, 2);
+            } else {
+                $feeOut = (float) $new['fee_per_unit'] + ($new['rounding_beneficiary'] === 'store' ? (float) $new['round_per_unit'] : 0);
+                $cost = round(($unitPrice - $feeOut) * $qty, 2);
+            }
+            $fee = round($feeOut * $qty, 2);
+            $this->db->prepare('UPDATE sale_items SET product_id = ?, consignor_id = ?, fee_amount = ?, cost_amount = ? WHERE id = ?')
+                ->execute([$productId, $new['consignor_id'], $fee, $cost, $saleItemId]);
+            $this->products->applySale($productId, $qty, $userId, $ip);
+            if ($new['consignor_id'] !== null) {
+                $cid = (int) $new['consignor_id'];
+                $ledger->append($cid, 'sale', "ขายสินค้า 1 รายการ {$qty} ชิ้น (แก้การจับคู่ยอดขาย POS: {$new['name']})", $docNo, $value, 0, $userId, $date);
+                if ($fee > 0) {
+                    $ledger->append($cid, 'fee', "หักค่าฝากขาย {$qty} ชิ้น", $this->docs()->next('FEE', 'ledger_entries', 'ref_no'), 0, $fee, $userId, $date);
+                }
+            }
+
+            // 3) The saved pairs, so the next import pairs these POS names with the right product.
+            $moved = 0;
+            if ($mappingIds) {
+                $ids = array_values(array_unique(array_map('intval', $mappingIds)));
+                $upd = $this->db->prepare("UPDATE pos_item_mappings SET product_id = ?, action = 'product', source = 'manual' WHERE id = ? AND product_id = ?");
+                foreach ($ids as $mid) {
+                    $upd->execute([$productId, $mid, $oldId]);
+                    $moved += $upd->rowCount();
+                }
+            }
+
+            $removed = $wasNew ? $this->removeCreatedProducts([$oldId], $userId, $ip) : 0;
+
+            $this->audit->log('sale_items', $saleItemId, 'update',
+                ['doc_no' => $docNo, 'product_id' => $oldId, 'product' => $old['name'] ?? null, 'consignor_id' => $line['consignor_id']],
+                ['doc_no' => $docNo, 'product_id' => $productId, 'product' => $new['name'], 'consignor_id' => $new['consignor_id'],
+                 'qty' => $qty, 'moved_pairs' => $moved, 'removed_product' => (bool) $removed], $userId, $ip);
+            $this->db->commit();
+            return ['product' => $new['name'], 'old_product' => $old['name'] ?? null, 'qty' => $qty, 'moved_pairs' => $moved, 'removed_product' => (bool) $removed];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    private function docs(): DocumentNumberService
+    {
+        return new DocumentNumberService($this->db);
+    }
+
+    /** Saved pairs that point at a product (offered to move when one of its lines is re-paired). */
+    public function pairsOf(int $productId): array
+    {
+        $stmt = $this->db->prepare("SELECT id, pos_name, pos_sku, times_used FROM pos_item_mappings WHERE product_id = ? AND action = 'product' ORDER BY pos_name");
+        $stmt->execute([$productId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
      * Takes out the passbook entries a sale posted: per consignor the sale
      * entry (ref = the sale's doc no), the fee entry right after it, and a
      * listing-fee refund that the sale triggered for one of its products.

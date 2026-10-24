@@ -182,6 +182,37 @@ class PosImportController
         return $this->json($response, ['data' => $result]);
     }
 
+    /** Admin only (sales.import.cancel): the saved pairs of a line's product, offered to move when re-pairing it. */
+    public function linePairs(Request $request, Response $response, array $args): Response
+    {
+        $import = self::service()->find((int) $args['id']);
+        $line = $import ? current(array_filter($import['items'], fn ($it) => (int) ($it['id'] ?? 0) === (int) $args['item'])) : null;
+        if (!$line) {
+            return $this->error($response, 'ไม่พบรายการนี้ในการนำเข้า', 404);
+        }
+        return $this->json($response, ['data' => self::service()->pairsOf((int) $line['product_id'])]);
+    }
+
+    /** Admin only (sales.import.cancel): moves a wrongly paired line to the right product. */
+    public function repair(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        try {
+            $result = self::service()->repair(
+                (int) $args['id'],
+                (int) $args['item'],
+                (int) ($body['product_id'] ?? 0),
+                (array) ($body['mapping_ids'] ?? []),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result, 'import' => self::service()->find((int) $args['id'])]);
+    }
+
     public function mappings(Request $request, Response $response): Response
     {
         $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
