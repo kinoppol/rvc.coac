@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, fmtDateTime, escapeHtml } from '../util.js';
 import { openDetailModal } from '../detail-modal.js';
+import { skChart } from '../skeleton.js';
 
 export async function render(container, { navigate }) {
     const data = await api.get('/dashboard');
@@ -195,7 +196,7 @@ function mountSalesChart(el) {
         </div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
         <div class="sales-chart-body" style="position:relative;min-height:240px;${loading ? 'opacity:.5' : ''}">
-          ${data ? (asTable ? tableHtml() : '') : '<div class="empty">กำลังโหลด...</div>'}
+          ${data ? (asTable ? tableHtml() : '') : skChart()}
         </div>`;
 
         el.querySelectorAll('[data-period]').forEach((b) => b.addEventListener('click', () => {

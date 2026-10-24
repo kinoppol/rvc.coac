@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 import { renderPerfPanel } from './settings-perf.js';
+import { skPage } from '../skeleton.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 
@@ -56,7 +57,7 @@ export async function render(page, { user, permissions, params = {} }) {
         error = null;
         // A fresh pane per visit, so a slow load from a tab left behind lands in a detached node.
         pane = document.createElement('div');
-        pane.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+        pane.innerHTML = skPage(key === 'users' || key === 'perf' ? 'list' : 'form');
         container.replaceChildren(pane);
         if (key === 'users') return renderUsersPanel(pane, { user });
         if (key === 'rvcone') return renderOaPanel(pane);

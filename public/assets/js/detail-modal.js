@@ -1,6 +1,7 @@
 import { money, count, escapeHtml, fmtDate, fmtDateTime } from './util.js';
 import { alertDialog } from './dialog.js';
 import { api } from './api.js';
+import { skBlock } from './skeleton.js';
 
 // Drill-down dialog shared by the dashboard cards and the report lines.
 // load() resolves to { title, note?, link?, sections: [{ title, columns: [[key, label, type]], rows }] }.
@@ -38,7 +39,7 @@ function sectionHtml(sec) {
 export async function openDetailModal(load, navigate) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
-    box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:880px"><div class="modal-body"><div class="empty">กำลังโหลด...</div></div></div>';
+    box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:880px"><div class="modal-body">' + skBlock(5, 8) + '</div></div>';
     document.body.appendChild(box);
     const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
     // Esc closes only the dialog on top (a row's records open over this one).

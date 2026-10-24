@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
+import { skBlock } from '../skeleton.js';
 
 export async function render(container, { navigate, permissions }) {
     let showForm = false;
@@ -105,7 +106,7 @@ export async function render(container, { navigate, permissions }) {
               <button type="submit" class="btn sm">ค้นหา</button>
             </form>
             ${imp.error ? `<div class="error-box">${escapeHtml(imp.error)}</div>` : ''}
-            ${imp.rows === null ? '<div class="empty">กำลังโหลด…</div>' : rows.length ? `
+            ${imp.rows === null ? skBlock(5, 8) : rows.length ? `
             <div class="table-wrap" style="max-height:420px;overflow:auto"><table>
               <thead><tr>
                 <th style="width:36px"><input type="checkbox" id="dir-all" ${allPicked ? 'checked' : ''} ${pickable.length ? '' : 'disabled'}></th>

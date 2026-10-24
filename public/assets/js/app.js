@@ -4,6 +4,7 @@ import { initTheme, cycleTheme } from './theme.js';
 import { escapeHtml, setAppTimeZone } from './util.js';
 import { mountAssistant, unmountAssistant } from './assistant.js';
 import { alertDialog } from './dialog.js';
+import { skPage } from './skeleton.js';
 
 const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
@@ -13,6 +14,13 @@ const ROUTE_PERMS = {
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
     posimport: 'sales.import', drawer: 'sales.create', wages: 'wages.manage', capital: 'capital.manage',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
+};
+
+// Skeleton shape shown while each page loads its data (others: 'list').
+const ROUTE_SKELETON = {
+    dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', wages: 'report',
+    capital: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report',
+    settings: 'form', ai: 'form', receive: 'form', ret: 'form', purchase: 'form',
 };
 
 const state = { user: null, permissions: [] };
@@ -47,7 +55,7 @@ async function loadView({ key, params }) {
     }
 
     setActiveNav(key);
-    view.innerHTML = `<div class="empty">กำลังโหลด...</div>`;
+    view.innerHTML = skPage(ROUTE_SKELETON[key] || 'list');
 
     try {
         const mod = await import(`./views/${key}.js`);

@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { skBlock } from '../skeleton.js';
 
 /**
  * นำเข้ายอดขายจากระบบ POS ภายนอก: the report has item names (and, in newer
@@ -439,6 +440,7 @@ export async function render(container, { permissions = [] } = {}) {
             </div>
             <div class="modal-body">
               ${v.error ? `<div class="error-box">${escapeHtml(v.error)}</div>` : ''}
+              ${v.loading && !v.error ? skBlock(6, 8) : ''}
               ${v.loading || v.error ? '' : `
                 <div class="muted" style="font-size:13px;margin-bottom:12px">
                   นำเข้าโดย ${escapeHtml(v.user_name || '-')} เมื่อ ${escapeHtml(fmtDateTime(v.created_at))}${v.source_label ? ` · ไฟล์ ${escapeHtml(v.source_label)}` : ''}
