@@ -7,13 +7,16 @@ namespace App\Services;
 use PDO;
 
 /**
- * Stores uploaded images (receipt photos) under storage/uploads, outside the
- * web root; they are only served through the authenticated API.
+ * Stores uploaded images (receipt photos) and Markdown receipt files under
+ * storage/uploads, outside the web root; they are only served through the
+ * authenticated API.
  */
 class AttachmentService
 {
     private const MAX_BYTES = 8 * 1024 * 1024;
     private const MIME_EXT = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+    private const MAX_TEXT_BYTES = 1024 * 1024;
+    public const TEXT_MIME = 'text/markdown';
 
     public function __construct(private PDO $db)
     {
@@ -60,6 +63,53 @@ class AttachmentService
         );
         $stmt->execute([$token, $rel, $mime, strlen($bytes), $info[0] ?? null, $info[1] ?? null, $userId]);
         return $this->findByToken($token);
+    }
+
+    /** Saves the text of a .md / .txt receipt file and returns the attachment row. */
+    public function saveText(string $content, string $name, int $userId, string $folder = 'receipts'): array
+    {
+        $content = str_replace("\r\n", "\n", $content);
+        if (trim($content) === '') {
+            throw new \RuntimeException('ไฟล์ว่างเปล่า');
+        }
+        if (strlen($content) > self::MAX_TEXT_BYTES) {
+            throw new \RuntimeException('ไฟล์ข้อความใหญ่เกิน 1 MB');
+        }
+        if (!mb_check_encoding($content, 'UTF-8')) {
+            throw new \RuntimeException('ไฟล์ต้องเป็นข้อความ UTF-8');
+        }
+        $name = preg_replace('/[^\p{L}\p{N} ._()-]/u', '', $name) ?: 'receipt.md';
+        if (!preg_match('/\.(md|markdown|txt)$/i', $name)) {
+            $name .= '.md';
+        }
+
+        $token = bin2hex(random_bytes(16));
+        $rel = $folder . '/' . date('Ym') . '/' . $token . '.md';
+        $abs = $this->baseDir() . '/' . $rel;
+        if (!is_dir(dirname($abs)) && !mkdir(dirname($abs), 0775, true) && !is_dir(dirname($abs))) {
+            throw new \RuntimeException('สร้างโฟลเดอร์เก็บไฟล์ไม่ได้');
+        }
+        if (file_put_contents($abs, $content) === false) {
+            throw new \RuntimeException('บันทึกไฟล์ไม่สำเร็จ');
+        }
+        try {
+            $this->db->prepare(
+                'INSERT INTO attachments (token, file_path, original_name, mime, size_bytes, uploaded_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW())'
+            )->execute([$token, $rel, mb_substr($name, 0, 191), self::TEXT_MIME, strlen($content), $userId]);
+        } catch (\PDOException $e) {
+            @unlink($abs);
+            if (($e->errorInfo[0] ?? '') === '42S22') {
+                throw new \RuntimeException('ฐานข้อมูลยังไม่ได้อัปเดต — ผู้ดูแลระบบต้องรัน Migration ที่ค้างอยู่ (เมนู ระบบ > Migrations) ก่อนจึงจะแนบไฟล์ .md ได้');
+            }
+            throw $e;
+        }
+        return $this->findByToken($token);
+    }
+
+    public static function isImage(array $attachment): bool
+    {
+        return str_starts_with((string) $attachment['mime'], 'image/');
     }
 
     public function findByToken(string $token): ?array
@@ -184,6 +234,6 @@ class AttachmentService
 
     public function publicInfo(array $a): array
     {
-        return ['token' => $a['token'], 'mime' => $a['mime'], 'width' => $a['width'] ? (int) $a['width'] : null, 'height' => $a['height'] ? (int) $a['height'] : null];
+        return ['token' => $a['token'], 'mime' => $a['mime'], 'name' => $a['original_name'] ?? null, 'size' => (int) $a['size_bytes'], 'width' => $a['width'] ? (int) $a['width'] : null, 'height' => $a['height'] ? (int) $a['height'] : null];
     }
 }

@@ -285,8 +285,17 @@ class AiToolbox
             'total' => $args['total'] ?? 0,
         ]);
         $draft['note'] = (string) ($args['note'] ?? '');
-        $draft['attachments'] = $this->photos;
+        $draft['attachments'] = $this->evidenceTokens($args);
+        $service = new AttachmentService($this->db);
+        $draft['files'] = array_map([$service, 'publicInfo'], $service->ownedBy($draft['attachments'], (int) $this->user['id']));
         return $draft;
+    }
+
+    /** The receipt photos of this turn plus the .md file a purchase was imported from. */
+    private function evidenceTokens(array $args): array
+    {
+        $file = (string) ($args['receipt_file'] ?? '');
+        return array_values(array_unique(array_merge($this->photos, preg_match('/^[a-f0-9]{32}$/', $file) ? [$file] : [])));
     }
 
     /** Extra rows shown on the confirm card (e.g. purchase lines). */
@@ -549,7 +558,7 @@ class AiToolbox
         $items = array_map(fn ($it) => array_intersect_key($it, array_flip(['name', 'product_name', 'item_type', 'barcode', 'qty', 'pack_size', 'unit_cost', 'line_total', 'sale_price'])), $draft['items']);
         // Photos already filed with an earlier purchase stay with that purchase.
         $photos = array_values(array_filter(
-            (new AttachmentService($this->db))->ownedBy($this->photos, (int) $this->user['id']),
+            (new AttachmentService($this->db))->ownedBy($this->evidenceTokens($args), (int) $this->user['id']),
             fn ($a) => $a['purchase_document_id'] === null
         ));
         $result = $this->purchaseService()->create(

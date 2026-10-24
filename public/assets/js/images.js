@@ -70,6 +70,20 @@ export async function uploadImage(file) {
     return { token: res.data.token, preview: dataUrl };
 }
 
+/** Receipt files kept as text evidence (a Markdown summary of a purchase). */
+export const TEXT_FILE_EXT = /\.(md|markdown|txt)$/i;
+
+export function isTextFile(file) {
+    return TEXT_FILE_EXT.test(file.name) || file.type === 'text/markdown' || file.type === 'text/plain';
+}
+
+/** Uploads one .md / .txt file; resolves to { token, mime, name, text }. */
+export async function uploadTextFile(file) {
+    const text = await file.text();
+    const res = await api.post('/attachments', { text, name: file.name });
+    return { token: res.data.token, mime: res.data.mime, name: res.data.name, text };
+}
+
 export function attachmentUrl(token) {
     return api.downloadUrl(`/attachments/${token}`);
 }

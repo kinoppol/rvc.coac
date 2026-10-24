@@ -8,6 +8,7 @@ use App\Repositories\AiProviderRepo;
 use App\Services\AiClient;
 use App\Services\AiToolbox;
 use App\Services\AiUsageService;
+use App\Services\AttachmentService;
 use App\Services\ReceiptMarkdownImport;
 use App\Services\SettingsService;
 use App\Support\Db;
@@ -34,8 +35,19 @@ class AiReceiptController
             return $denied;
         }
         $body = (array) $request->getParsedBody();
-        $parts = ReceiptMarkdownImport::split(mb_substr((string) ($body['content'] ?? ''), 0, 60000));
+        $content = (string) ($body['content'] ?? '');
+        $parts = ReceiptMarkdownImport::split(mb_substr($content, 0, 60000));
         $parts['rows'] = array_slice($parts['rows'], 0, self::MAX_ROWS);
+        // A receipt file is kept as evidence and filed with the purchase once it is saved.
+        $parts['attachment'] = null;
+        if ($parts['rows']) {
+            try {
+                $parts['attachment'] = (new AttachmentService(Db::connection()))
+                    ->saveText($content, (string) ($body['file_name'] ?? ''), (int) $request->getAttribute('user')['id'])['token'];
+            } catch (\RuntimeException $e) {
+                error_log('Keeping receipt file failed: ' . $e->getMessage());
+            }
+        }
         return $this->json($response, $parts + ['chunk_size' => ReceiptMarkdownImport::CHUNK_SIZE]);
     }
 
@@ -148,6 +160,9 @@ class AiReceiptController
                 'total' => (float) ($s['total'] ?? 0),
                 'note' => 'นำเข้าจากไฟล์ ' . mb_substr((string) ($r['file_name'] ?? ''), 0, 120),
             ];
+            if (preg_match('/^[a-f0-9]{32}$/', (string) ($r['attachment'] ?? ''))) {
+                $args['receipt_file'] = $r['attachment'];
+            }
             $id = 'imp_' . bin2hex(random_bytes(6));
             $calls[] = ['id' => $id, 'type' => 'function', 'function' => ['name' => 'create_purchase', 'arguments' => json_encode($args, JSON_UNESCAPED_UNICODE)]];
             $details = $toolbox->details('create_purchase', $args);

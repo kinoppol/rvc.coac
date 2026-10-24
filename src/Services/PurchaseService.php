@@ -256,14 +256,7 @@ class PurchaseService
                 $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'], $id,
             ]);
             $this->saveFunding($id, $h['funding']);
-            $keep = array_flip(array_map('strval', $keepTokens));
-            $unlink = $this->db->prepare('UPDATE attachments SET purchase_document_id = NULL WHERE id = ?');
-            foreach ($this->attachments->forPurchase($id) as $a) {
-                if (!isset($keep[$a['token']])) {
-                    $unlink->execute([$a['id']]);
-                }
-            }
-            $this->attachments->linkToPurchase($newAttachments, $id);
+            $this->relinkAttachments($id, $keepTokens, $newAttachments);
 
             $summary = fn ($d, $n) => [
                 'supplier_name' => $d['supplier_name'], 'receipt_no' => $d['receipt_no'], 'receipt_date' => $d['receipt_date'],
@@ -322,6 +315,42 @@ class PurchaseService
     }
 
     /** @return array{0:array,1:array} [locked document row, find() result]; only active purchases can change. */
+    /**
+     * Changes only the receipt evidence (photos / .md files) of a saved purchase.
+     * @param string[] $keepTokens files already on this purchase to keep
+     * @param array[] $newAttachments rows from AttachmentService::ownedBy() to add
+     */
+    public function setAttachments(int $id, array $keepTokens, array $newAttachments, int $userId, ?string $ip): void
+    {
+        $this->db->beginTransaction();
+        try {
+            [$doc] = $this->lockActive($id, 'แนบหลักฐาน');
+            $before = array_column($this->attachments->forPurchase($id), 'token');
+            $this->relinkAttachments($id, $keepTokens, $newAttachments);
+            $after = array_column($this->attachments->forPurchase($id), 'token');
+            if ($before !== $after) {
+                $this->audit->log('purchase_documents', $id, 'update', ['doc_no' => $doc['doc_no'], 'attachments' => count($before)], ['doc_no' => $doc['doc_no'], 'attachments' => count($after)], $userId, $ip);
+            }
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** Unlinks this purchase's files not in $keepTokens, then links the new ones. */
+    private function relinkAttachments(int $id, array $keepTokens, array $newAttachments): void
+    {
+        $keep = array_flip(array_map('strval', $keepTokens));
+        $unlink = $this->db->prepare('UPDATE attachments SET purchase_document_id = NULL WHERE id = ?');
+        foreach ($this->attachments->forPurchase($id) as $a) {
+            if (!isset($keep[$a['token']])) {
+                $unlink->execute([$a['id']]);
+            }
+        }
+        $this->attachments->linkToPurchase($newAttachments, $id);
+    }
+
     private function lockActive(int $id, string $action): array
     {
         $stmt = $this->db->prepare('SELECT * FROM purchase_documents WHERE id = ? FOR UPDATE');
@@ -546,7 +575,8 @@ class PurchaseService
             "SELECT pd.*, u.full_name AS user_name,
                     (SELECT COUNT(*) FROM purchase_items pi WHERE pi.purchase_document_id = pd.id) AS item_count,
                     (SELECT COALESCE(SUM(pi.line_total), 0) FROM purchase_items pi WHERE pi.purchase_document_id = pd.id AND pi.item_type = 'supply') AS supply_total,
-                    (SELECT COUNT(*) FROM attachments a WHERE a.purchase_document_id = pd.id) AS image_count
+                    (SELECT COUNT(*) FROM attachments a WHERE a.purchase_document_id = pd.id AND a.mime LIKE 'image/%') AS image_count,
+                    (SELECT COUNT(*) FROM attachments a WHERE a.purchase_document_id = pd.id AND a.mime NOT LIKE 'image/%') AS file_count
              FROM purchase_documents pd LEFT JOIN users u ON u.id = pd.user_id
              ORDER BY pd.id DESC LIMIT ?"
         );

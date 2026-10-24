@@ -1,17 +1,24 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
-import { uploadImage, attachmentUrl, imagesFromClipboard } from '../images.js';
+import { uploadImage, uploadTextFile, isTextFile, attachmentUrl, imagesFromClipboard } from '../images.js';
+import { markdown } from '../markdown.js';
 import { printPurchaseDoc } from '../print-slip.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 /**
  * ซื้อสินค้าเข้าร้าน: store-owned purchases. Receipt photos (one receipt may
  * span several overlapping photos) can be read by a vision model into a
- * draft that the user reviews here before saving.
+ * draft that the user reviews here before saving. A receipt's evidence may also
+ * be a .md file summarising the purchase (kept when a purchase is imported from one).
  */
 export const DRAFT_KEY = 'purchase.draft';
 
 const MAX_PHOTOS = 10;
+const ACCEPT_EVIDENCE = 'image/*,.md,.markdown,.txt,text/markdown,text/plain';
+
+const isImage = (f) => !f.mime || f.mime.startsWith('image/');
+/** A saved attachment (publicInfo from the server) as a form/view entry. */
+const evidence = (a) => ({ token: a.token, mime: a.mime, name: a.name, preview: attachmentUrl(a.token) });
 
 function emptyHeader() {
     // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit')
@@ -28,7 +35,7 @@ function emptyItem() {
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 export async function render(container) {
-    let photos = []; // [{ token, preview }]
+    let photos = []; // receipt evidence: [{ token, preview, mime?, name? }] — photos and .md files
     let header = emptyHeader();
     let items = [emptyItem()];
     let warnings = [];
@@ -41,6 +48,8 @@ export async function render(container) {
     let docs = [];
     let markup = 20;
     let viewing = null; // purchase doc shown in the modal
+    let mdOpen = null; // { token, name, html } — a .md file opened in the detail modal
+    let evidenceBusy = false;
     let editing = null; // { id, doc_no } while the form holds a saved purchase
     let formOpen = false; // the purchase form modal
     let previewTimer = null;
@@ -86,7 +95,7 @@ export async function render(container) {
             sessionStorage.removeItem(DRAFT_KEY);
         } catch (e) { draft = null; }
         if (draft) {
-            applyDraft(draft, (draft.attachments || []).map((token) => ({ token, preview: attachmentUrl(token) })));
+            applyDraft(draft, draft.files ? draft.files.map(evidence) : (draft.attachments || []).map((token) => ({ token, preview: attachmentUrl(token) })));
             formOpen = true;
         }
     }
@@ -128,7 +137,7 @@ export async function render(container) {
             };
         });
         if (!items.length) items = [emptyItem()];
-        photos = d.images.map((im) => ({ token: im.token, preview: attachmentUrl(im.token) }));
+        photos = d.images.map(evidence);
         warnings = [];
         source = d.source;
         viewing = null;
@@ -168,12 +177,12 @@ export async function render(container) {
         </div>` : ''}
 
         <section class="card card-pad">
-          <div class="step-title"><span class="step-num">1</span><h2>รูปใบเสร็จ</h2>
-            <span class="muted" style="font-size:12.5px;margin-left:auto">${photos.length}/${MAX_PHOTOS} รูป</span></div>
+          <div class="step-title"><span class="step-num">1</span><h2>หลักฐานใบเสร็จ</h2>
+            <span class="muted" style="font-size:12.5px;margin-left:auto">รูปภาพ หรือไฟล์ .md · ${photos.length}/${MAX_PHOTOS} ไฟล์</span></div>
           <div class="pc-photos" id="pc-photos">
             ${photos.map((p, i) => `
               <div class="pc-photo">
-                <img src="${escapeHtml(p.preview)}" alt="รูปที่ ${i + 1}">
+                ${isImage(p) ? `<img src="${escapeHtml(p.preview)}" alt="รูปที่ ${i + 1}">` : fileTileHtml(p)}
                 <span class="pc-photo-no">${i + 1}</span>
                 <div class="pc-photo-tools">
                   <button type="button" data-move="${i}" data-dir="-1" title="เลื่อนขึ้นก่อน" ${i === 0 ? 'disabled' : ''}>◀</button>
@@ -182,10 +191,10 @@ export async function render(container) {
                 </div>
               </div>`).join('')}
             ${photos.length < MAX_PHOTOS ? `
-              <label class="pc-add" title="เพิ่มรูป (หรือวางรูปด้วย Ctrl+V)">
-                <input type="file" accept="image/*" multiple id="pc-file" hidden>
+              <label class="pc-add" title="เพิ่มรูปใบเสร็จ หรือไฟล์ .md สรุปการซื้อ (วางรูปด้วย Ctrl+V ได้)">
+                <input type="file" accept="${ACCEPT_EVIDENCE}" multiple id="pc-file" hidden>
                 <span style="font-size:26px;line-height:1">＋</span>
-                <span>${busy === 'upload' ? 'กำลังอัปโหลด...' : 'เพิ่มรูป'}</span>
+                <span>${busy === 'upload' ? 'กำลังอัปโหลด...' : 'เพิ่มรูป / .md'}</span>
               </label>` : ''}
           </div>
           <div class="actions-row" style="margin-top:14px">
@@ -193,7 +202,7 @@ export async function render(container) {
               <select id="pc-model" class="pc-select" title="โมเดลที่ใช้อ่านรูป">
                 ${models.map((m) => `<option value="${m.id}" ${m.id === modelId ? 'selected' : ''}>${escapeHtml(m.label)} · ${escapeHtml(m.provider_name)}</option>`).join('')}
               </select>
-              <button type="button" class="btn" id="pc-extract" ${photos.length && !busy ? '' : 'disabled'}>
+              <button type="button" class="btn" id="pc-extract" ${photos.some(isImage) && !busy ? '' : 'disabled'}>
                 ${busy === 'extract' ? 'กำลังอ่านใบเสร็จ...' : '✨ อ่านใบเสร็จด้วย AI'}
               </button>`
             : '<span class="muted" style="font-size:13px">ยังไม่มีโมเดล AI ที่อ่านรูปได้ — เปิดใช้ได้ที่หน้า "ตั้งค่าผู้ช่วย AI" (ติ๊ก "อ่านรูป") หรือกรอกรายการเองด้านล่าง</span>'}
@@ -280,7 +289,7 @@ export async function render(container) {
         </div>
         <section class="card">
           <div class="table-wrap"><table>
-            <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th>รูป</th><th>บันทึกโดย</th><th></th></tr></thead>
+            <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th title="หลักฐานใบเสร็จ: รูปภาพ / ไฟล์ .md">หลักฐาน</th><th>บันทึกโดย</th><th></th></tr></thead>
             <tbody>
               ${docs.map((d) => `
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
@@ -291,7 +300,7 @@ export async function render(container) {
                   <td class="num">${d.item_count}</td>
                   <td class="num"><span class="pc-total">${money(d.total)}</span></td>
                   <td class="num muted">${Number(d.supply_total) ? money(d.supply_total) : '-'}</td>
-                  <td>${Number(d.image_count) ? `🖼 ${d.image_count}` : ''}</td>
+                  <td class="pc-ev-cell">${Number(d.image_count) || Number(d.file_count) ? `<button type="button" data-view="${d.id}" title="ดูหลักฐานใบเสร็จ">${[Number(d.image_count) ? `🖼 ${d.image_count}` : '', Number(d.file_count) ? `📄 ${d.file_count}` : ''].filter(Boolean).join(' ')}</button>` : ''}</td>
                   <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div></td>
                   <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
                     ${isCancelled(d) ? '' : `<button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button>
@@ -583,8 +592,7 @@ export async function render(container) {
                       <td class="num">${it.item_type === 'supply' ? '—' : money(it.sale_price)}</td>
                       <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
                 </tbody></table></div>
-              ${d.images.length ? `<h2 style="font-size:14px;margin:16px 0 8px">รูปใบเสร็จ (${d.images.length})</h2>
-                <div class="pc-photos">${d.images.map((im, i) => `<a class="pc-photo" href="${escapeHtml(attachmentUrl(im.token))}" target="_blank" rel="noopener"><img src="${escapeHtml(attachmentUrl(im.token))}" alt="รูปที่ ${i + 1}"><span class="pc-photo-no">${i + 1}</span></a>`).join('')}</div>` : ''}
+              ${evidenceHtml(d)}
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
             <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">
@@ -593,6 +601,39 @@ export async function render(container) {
               <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
         </div>`;
+    }
+
+    /** Icon and name of a .md / .txt evidence file. */
+    function fileTileHtml(f) {
+        return `<div class="pc-file" style="height:100%"><span class="pc-file-icon">📄</span><span class="pc-file-name">${escapeHtml(f.name || 'ไฟล์ .md')}</span></div>`;
+    }
+
+    /** Receipt evidence on the detail modal: photos open full size, .md files open below; editable while active. */
+    function evidenceHtml(d) {
+        const editable = !isCancelled(d);
+        if (!d.images.length && !editable) return '';
+        const del = (im) => (editable ? `<button type="button" class="pc-photo-del" data-ev-remove="${escapeHtml(im.token)}" title="ลบหลักฐานนี้">✕</button>` : '');
+        return `
+          <div class="step-title" style="margin:16px 0 8px"><h2 style="font-size:14px;margin:0">หลักฐานใบเสร็จ (${d.images.length})</h2>
+            <span class="muted" style="font-size:12.5px">รูปภาพ หรือไฟล์ .md สรุปการซื้อ</span></div>
+          <div class="pc-photos">
+            ${d.images.map((im, i) => (isImage(im)
+                ? `<div class="pc-photo"><a href="${escapeHtml(attachmentUrl(im.token))}" target="_blank" rel="noopener" style="display:block;height:100%"><img src="${escapeHtml(attachmentUrl(im.token))}" alt="รูปที่ ${i + 1}"></a><span class="pc-photo-no">${i + 1}</span>${del(im)}</div>`
+                : `<div class="pc-photo"><button type="button" class="pc-file ${mdOpen?.token === im.token ? 'open' : ''}" data-md-open="${escapeHtml(im.token)}" style="width:100%;height:100%;border:0;background:none" title="เปิดอ่าน">
+                    <span class="pc-file-icon">📄</span><span class="pc-file-name">${escapeHtml(im.name || 'ไฟล์ .md')}</span></button><span class="pc-photo-no">${i + 1}</span>${del(im)}</div>`)).join('')}
+            ${editable && d.images.length < MAX_PHOTOS ? `
+              <label class="pc-add" title="แนบรูปใบเสร็จ หรือไฟล์ .md สรุปการซื้อ">
+                <input type="file" accept="${ACCEPT_EVIDENCE}" multiple id="pc-ev-file" hidden ${evidenceBusy ? 'disabled' : ''}>
+                <span style="font-size:26px;line-height:1">＋</span>
+                <span>${evidenceBusy ? 'กำลังบันทึก...' : 'แนบหลักฐาน'}</span>
+              </label>` : ''}
+          </div>
+          ${mdOpen ? `<div class="pc-md">
+            <div class="pc-md-head">📄 <b style="flex:1;word-break:break-all">${escapeHtml(mdOpen.name || 'ไฟล์ .md')}</b>
+              <a class="btn secondary sm" href="${escapeHtml(attachmentUrl(mdOpen.token))}?download" title="ดาวน์โหลดไฟล์">ดาวน์โหลด</a>
+              <button type="button" class="btn secondary sm" data-md-close>ซ่อน</button></div>
+            <div class="ai-bubble">${mdOpen.html}</div>
+          </div>` : ''}`;
     }
 
     function redrawSummary() {
@@ -708,12 +749,18 @@ export async function render(container) {
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', async () => {
             try {
                 viewing = (await api.get(`/purchases/${b.dataset.view}`)).data;
+                mdOpen = null;
                 draw();
             } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         }));
         // The detail modal closes only via its close buttons.
         container.querySelector('[data-print-view]')?.addEventListener('click', () => printPurchaseDoc(viewing));
-        container.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; draw(); }));
+        container.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; mdOpen = null; draw(); }));
+        container.querySelectorAll('[data-md-open]').forEach((b) => b.addEventListener('click', () => openMd(b.dataset.mdOpen)));
+        container.querySelector('[data-md-close]')?.addEventListener('click', () => { mdOpen = null; draw(); });
+        const evFile = container.querySelector('#pc-ev-file');
+        evFile?.addEventListener('change', () => addEvidence([...evFile.files]));
+        container.querySelectorAll('[data-ev-remove]').forEach((b) => b.addEventListener('click', () => removeEvidence(b.dataset.evRemove)));
 
         container.onpaste = (e) => {
             const files = imagesFromClipboard(e);
@@ -788,10 +835,10 @@ export async function render(container) {
         draw();
         try {
             for (const f of files.slice(0, room)) {
-                photos.push(await uploadImage(f));
+                photos.push(await uploadEvidence(f));
                 draw();
             }
-            if (files.length > room) error = `แนบได้สูงสุด ${MAX_PHOTOS} รูปต่อใบเสร็จ`;
+            if (files.length > room) error = `แนบได้สูงสุด ${MAX_PHOTOS} ไฟล์ต่อใบเสร็จ`;
         } catch (e) {
             error = e.message;
         }
@@ -799,8 +846,69 @@ export async function render(container) {
         draw();
     }
 
+    /** Uploads a receipt photo or a .md / .txt file. */
+    async function uploadEvidence(f) {
+        if (isTextFile(f)) {
+            const up = await uploadTextFile(f);
+            return { token: up.token, mime: up.mime, name: up.name, preview: attachmentUrl(up.token) };
+        }
+        if (f.type.startsWith('image/')) return uploadImage(f);
+        throw new Error(`ไม่รองรับไฟล์ ${f.name} (แนบได้เฉพาะรูปภาพ และไฟล์ .md / .txt)`);
+    }
+
+    /** Adds evidence files to the purchase shown in the detail modal (its lines stay as they are). */
+    async function addEvidence(files) {
+        const d = viewing;
+        const room = MAX_PHOTOS - d.images.length;
+        if (!files.length || room <= 0) return;
+        evidenceBusy = true;
+        draw();
+        try {
+            const added = [];
+            for (const f of files.slice(0, room)) added.push((await uploadEvidence(f)).token);
+            await saveEvidence(d, [...d.images.map((im) => im.token), ...added]);
+            if (files.length > room) alertDialog(`แนบได้สูงสุด ${MAX_PHOTOS} ไฟล์ต่อใบซื้อ`, { tone: 'error' });
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        evidenceBusy = false;
+        draw();
+    }
+
+    async function removeEvidence(token) {
+        const d = viewing;
+        const im = d.images.find((x) => x.token === token);
+        if (!im || !(await confirmDialog(`${isImage(im) ? 'รูปนี้' : `ไฟล์ ${im.name || '.md'}`} จะถูกนำออกจากใบซื้อ ${d.doc_no}`, { title: 'ลบหลักฐาน?', okText: 'ลบ', danger: true }))) return;
+        try {
+            await saveEvidence(d, d.images.filter((x) => x.token !== token).map((x) => x.token));
+            if (mdOpen?.token === token) mdOpen = null;
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        draw();
+    }
+
+    async function saveEvidence(d, tokens) {
+        const res = await api.put(`/purchases/${d.id}/attachments`, { attachments: tokens });
+        if (viewing === d) viewing = res.data;
+        await loadDocs();
+    }
+
+    async function openMd(token) {
+        if (mdOpen?.token === token) { mdOpen = null; draw(); return; }
+        const im = viewing.images.find((x) => x.token === token);
+        try {
+            const r = await fetch(attachmentUrl(token), { credentials: 'same-origin' });
+            if (!r.ok) throw new Error('เปิดไฟล์ไม่ได้');
+            mdOpen = { token, name: im?.name, html: markdown(await r.text()) };
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        draw();
+    }
+
     async function extract() {
-        if (!photos.length || !modelId) return;
+        if (!photos.some(isImage) || !modelId) return;
         const hasData = items.some((i) => i.name);
         if (hasData && !(await confirmDialog('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI', { title: 'อ่านใบเสร็จด้วย AI?', okText: 'ดำเนินการต่อ' }))) return;
         busy = 'extract';
@@ -808,7 +916,7 @@ export async function render(container) {
         success = null;
         draw();
         try {
-            const res = await api.post('/purchases/extract', { model: modelId, attachments: photos.map((p) => p.token) });
+            const res = await api.post('/purchases/extract', { model: modelId, attachments: photos.filter(isImage).map((p) => p.token) });
             applyDraft(res.data, null);
             res.preview.forEach((p, i) => {
                 if (items[i]) applyPreview(items[i], p);

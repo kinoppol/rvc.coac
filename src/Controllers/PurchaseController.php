@@ -133,6 +133,29 @@ class PurchaseController
         return $this->json($response, ['data' => $result]);
     }
 
+    /** Replaces the receipt evidence (photos / .md files) of a saved purchase without touching its lines. */
+    public function attachments(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        $id = (int) $args['id'];
+        $attachments = new AttachmentService(Db::connection());
+        $tokens = array_map('strval', (array) ($body['attachments'] ?? []));
+        $current = array_column($attachments->forPurchase($id), 'token');
+        try {
+            self::service()->setAttachments(
+                $id,
+                $tokens,
+                $attachments->ownedBy(array_diff($tokens, $current), (int) $user['id']),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => self::service()->find($id)]);
+    }
+
     public function cancel(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
@@ -170,7 +193,10 @@ class PurchaseController
         }
 
         $attachments = new AttachmentService($db);
-        $images = $attachments->ownedBy((array) ($body['attachments'] ?? []), (int) $user['id']);
+        $images = array_values(array_filter(
+            $attachments->ownedBy((array) ($body['attachments'] ?? []), (int) $user['id']),
+            [AttachmentService::class, 'isImage']
+        ));
         if (!$images) {
             return $this->error($response, 'กรุณาแนบรูปใบเสร็จอย่างน้อย 1 รูป', 422);
         }

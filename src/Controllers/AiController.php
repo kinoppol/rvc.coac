@@ -460,10 +460,10 @@ class AiController
             if ($role === 'user') {
                 $text = trim((string) ($m['content'] ?? ''));
                 // Only photos this user uploaded may be referenced.
-                $tokens = array_column(
+                $tokens = array_column(array_filter(
                     $attachments->ownedBy(array_slice((array) ($m['attachments'] ?? []), 0, self::MAX_IMAGES_PER_MESSAGE), $userId),
-                    'token'
-                );
+                    [AttachmentService::class, 'isImage']
+                ), 'token');
                 $docs = [];
                 foreach (array_slice((array) ($m['documents'] ?? []), 0, self::MAX_DOCS_PER_MESSAGE) as $d) {
                     if (!is_array($d) || trim((string) ($d['content'] ?? '')) === '') {

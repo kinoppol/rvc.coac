@@ -27,12 +27,16 @@ class AttachmentController
             return $this->error($response, 'ไม่มีสิทธิ์อัปโหลดไฟล์', 403);
         }
         $body = (array) $request->getParsedBody();
+        $service = new AttachmentService(Db::connection());
         try {
-            $row = (new AttachmentService(Db::connection()))->saveDataUrl((string) ($body['data_url'] ?? ''), (int) $user['id']);
+            // A photo arrives as a data URL; a .md receipt file as its text.
+            $row = isset($body['text'])
+                ? $service->saveText((string) $body['text'], (string) ($body['name'] ?? ''), (int) $user['id'])
+                : $service->saveDataUrl((string) ($body['data_url'] ?? ''), (int) $user['id']);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
-        return $this->json($response, ['data' => (new AttachmentService(Db::connection()))->publicInfo($row)], 201);
+        return $this->json($response, ['data' => $service->publicInfo($row)], 201);
     }
 
     public function show(Request $request, Response $response, array $args): Response
@@ -50,8 +54,13 @@ class AttachmentController
             return $this->error($response, $e->getMessage(), 404);
         }
         $response->getBody()->write((string) file_get_contents($path));
+        if (!AttachmentService::isImage($row)) {
+            // Shown as plain text in the browser; ?download saves it under its own name.
+            $name = $row['original_name'] ?: 'receipt.md';
+            $response = $response->withHeader('Content-Disposition', (isset($request->getQueryParams()['download']) ? 'attachment' : 'inline') . "; filename*=UTF-8''" . rawurlencode($name));
+        }
         return $response
-            ->withHeader('Content-Type', $row['mime'])
+            ->withHeader('Content-Type', AttachmentService::isImage($row) ? $row['mime'] : 'text/plain; charset=utf-8')
             ->withHeader('Cache-Control', 'private, max-age=86400')
             ->withHeader('X-Content-Type-Options', 'nosniff');
     }

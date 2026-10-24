@@ -296,6 +296,16 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .pc-photo-tools button:disabled { opacity: .35; cursor: default; }
 .pc-add { width: 120px; height: 160px; border: 2px dashed var(--priBorder); border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--pri); font-size: 13px; font-weight: 600; cursor: pointer; background: var(--soft); }
 .pc-add:hover { border-color: var(--pri); }
+.pc-file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px 8px 34px; text-align: center; color: var(--text); text-decoration: none; cursor: pointer; font: inherit; }
+.pc-file-icon { font-size: 34px; line-height: 1; }
+.pc-file-name { font-size: 12px; font-weight: 600; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pc-file.open { border-color: var(--pri); box-shadow: 0 0 0 2px var(--priBorder); }
+.pc-photo-del { position: absolute; top: 6px; right: 6px; border: 0; border-radius: 6px; background: rgba(255,255,255,.92); color: #b42318; width: 26px; height: 24px; cursor: pointer; font-size: 12px; }
+.pc-md { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface2); }
+.pc-md-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.pc-md .ai-bubble { max-height: 480px; overflow: auto; border-radius: 0 0 10px 10px; }
+.pc-ev-cell { white-space: nowrap; }
+.pc-ev-cell button { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; color: inherit; }
 .pc-select { border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 9px; padding: 9px 10px; font-size: 13.5px; max-width: 100%; }
 .pc-items input { width: 100%; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 7px; padding: 6px 8px; font-size: 13.5px; }
 .pc-items input.num { text-align: right; }
