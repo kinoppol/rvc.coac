@@ -176,6 +176,16 @@ export async function render(container, { navigate, permissions, user }) {
             if (!consigned && !editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
             draw();
             container.querySelector(consigned ? '#bc-piece' : '#bc-name')?.focus();
+            if (!consigned) {
+                const e = editing;
+                const opts = (await api.get(`/inventory/${p.id}/name-options`).catch(() => ({ data: [] }))).data;
+                if (editing === e && opts.length) {
+                    e.nameOptions = opts;
+                    const focused = document.activeElement?.id;
+                    draw();
+                    if (focused) container.querySelector(`#${focused}`)?.focus();
+                }
+            }
         }));
         if (editing) bindEdit();
     }
@@ -245,7 +255,7 @@ export async function render(container, { navigate, permissions, user }) {
                 <div class="muted" style="font-size:12.5px">ฝากขาย: ${escapeHtml(e.consignorName)} · สินค้าฝากขายใช้ได้เฉพาะบาร์โค้ดชิ้น</div></div>`
                 : `<label class="field" style="display:block;margin-bottom:16px">ชื่อสินค้า (ชื่อที่ใช้ขายต่อชิ้น)
                 <input id="bc-name" value="${escapeHtml(e.name)}" maxlength="191" style="width:100%">
-              </label>`}
+              </label>${nameOptionsHtml(e)}`}
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
                 <input id="bc-piece" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
@@ -257,6 +267,19 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="btn" id="bc-save" ${e.busy ? 'disabled' : ''}>${e.busy ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
           </div>
         </div>`;
+    }
+
+    /** Names this product goes by on receipts / in the POS, offered as a replacement for a mistyped name. */
+    function nameOptionsHtml(e) {
+        if (!e.nameOptions?.length) return '';
+        return `
+              <div class="name-opts">
+                <div class="muted" style="font-size:12.5px;margin-bottom:6px">ชื่อของสินค้าตัวนี้จากใบเสร็จ/POS — กดเพื่อใช้แทนชื่อปัจจุบัน</div>
+                ${e.nameOptions.map((o, i) => `<button type="button" class="name-opt ${o.name === e.name ? 'on' : ''}" data-name-opt="${i}">
+                  <span class="name-opt-name">${escapeHtml(o.name)}</span>
+                  <span class="name-opt-src">${o.trimmed ? 'ตัดขนาดแพ็คออก · ' : ''}${o.sources.map((s) => `${escapeHtml(s.name)}${s.times > 1 ? ` ×${s.times}` : ''}`).join(', ')}${o.last_date ? ` · ล่าสุด ${fmtDate(o.last_date)}` : ''}</span>
+                </button>`).join('')}
+              </div>`;
     }
 
     function packsHtml(e) {
@@ -317,7 +340,15 @@ export async function render(container, { navigate, permissions, user }) {
             const fee = e.salePrice - Number(ev.target.value);
             container.querySelector('#cs-fee').textContent = ev.target.value !== '' && fee >= 0 ? `฿ ${money(fee)}` : '-';
         });
-        container.querySelector('#bc-name')?.addEventListener('input', (ev) => { e.name = ev.target.value; });
+        container.querySelector('#bc-name')?.addEventListener('input', (ev) => {
+            e.name = ev.target.value;
+            container.querySelectorAll('[data-name-opt]').forEach((b) => b.classList.toggle('on', e.nameOptions[Number(b.dataset.nameOpt)].name === e.name));
+        });
+        container.querySelectorAll('[data-name-opt]').forEach((b) => b.addEventListener('click', () => {
+            e.name = e.nameOptions[Number(b.dataset.nameOpt)].name;
+            draw();
+            container.querySelector('#bc-name')?.focus();
+        }));
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];

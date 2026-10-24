@@ -83,6 +83,63 @@ class InventoryController
         return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
     }
 
+    /**
+     * Other names the same product goes by: receipt lines paired with it (or carrying
+     * its barcodes) from every supplier, and POS item names mapped to it. Offered in
+     * the edit form so a mistyped product name can be replaced with a printed one.
+     */
+    public function nameOptions(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        $id = (int) $args['id'];
+        $product = (new ProductRepo($db, new AuditLogger($db)))->find($id);
+        if (!$product) {
+            return $this->error($response, 'ไม่พบสินค้า', 404);
+        }
+        $stmt = $db->prepare(
+            "SELECT pi.receipt_name AS name, pd.supplier_name AS source, COUNT(*) AS times, MAX(COALESCE(pd.receipt_date, DATE(pd.created_at))) AS last_date
+             FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+             WHERE COALESCE(pd.status, 'active') = 'active' AND (pi.product_id = ?
+                OR (pi.barcode <> '' AND (pi.barcode = ? OR pi.barcode IN (SELECT b.barcode FROM product_pack_barcodes b WHERE b.product_id = ?))))
+             GROUP BY pi.receipt_name, pd.supplier_name"
+        );
+        $stmt->execute([$id, (string) $product['barcode'], $id]);
+        $rows = $stmt->fetchAll();
+        $pos = $db->prepare("SELECT pos_name AS name, 'POS' AS source, GREATEST(times_used, 1) AS times, DATE(last_used_at) AS last_date FROM pos_item_mappings WHERE product_id = ? AND action = 'product'");
+        $pos->execute([$id]);
+        $rows = array_merge($rows, $pos->fetchAll());
+
+        $key = fn (string $s) => mb_strtolower(preg_replace('/\s+/u', '', $s));
+        $current = $key((string) $product['name']);
+        $options = [];
+        $add = function (string $name, array $row, bool $trimmed) use (&$options, $key, $current) {
+            $name = trim(preg_replace('/\s+/u', ' ', $name));
+            $k = $key($name);
+            if ($name === '' || $k === $current) {
+                return;
+            }
+            $o = $options[$k] ?? ['name' => $name, 'trimmed' => $trimmed, 'times' => 0, 'last_date' => null, 'sources' => []];
+            $o['trimmed'] = $o['trimmed'] && $trimmed;
+            $o['times'] += (int) $row['times'];
+            $o['last_date'] = max($o['last_date'], $row['last_date']);
+            $o['sources'][$row['source']] = ($o['sources'][$row['source']] ?? 0) + (int) $row['times'];
+            $options[$k] = $o;
+        };
+        foreach ($rows as $r) {
+            $add((string) $r['name'], $r, false);
+            // The same name without the pack size / reader notes printed on receipts ("แพค 1x12", "(ชื่ออ่านไม่ชัด)").
+            $clean = preg_replace(['/\s*\([^)]*(อ่าน|ไม่ชัด)[^)]*\)/u', '/\s*(แพ็?[คก]|ลัง|pack)?\s*\d+\s*[xX×*]\s*\d+\s*$/u'], '', (string) $r['name']);
+            if ($clean !== $r['name']) {
+                $add((string) $clean, $r, true);
+            }
+        }
+        usort($options, fn ($a, $b) => [$a['trimmed'] ? 0 : 1, $b['times'], $b['last_date']] <=> [$b['trimmed'] ? 0 : 1, $a['times'], $a['last_date']]);
+        return $this->json($response, ['data' => array_map(function ($o) {
+            $o['sources'] = array_map(fn ($s, $n) => ['name' => $s, 'times' => $n], array_keys($o['sources']), $o['sources']);
+            return $o;
+        }, array_slice(array_values($options), 0, 15))]);
+    }
+
     /** Admin only: a store product that is really consignment goods moves to its consignor. */
     public function convertToConsignment(Request $request, Response $response, array $args): Response
     {
