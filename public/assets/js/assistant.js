@@ -490,6 +490,10 @@ async function importReceipts(msg) {
             done(`${prefix}พบรายการสินค้า ${total} บรรทัด จะอ่านทีละ ${plan.chunk_size} บรรทัด`);
             const items = [];
             const warnings = [];
+            if (plan.attachment_error) {
+                warnings.push(`เก็บไฟล์ ${doc.name} เป็นหลักฐานไม่สำเร็จ (${plan.attachment_error}) — แนบเองได้ภายหลังที่หน้ารายละเอียดใบซื้อ`);
+                done(`${prefix}เก็บไฟล์เป็นหลักฐานไม่สำเร็จ`, '⚠');
+            }
             for (let i = 0; i < total; i += plan.chunk_size) {
                 const got = await readRows(plan, i, Math.min(i + plan.chunk_size, total), total, prefix, step, done, warnings);
                 if (ctx !== mine) return true;

@@ -98,11 +98,15 @@ class AttachmentService
                  VALUES (?, ?, ?, ?, ?, ?, NOW())'
             )->execute([$token, $rel, mb_substr($name, 0, 191), self::TEXT_MIME, strlen($content), $userId]);
         } catch (\PDOException $e) {
-            @unlink($abs);
-            if (($e->errorInfo[0] ?? '') === '42S22') {
-                throw new \RuntimeException('ฐานข้อมูลยังไม่ได้อัปเดต — ผู้ดูแลระบบต้องรัน Migration ที่ค้างอยู่ (เมนู ระบบ > Migrations) ก่อนจึงจะแนบไฟล์ .md ได้');
+            if (($e->errorInfo[0] ?? '') !== '42S22') {
+                @unlink($abs);
+                throw $e;
             }
-            throw $e;
+            // Migration 0038 not run yet: keep the file anyway, just without its name.
+            $this->db->prepare(
+                'INSERT INTO attachments (token, file_path, mime, size_bytes, uploaded_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, NOW())'
+            )->execute([$token, $rel, self::TEXT_MIME, strlen($content), $userId]);
         }
         return $this->findByToken($token);
     }

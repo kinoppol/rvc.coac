@@ -40,12 +40,15 @@ class AiReceiptController
         $parts['rows'] = array_slice($parts['rows'], 0, self::MAX_ROWS);
         // A receipt file is kept as evidence and filed with the purchase once it is saved.
         $parts['attachment'] = null;
+        $parts['attachment_error'] = null;
         if ($parts['rows']) {
             try {
                 $parts['attachment'] = (new AttachmentService(Db::connection()))
                     ->saveText($content, (string) ($body['file_name'] ?? ''), (int) $request->getAttribute('user')['id'])['token'];
-            } catch (\RuntimeException $e) {
+            } catch (\Throwable $e) {
+                // The import still goes on; the client warns that the file was not kept.
                 error_log('Keeping receipt file failed: ' . $e->getMessage());
+                $parts['attachment_error'] = $e->getMessage();
             }
         }
         return $this->json($response, $parts + ['chunk_size' => ReceiptMarkdownImport::CHUNK_SIZE]);
