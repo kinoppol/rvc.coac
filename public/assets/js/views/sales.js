@@ -24,6 +24,16 @@ const GROUPS = [
     ['nobarcode', 'ไม่มีบาร์โค้ด'],
     ['consign', 'สินค้าฝากขาย'],
 ];
+const VIEWS = [
+    ['grid', 'รูปภาพ'],
+    ['list', 'รายการ'],
+];
+// Compact toolbar dropdowns: the button shows only the current choice.
+const DROPDOWNS = {
+    view: { label: 'รูปแบบการแสดงสินค้า', options: VIEWS, icon: (v) => (v === 'list' ? '☰' : '▦') },
+    sort: { label: 'เรียงสินค้า', options: SORTS, icon: () => '⇅', prefix: 'เรียง: ' },
+    group: { label: 'กลุ่มสินค้า', options: GROUPS, icon: () => '⏷' },
+};
 const GROUP_FN = {
     all: () => true,
     nobarcode: (p) => !(p.barcode || '').trim(),
@@ -102,16 +112,13 @@ export async function render(container, { user } = {}) {
             <button type="button" class="pos-icon-btn" data-act="clear-q" aria-label="ล้างคำค้น" hidden>✕</button>
           </label>
           ${TOUCH ? '<button type="button" class="pos-tool" data-act="kb" aria-label="แป้นพิมพ์บนจอ" title="แป้นพิมพ์บนจอ">⌨</button>' : ''}
-          <div class="pos-seg" role="group" aria-label="รูปแบบการแสดงสินค้า">
-            <button type="button" data-view="grid">▦ รูปภาพ</button>
-            <button type="button" data-view="list">☰ รายการ</button>
-          </div>
-          <select class="pos-sort" data-el="sort" aria-label="เรียงสินค้า">
-            ${SORTS.map(([k, l]) => `<option value="${k}" ${k === sort ? 'selected' : ''}>เรียง: ${l}</option>`).join('')}
-          </select>
-          <div class="pos-seg" role="group" aria-label="กลุ่มสินค้า">
-            ${GROUPS.map(([k, l]) => `<button type="button" data-group="${k}">${l}</button>`).join('')}
-          </div>
+          ${['group', 'view', 'sort'].map((k) => `
+            <div class="pos-dd" data-dd="${k}">
+              <button type="button" class="pos-dd-btn" data-dd-toggle="${k}" aria-haspopup="true" aria-expanded="false" aria-label="${DROPDOWNS[k].label}" title="${DROPDOWNS[k].label}"></button>
+              <div class="pos-dd-menu" role="menu" hidden>
+                ${DROPDOWNS[k].options.map(([v, l]) => `<button type="button" role="menuitemradio" data-dd-pick="${k}" data-value="${v}"><span class="pos-dd-ico">${DROPDOWNS[k].icon(v)}</span>${DROPDOWNS[k].prefix || ''}${l}</button>`).join('')}
+              </div>
+            </div>`).join('')}
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
         <div data-el="hours"></div>
@@ -194,13 +201,55 @@ export async function render(container, { user } = {}) {
         return list.sort((a, b) => (a.qty_stock < 1) - (b.qty_stock < 1) || fn(a, b) || a.name.localeCompare(b.name, 'th'));
     }
 
+    function drawDropdowns() {
+        const current = { view, sort, group };
+        for (const [k, dd] of Object.entries(DROPDOWNS)) {
+            const box = root.querySelector(`[data-dd="${k}"]`);
+            const label = (dd.options.find(([v]) => v === current[k]) || dd.options[0])[1];
+            box.querySelector('.pos-dd-btn').innerHTML = `<span class="pos-dd-ico">${dd.icon(current[k])}</span><span class="pos-dd-label">${escapeHtml(label)}</span><span class="pos-dd-caret">▾</span>`;
+            // Filtering hides products: show it even when the labels are hidden on small screens.
+            box.classList.toggle('on', k === 'group' && group !== 'all');
+            box.querySelectorAll('[data-dd-pick]').forEach((b) => {
+                b.classList.toggle('active', b.dataset.value === current[k]);
+                b.setAttribute('aria-checked', String(b.dataset.value === current[k]));
+            });
+        }
+    }
+
+    function toggleDropdown(k) {
+        root.querySelectorAll('[data-dd]').forEach((box) => {
+            const open = box.dataset.dd === k && box.querySelector('.pos-dd-menu').hidden;
+            const menu = box.querySelector('.pos-dd-menu');
+            menu.hidden = !open;
+            box.querySelector('.pos-dd-btn').setAttribute('aria-expanded', String(open));
+            box.classList.toggle('open', open);
+            if (open) {
+                // Right-aligned under its button, unless that pushes it off the left edge of a small screen.
+                menu.style.right = '0';
+                menu.style.left = 'auto';
+                if (menu.getBoundingClientRect().left < 8) {
+                    menu.style.right = 'auto';
+                    menu.style.left = `${8 - box.getBoundingClientRect().left}px`;
+                }
+            }
+        });
+    }
+
+    function pickDropdown(k, value) {
+        if (k === 'view') view = value;
+        else if (k === 'sort') sort = value;
+        else group = value;
+        savePref(k, value);
+        toggleDropdown(null);
+        drawProducts();
+    }
+
     function inCart(id) {
         return cart.find((c) => c.id === id)?.qty || 0;
     }
 
     function drawProducts() {
-        root.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-        root.querySelectorAll('[data-group]').forEach((b) => b.classList.toggle('active', b.dataset.group === group));
+        drawDropdowns();
         root.querySelector('[data-act="clear-q"]').hidden = !q.value;
         const list = matches();
         const box = el('products');
@@ -780,12 +829,11 @@ export async function render(container, { user } = {}) {
         if (e.target.matches?.('img[data-thumbless]')) uploadThumb(e.target);
     }, true);
 
-    on(el('sort'), 'change', (e) => {
-        sort = e.target.value;
-        savePref('sort', sort);
-        drawProducts();
-        focusSearch();
+    // A tap anywhere outside an open dropdown closes it.
+    on(document, 'pointerdown', (e) => {
+        if (!e.target.closest?.('.pos-dd')) toggleDropdown(null);
     });
+    on(document, 'keydown', (e) => { if (e.key === 'Escape') toggleDropdown(null); });
 
     on(el('cart'), 'change', (e) => {
         const i = e.target.dataset.qty;
@@ -819,14 +867,11 @@ export async function render(container, { user } = {}) {
             } else if (t.dataset.pick) {
                 const p = products.find((x) => x.id === Number(t.dataset.pick));
                 if (p) add(p);
-            } else if (t.dataset.view) {
-                view = t.dataset.view;
-                savePref('view', view);
-                drawProducts();
-            } else if (t.dataset.group) {
-                group = t.dataset.group;
-                savePref('group', group);
-                drawProducts();
+            } else if (t.dataset.ddToggle) {
+                toggleDropdown(t.dataset.ddToggle);
+                return; // keep the menu open (no refocus of the search box)
+            } else if (t.dataset.ddPick) {
+                pickDropdown(t.dataset.ddPick, t.dataset.value);
             } else if (t.dataset.inc) {
                 const line = cart[Number(t.dataset.inc)];
                 if (line) add(line);
