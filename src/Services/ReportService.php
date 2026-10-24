@@ -501,7 +501,9 @@ class ReportService
                 continue;
             }
             $isIncome = $r['section'] === 'รายได้';
-            $rows[] = ['item' => $r['item'], 'note' => $r['note'], 'income' => $isIncome ? $r['amount'] : null, 'expense' => $isIncome ? null : $r['amount']];
+            $rows[] = ['item' => $r['item'], 'note' => $r['note'], 'income' => $isIncome ? $r['amount'] : null, 'expense' => $isIncome ? null : $r['amount'],
+                // the detail dialog opens the records behind this line (statementSource) on click
+                '_source' => $r['key'] !== '' ? '/reports/statement/source?' . http_build_query(['line' => $r['key'], 'range' => 'custom', 'from' => $from, 'to' => $to]) : null];
             $isIncome ? $in += $r['amount'] : $out += $r['amount'];
         }
         $net = round($in - $out, 2);

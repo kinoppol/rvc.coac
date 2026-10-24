@@ -662,3 +662,8 @@ div.pos-row.out { cursor: not-allowed; }
     .table-wrap { max-height: none !important; overflow: visible !important; }
     .table-wrap thead th { position: static; }
 }
+.drill-row { cursor: pointer; }
+.drill-row:hover td, .drill-row:focus td { background: var(--soft); }
+.drill-row:focus { outline: none; }
+.drill-link { color: var(--pri); font-weight: 600; }
+.drill-arrow { color: var(--pri); font-weight: 700; }

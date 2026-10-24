@@ -1,5 +1,6 @@
 import { money, count, escapeHtml, fmtDate, fmtDateTime } from './util.js';
 import { alertDialog } from './dialog.js';
+import { api } from './api.js';
 
 // Drill-down dialog shared by the dashboard cards and the report lines.
 // load() resolves to { title, note?, link?, sections: [{ title, columns: [[key, label, type]], rows }] }.
@@ -26,7 +27,10 @@ function sectionHtml(sec) {
       <h3 style="margin:16px 0 8px;font-size:14.5px">${escapeHtml(sec.title)} <span class="muted" style="font-weight:400">(${count(sec.rows.length)})</span></h3>
       ${sec.rows.length ? `<div class="table-wrap" style="max-height:340px;border:1px solid var(--border);border-radius:10px"><table>
         <thead><tr>${sec.columns.map((c) => `<th class="${num(c) ? 'num' : ''}">${escapeHtml(c[1])}</th>`).join('')}</tr></thead>
-        <tbody>${sec.rows.map((r) => `<tr>${sec.columns.map((c) => `<td class="${num(c) ? 'num' : ''}">${cell(c[2], r[c[0]])}</td>`).join('')}</tr>`).join('')}</tbody>
+        <tbody>${sec.rows.map((r) => (r._source
+            // A row with its own records: click opens them in another dialog on top.
+            ? `<tr class="drill-row" data-source="${escapeHtml(r._source)}" tabindex="0" title="กดเพื่อดูรายละเอียด">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? `<span class="drill-link">${cell(c[2], r[c[0]])}</span> <span class="drill-arrow">›</span>` : cell(c[2], r[c[0]])}</td>`).join('')}</tr>`
+            : `<tr>${sec.columns.map((c) => `<td class="${num(c) ? 'num' : ''}">${cell(c[2], r[c[0]])}</td>`).join('')}</tr>`)).join('')}</tbody>
         ${sec.rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? '' : cell(c[2], totals[i])}</td>`).join('')}</tr></tfoot>` : ''}
       </table></div>` : '<div class="empty" style="padding:14px">ไม่มีรายการ</div>'}`;
 }
@@ -37,7 +41,8 @@ export async function openDetailModal(load, navigate) {
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:880px"><div class="modal-body"><div class="empty">กำลังโหลด...</div></div></div>';
     document.body.appendChild(box);
     const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    // Esc closes only the dialog on top (a row's records open over this one).
+    const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-backdrop')].pop() === box) close(); };
     document.addEventListener('keydown', onKey);
     // Closed with its buttons (or Esc) only, so a stray click outside never closes it.
     let d;
@@ -60,4 +65,9 @@ export async function openDetailModal(load, navigate) {
       </div>`;
     box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
     box.querySelector('[data-link]')?.addEventListener('click', () => { close(); navigate(d.link); });
+    box.querySelectorAll('[data-source]').forEach((tr) => {
+        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page) => { close(); navigate(page); }));
+        tr.addEventListener('click', open);
+        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+    });
 }
