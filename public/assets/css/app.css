@@ -306,6 +306,8 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .pc-md .ai-bubble { max-height: 480px; overflow: auto; border-radius: 0 0 10px 10px; }
 .pc-ev-cell { white-space: nowrap; }
 .name-opts { margin: -8px 0 16px; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.name-opts-toggle { align-self: flex-start; border: 0; background: none; padding: 0; color: var(--pri); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.name-opts-toggle:hover { text-decoration: underline; }
 .name-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; border: 1px solid var(--border); border-radius: 9px; background: var(--surface2); padding: 7px 11px; cursor: pointer; font: inherit; color: var(--text); }
 .name-opt:hover { border-color: var(--pri); }
 .name-opt.on { border-color: var(--pri); background: var(--soft); }

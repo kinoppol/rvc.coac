@@ -272,9 +272,13 @@ export async function render(container, { navigate, permissions, user }) {
     /** Names this product goes by on receipts / in the POS, offered as a replacement for a mistyped name. */
     function nameOptionsHtml(e) {
         if (!e.nameOptions?.length) return '';
+        const toggle = `<button type="button" class="name-opts-toggle" data-name-toggle aria-expanded="${e.namesOpen ? 'true' : 'false'}">
+                ${e.namesOpen ? '▾' : '▸'} ชื่ออื่น ๆ ในระบบ (${e.nameOptions.length})</button>`;
+        if (!e.namesOpen) return `<div class="name-opts">${toggle}</div>`;
         return `
               <div class="name-opts">
-                <div class="muted" style="font-size:12.5px;margin-bottom:6px">ชื่อของสินค้าตัวนี้จากใบเสร็จ/POS — กดเพื่อใช้แทนชื่อปัจจุบัน</div>
+                ${toggle}
+                <div class="muted" style="font-size:12.5px;margin-bottom:2px">ชื่อของสินค้าตัวนี้จากใบเสร็จ/POS — กดเพื่อใช้แทนชื่อปัจจุบัน</div>
                 ${e.nameOptions.map((o, i) => `<button type="button" class="name-opt ${o.name === e.name ? 'on' : ''}" data-name-opt="${i}">
                   <span class="name-opt-name">${escapeHtml(o.name)}</span>
                   <span class="name-opt-src">${o.trimmed ? 'ตัดขนาดแพ็คออก · ' : ''}${o.sources.map((s) => `${escapeHtml(s.name)}${s.times > 1 ? ` ×${s.times}` : ''}`).join(', ')}${o.last_date ? ` · ล่าสุด ${fmtDate(o.last_date)}` : ''}</span>
@@ -343,6 +347,10 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#bc-name')?.addEventListener('input', (ev) => {
             e.name = ev.target.value;
             container.querySelectorAll('[data-name-opt]').forEach((b) => b.classList.toggle('on', e.nameOptions[Number(b.dataset.nameOpt)].name === e.name));
+        });
+        container.querySelector('[data-name-toggle]')?.addEventListener('click', () => {
+            e.namesOpen = !e.namesOpen;
+            draw();
         });
         container.querySelectorAll('[data-name-opt]').forEach((b) => b.addEventListener('click', () => {
             e.name = e.nameOptions[Number(b.dataset.nameOpt)].name;
