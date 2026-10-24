@@ -36,7 +36,7 @@ export async function render(container, { navigate }) {
       <div class="kpi kpi-link tone-sales" data-detail="store_sales_today" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ขายสินค้าของร้านวันนี้</div>
         <div class="val">฿ ${money(k.store_sales_today)}</div>
-        <div class="sub">${count(k.store_qty_today)} ชิ้น · <span class="${Number(k.store_profit_today) < 0 ? 'neg' : 'pos'}">กำไรขั้นต้น ฿ ${money(k.store_profit_today)}</span></div>
+        <div class="sub">${count(k.store_qty_today)} ชิ้น · <span class="${Number(k.store_profit_today) < 0 ? 'gain-neg' : 'gain-pos'}">กำไรขั้นต้น ฿ ${money(k.store_profit_today)}</span></div>
       </div>
       <div class="kpi kpi-link tone-stock" data-detail="store_stock" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">สต๊อกสินค้าของร้าน (ต้นทุน)</div>
