@@ -22,7 +22,8 @@ function emptyItem() {
     // item_type: 'stock' = bought to sell, 'supply' = used in the business (cost only, no stock/price)
     // product_id/origName: set when editing a saved purchase, so an unrenamed line stays on the same product
     // pickedId: an existing product the user paired the line with by hand (it restocks that product)
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null };
+    // forceNew: the user said the line is not the matched product, so saving creates a new one (notMatch = the product it is not)
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -354,6 +355,14 @@ export async function render(container) {
     function statusHtml(it) {
         if (!it.name) return '';
         if (it.item_type === 'supply') return '<span class="pill muted" title="บันทึกเป็นต้นทุนของร้าน">ต้นทุนกิจการ</span>';
+        if (it.forceNew) {
+            const same = it.notMatch && it.name.trim() === it.notMatch;
+            return `<span class="pill warn" title="ไม่จับคู่กับสินค้าเดิม จะสร้างเป็นสินค้าใหม่">สินค้าใหม่</span>
+              ${it.notMatch ? `<div class="muted" style="font-size:11.5px;max-width:170px">ไม่ใช่ ${escapeHtml(it.notMatch)}</div>` : ''}
+              ${same ? '<div style="font-size:11.5px;max-width:170px;color:var(--warn)">ชื่อซ้ำกับสินค้าเดิม ควรแก้ชื่อให้ต่างกัน</div>' : ''}
+              <button type="button" class="link-btn" data-pick>จับคู่สินค้าเดิม</button>
+              <button type="button" class="link-btn" data-unnew style="margin-left:6px">ยกเลิก</button>`;
+        }
         if (!it.match) {
             return `<span class="pill warn" title="ไม่พบในสต๊อก จะสร้างเป็นสินค้าใหม่">สินค้าใหม่</span>
               <button type="button" class="link-btn" data-pick title="เลือกสินค้าที่มีอยู่แล้ว เช่น ที่เคยขายหรือนำเข้ายอดขายไว้ก่อน">จับคู่สินค้าเดิม</button>`;
@@ -362,7 +371,8 @@ export async function render(container) {
         return `<span class="pill ok" title="มีในสต๊อก ${stock} ชิ้น">เติมสต๊อก</span>
           <div class="muted" style="font-size:11.5px;max-width:170px">→ ${escapeHtml(it.match.name)} · คงเหลือ <span style="${stock < 0 ? 'color:var(--bad)' : ''}">${stock}</span></div>
           <button type="button" class="link-btn" data-pick>${it.pickedId ? 'เปลี่ยน' : 'ไม่ใช่ตัวนี้? เลือกเอง'}</button>
-          ${it.pickedId ? '<button type="button" class="link-btn" data-unpick style="margin-left:6px">ยกเลิกจับคู่</button>' : ''}`;
+          ${it.pickedId ? '<button type="button" class="link-btn" data-unpick style="margin-left:6px">ยกเลิกจับคู่</button>' : ''}
+          <div><button type="button" class="link-btn" data-new title="ไม่ใช่สินค้าเดิม บันทึกเป็นสินค้าใหม่แยกต่างหาก">เป็นสินค้าใหม่</button></div>`;
     }
 
     /** Pairing buttons in a row's status cell (the cell is also redrawn by refreshPreview). */
@@ -376,6 +386,25 @@ export async function render(container) {
             draw();
             refreshPreview();
         });
+        tr.querySelector('[data-status] [data-new]')?.addEventListener('click', () => markNew(it));
+        tr.querySelector('[data-status] [data-unnew]')?.addEventListener('click', () => {
+            it.forceNew = false;
+            it.notMatch = '';
+            it.priceTouched = false;
+            draw();
+            refreshPreview();
+        });
+    }
+
+    /** The line is not the product it was matched with: save it as a new product instead. */
+    function markNew(it) {
+        it.notMatch = it.match?.name || it.notMatch;
+        it.forceNew = true;
+        it.pickedId = null;
+        it.match = null;
+        it.priceTouched = false;
+        draw();
+        refreshPreview();
     }
 
     /** Picks an existing store product for a receipt line (e.g. goods sold or imported before this purchase). */
@@ -393,6 +422,9 @@ export async function render(container) {
                 เลือกสินค้าที่มีอยู่แล้ว ระบบจะเติมสต๊อกให้สินค้านั้นแทนการสร้างสินค้าใหม่ และจำบาร์โค้ดใบเสร็จนี้ไว้จับคู่ครั้งต่อไป</div>
               <input class="search-input" data-q value="${escapeHtml(start)}" placeholder="ค้นหาชื่อหรือบาร์โค้ด" style="max-width:none;width:100%">
               <div data-list style="margin-top:10px;max-height:52vh;overflow:auto"></div>
+              ${it.match && !it.forceNew ? `<div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <span class="muted" style="font-size:12.5px">ไม่ใช่ ${escapeHtml(it.match.name)} และไม่มีในรายการ?</span>
+                <button type="button" class="btn sm" data-asnew>บันทึกเป็นสินค้าใหม่</button></div>` : ''}
             </div>
           </div>`;
         document.body.appendChild(box);
@@ -413,6 +445,8 @@ export async function render(container) {
             list.querySelectorAll('[data-choose]').forEach((b) => b.addEventListener('click', () => {
                 const p = rows[Number(b.dataset.choose)];
                 it.pickedId = Number(p.id);
+                it.forceNew = false;
+                it.notMatch = '';
                 it.match = { product_id: Number(p.id), name: p.name, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), cost_price: Number(p.cost_price) };
                 it.suggested = Number(p.sale_price);
                 if (!it.priceTouched) it.sale_price = Number(p.sale_price) || it.sale_price;
@@ -423,6 +457,7 @@ export async function render(container) {
         };
         q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
         box.querySelector('[data-x]').addEventListener('click', close);
+        box.querySelector('[data-asnew]')?.addEventListener('click', () => { close(); markNew(it); });
         // Closed with the ✕ button only, so a stray click outside never closes it.
         q.focus();
         q.select();
@@ -715,7 +750,7 @@ export async function render(container) {
             const payload = items.map((it) => ({
                 name: it.receipt_name || it.name, product_name: it.name, barcode: it.barcode, qty: it.qty,
                 pack_size: it.pack_size, unit_cost: it.unit_cost, line_total: it.line_total,
-                item_type: it.typeTouched ? it.item_type : null, product_id: chosenProductId(it),
+                item_type: it.typeTouched ? it.item_type : null, product_id: chosenProductId(it), new_product: it.forceNew,
             }));
             try {
                 const res = await api.post('/purchases/preview', { items: payload });
@@ -784,7 +819,7 @@ export async function render(container) {
 
     /** The product a line restocks: one paired by hand, else (editing) the one it was saved with. */
     function chosenProductId(it) {
-        if (it.item_type !== 'stock') return null;
+        if (it.item_type !== 'stock' || it.forceNew) return null;
         return it.pickedId || keptProductId(it);
     }
 
@@ -834,7 +869,7 @@ export async function render(container) {
                 header: { ...header },
                 items: rows.map((it) => ({
                     name: (it.receipt_name || it.name).trim(), product_name: it.name.trim(), pack_size: Math.max(1, Number(it.pack_size) || 1),
-                    item_type: it.item_type, product_id: chosenProductId(it),
+                    item_type: it.item_type, product_id: chosenProductId(it), new_product: it.item_type === 'stock' && it.forceNew,
                     barcode: it.barcode.trim(), qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                     line_total: Number(it.line_total), sale_price: Number(it.sale_price) || null,
                 })),

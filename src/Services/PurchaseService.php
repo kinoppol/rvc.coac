@@ -136,6 +136,8 @@ class PurchaseService
             'product_name' => $productName,
             'barcode' => $barcode !== '' ? $barcode : null,
             'product_id' => isset($item['product_id']) ? (int) $item['product_id'] : null,
+            // The user said this line is not any existing product: skip matching and create one.
+            'new_product' => !empty($item['new_product']),
             'qty' => $qty,
             'pack_size' => $pack,
             'units' => $units,
@@ -156,7 +158,7 @@ class PurchaseService
             $previous = $this->previousType($l['barcode'], $l['receipt_name'], $l['product_name']);
             // Goods are for sale unless the user marks the line; previous_type is only a hint.
             $type = $l['item_type'] ?? 'stock';
-            $match = $type === 'stock' ? $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']) : null;
+            $match = $type === 'stock' && !$l['new_product'] ? $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']) : null;
             $out[] = [
                 'item_type' => $type,
                 'previous_type' => $previous,
@@ -476,7 +478,11 @@ class PurchaseService
             // each pack size has its own, kept in product_pack_barcodes.
             $pieceBarcode = $l['pack_size'] === 1 ? $l['barcode'] : null;
             $packBarcode = $l['pack_size'] > 1 ? $l['barcode'] : null;
-            $match = $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']);
+            $match = $l['new_product'] ? null : $this->matchProduct($l['product_id'], $l['barcode'], $l['product_name'], $l['receipt_name']);
+            if ($match === null && $pieceBarcode !== null && $this->pieceBarcodeTaken($pieceBarcode)) {
+                // A barcode another product already sells under stays with it; set the new one's later.
+                $pieceBarcode = null;
+            }
             if ($match) {
                 $productId = (int) $match['id'];
                 $salePrice = $l['sale_price'] ?? (float) $match['sale_price'];
@@ -525,6 +531,13 @@ class PurchaseService
             ];
         }
         return $result;
+    }
+
+    private function pieceBarcodeTaken(string $barcode): bool
+    {
+        $stmt = $this->db->prepare('SELECT 1 FROM products WHERE barcode = ? LIMIT 1');
+        $stmt->execute([$barcode]);
+        return (bool) $stmt->fetchColumn();
     }
 
     public function recent(int $limit = 30): array
