@@ -50,7 +50,10 @@ class InventoryController
         return $this->json($response, ['data' => $result]);
     }
 
-    /** Name, piece barcode (scanned at the POS) and the pack barcodes of one store product. */
+    /**
+     * Name, piece barcode (scanned at the POS) and the pack barcodes of one store product.
+     * Admin only: the piece barcode of a consignment product (name and packs stay).
+     */
     public function updateBarcodes(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
@@ -58,9 +61,16 @@ class InventoryController
         $db = Db::connection();
         $repo = new ProductRepo($db, new AuditLogger($db));
         $id = (int) $args['id'];
+        $consigned = ($repo->find($id)['consignor_id'] ?? null) !== null;
+        if ($consigned && ($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้บาร์โค้ดสินค้าฝากขายได้', 403);
+        }
         $db->beginTransaction();
         try {
-            $repo->updateBarcodes($id, $body['barcode'] ?? null, (array) ($body['pack_barcodes'] ?? []), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, isset($body['name']) ? (string) $body['name'] : null);
+            $repo->updateBarcodes(
+                $id, $body['barcode'] ?? null, $consigned ? [] : (array) ($body['pack_barcodes'] ?? []), (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null, !$consigned && isset($body['name']) ? (string) $body['name'] : null, $consigned
+            );
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();

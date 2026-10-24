@@ -165,16 +165,17 @@ export async function render(container, { navigate, permissions, user }) {
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.edit);
-            if (canConsign && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
+            const consigned = p.consignor_id != null;
+            if (canConsign && !consigned && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
             editing = {
-                id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })),
+                id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })), consigned, consignorName: p.consignor_name,
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
                 pastQty: Number(p.store_sold_qty), claimPast: true,
                 error: null, busy: false,
             };
-            if (!editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
+            if (!consigned && !editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
             draw();
-            container.querySelector('#bc-name')?.focus();
+            container.querySelector(consigned ? '#bc-piece' : '#bc-name')?.focus();
         }));
         if (editing) bindEdit();
     }
@@ -216,6 +217,7 @@ export async function render(container, { navigate, permissions, user }) {
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span></div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
+            ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
@@ -235,16 +237,30 @@ export async function render(container, { navigate, permissions, user }) {
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:560px">
             <div class="modal-head">
-              <h2>แก้ไขสินค้า</h2>
+              <h2>${e.consigned ? 'แก้ไขบาร์โค้ดสินค้าฝากขาย' : 'แก้ไขสินค้า'}</h2>
               <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
-              <label class="field" style="display:block;margin-bottom:16px">ชื่อสินค้า (ชื่อที่ใช้ขายต่อชิ้น)
+              ${e.consigned ? `<div style="margin-bottom:16px"><div style="font-weight:600">${escapeHtml(e.name)}</div>
+                <div class="muted" style="font-size:12.5px">ฝากขาย: ${escapeHtml(e.consignorName)} · สินค้าฝากขายใช้ได้เฉพาะบาร์โค้ดชิ้น</div></div>`
+                : `<label class="field" style="display:block;margin-bottom:16px">ชื่อสินค้า (ชื่อที่ใช้ขายต่อชิ้น)
                 <input id="bc-name" value="${escapeHtml(e.name)}" maxlength="191" style="width:100%">
-              </label>
+              </label>`}
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
                 <input id="bc-piece" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
+              ${e.consigned ? '' : packsHtml(e)}
+              ${canConsign && !e.consigned ? consignHtml(e) : ''}
+              ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
+            </div>
+            <div class="modal-foot"><button type="button" class="btn secondary" data-close-edit>ยกเลิก</button>
+              <button type="button" class="btn" id="bc-save" ${e.busy ? 'disabled' : ''}>${e.busy ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
+          </div>
+        </div>`;
+    }
+
+    function packsHtml(e) {
+        return `
               <div style="font-weight:600;margin-bottom:4px">บาร์โค้ดแพ็ค/ลัง</div>
               <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง
                 ระบบใช้จับคู่สินค้าและเติมจำนวนชิ้น/แพ็คให้ตอนซื้อเข้า</div>
@@ -255,14 +271,7 @@ export async function render(container, { navigate, permissions, user }) {
                   <td><button type="button" class="btn secondary sm" data-del-pack="${i}" title="ลบ">✕</button></td>
                 </tr>`).join('')}
               </tbody></table>
-              <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
-              ${canConsign ? consignHtml(e) : ''}
-              ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
-            </div>
-            <div class="modal-foot"><button type="button" class="btn secondary" data-close-edit>ยกเลิก</button>
-              <button type="button" class="btn" id="bc-save" ${e.busy ? 'disabled' : ''}>${e.busy ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
-          </div>
-        </div>`;
+              <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>`;
     }
 
     /** Admin section: turn this store product into a consignor's product. */
@@ -308,7 +317,7 @@ export async function render(container, { navigate, permissions, user }) {
             const fee = e.salePrice - Number(ev.target.value);
             container.querySelector('#cs-fee').textContent = ev.target.value !== '' && fee >= 0 ? `฿ ${money(fee)}` : '-';
         });
-        container.querySelector('#bc-name').addEventListener('input', (ev) => { e.name = ev.target.value; });
+        container.querySelector('#bc-name')?.addEventListener('input', (ev) => { e.name = ev.target.value; });
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];
@@ -318,7 +327,7 @@ export async function render(container, { navigate, permissions, user }) {
             e.packs.splice(Number(b.dataset.delPack), 1);
             draw();
         }));
-        container.querySelector('#bc-add').addEventListener('click', () => {
+        container.querySelector('#bc-add')?.addEventListener('click', () => {
             e.packs.push({ barcode: '', pack_size: '' });
             draw();
             const inputs = container.querySelectorAll('[data-pf="barcode"]');

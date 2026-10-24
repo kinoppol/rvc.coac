@@ -65,12 +65,18 @@ class ProductRepo
      *
      * @param array<int,array{barcode:string,pack_size:int}> $packs
      */
-    /** Name (null = keep), piece barcode and pack barcodes of a store product. */
-    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null): void
+    /**
+     * Name (null = keep), piece barcode and pack barcodes of a store product.
+     * With $allowConsigned a consignment product may be edited too, piece barcode only.
+     */
+    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null, bool $allowConsigned = false): void
     {
         $old = $this->find($productId);
-        if (!$old || $old['consignor_id'] !== null) {
+        if (!$old || ($old['consignor_id'] !== null && !$allowConsigned)) {
             throw new \RuntimeException('ไม่พบสินค้าของร้าน');
+        }
+        if ($old['consignor_id'] !== null && array_filter($packs, fn ($p) => trim((string) ($p['barcode'] ?? '')) !== '')) {
+            throw new \RuntimeException('สินค้าฝากขายใช้ได้เฉพาะบาร์โค้ดชิ้น');
         }
         $name = $name === null ? $old['name'] : trim(preg_replace('/\s+/u', ' ', $name));
         if ($name === '') {
