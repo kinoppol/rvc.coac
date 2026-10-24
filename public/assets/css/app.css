@@ -436,6 +436,19 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-display-val.qty { color: var(--pri); font-size: 38px; }
 .mc-display-val small { font-size: 15px; color: var(--muted); font-weight: 500; }
 .mc-ph { color: var(--border); }
+.mc-units { display: flex; gap: 6px; margin: 2px 0 6px; }
+.mc-unit { flex: 1; border: 1px solid var(--border); background: var(--surface2); color: var(--text); border-radius: 10px; padding: 7px 4px; font-size: 14px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+.mc-unit.on { background: var(--pri); border-color: var(--pri); color: #fff; }
+.mc-display-val.split { font-size: 16px; letter-spacing: 0; text-align: left; }
+.mc-fields { display: flex; gap: 6px; align-items: center; }
+.mc-fields i { font-style: normal; color: var(--muted); font-size: 20px; }
+.mc-field { flex: 1; min-width: 0; border: 2px solid var(--border); border-radius: 10px; background: var(--surface2); color: var(--text); padding: 2px 10px 4px; text-align: right; cursor: pointer; touch-action: manipulation; }
+.mc-field span { display: block; text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; }
+.mc-field b { font-size: 28px; color: var(--pri); }
+.mc-field.on { border-color: var(--pri); background: var(--soft); }
+.mc-total { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-weight: 500; }
+.mc-total b { font-size: 22px; color: var(--pri); }
+.mc-chip.on { background: var(--pri); border-color: var(--pri); color: #fff; }
 .mc-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 12px; }
 .mc-key { height: min(8.5vh, 66px); min-height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 26px; font-weight: 600; cursor: pointer; touch-action: manipulation; user-select: none; }
 .mc-key:active { background: var(--soft); }

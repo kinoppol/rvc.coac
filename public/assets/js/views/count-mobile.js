@@ -89,9 +89,13 @@ export function openMobileCount({ stockCount, items, onClose }) {
     const counted = new Map(items.map((it) => [Number(it.product_id), it.counted_qty === null ? null : Number(it.counted_qty)]));
     let total = items.length;
     let product = null;     // productInfo from the API
-    let packSize = 1;       // pieces per unit keyed in (a scanned pack barcode)
     let mode = 'code';      // keypad target: 'code' | 'qty'
-    let input = '';
+    let input = '';         // barcode being keyed in (mode 'code')
+    // Quantity (mode 'qty'): counted in pieces, in packs, or packs + loose pieces.
+    let unit = 'piece';     // 'piece' | 'pack' | 'mix'
+    let lastUnit = 'piece'; // the counter's last choice, kept for the next product
+    let q = { size: '', packs: '', pieces: '' };
+    let field = 'pieces';   // which part of q the keypad types into
     let message = null;     // { kind: 'bad'|'ok'|'info', text, linkCode? }
     let busy = false;
     let linkFor = null;     // product waiting for a new barcode to be scanned/typed
@@ -143,6 +147,53 @@ export function openMobileCount({ stockCount, items, onClose }) {
         return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${p.image_token}${photoCache}`) : null;
     }
 
+    /** Pack sizes known from the product's pack barcodes, smallest first. */
+    function packSizes(p) {
+        return [...new Set((p?.pack_barcodes || []).map((b) => Number(b.pack_size)))].filter((n) => n > 1).sort((a, b) => a - b);
+    }
+
+    /** Pieces counted from q, or null while it is incomplete. */
+    function qtyTotal() {
+        const size = Number(q.size);
+        const packs = Number(q.packs || 0);
+        const pieces = Number(q.pieces || 0);
+        if (unit === 'piece') return q.pieces === '' ? null : pieces;
+        if (unit === 'pack') return q.packs === '' || !(size > 1) ? null : packs * size;
+        if (q.packs === '' && q.pieces === '') return null;
+        if (packs > 0 && !(size > 1)) return null;
+        return packs * size + pieces;
+    }
+
+    function setUnit(u) {
+        unit = lastUnit = u;
+        field = u === 'piece' ? 'pieces' : (Number(q.size) > 1 ? 'packs' : 'size');
+    }
+
+    function resetQty() {
+        q = { size: '', packs: '', pieces: '' };
+        unit = 'piece';
+        field = 'pieces';
+    }
+
+    function qtyHtml() {
+        const units = [['piece', 'นับเป็นชิ้น'], ['pack', 'นับเป็นแพ็ค'], ['mix', 'แพ็ค + ชิ้น']];
+        const lbl = `<div class="mc-units">${units.map(([u, l]) => `<button type="button" class="mc-unit${unit === u ? ' on' : ''}" data-unit="${u}">${l}</button>`).join('')}</div>`;
+        if (unit === 'piece') {
+            return { lbl, val: q.pieces ? escapeHtml(q.pieces) : '<span class="mc-ph">–</span>' };
+        }
+        const f = (k, label) => `<button type="button" class="mc-field${field === k ? ' on' : ''}" data-field="${k}"><span>${label}</span><b>${q[k] === '' ? '–' : escapeHtml(q[k])}</b></button>`;
+        const sizes = packSizes(product);
+        const total = qtyTotal();
+        return {
+            lbl,
+            val: `<div class="mc-fields">${f('size', 'ชิ้น/แพ็ค')}<i>×</i>${f('packs', 'จำนวนแพ็ค')}${unit === 'mix' ? `<i>+</i>${f('pieces', 'ชิ้นเศษ')}` : ''}</div>
+              <div class="mc-total">
+                <span>${sizes.map((n) => `<button type="button" class="mc-chip${Number(q.size) === n ? ' on' : ''}" data-psize="${n}">แพ็ค ${n}</button>`).join(' ')}</span>
+                <span>รวม <b>${total ?? '–'}</b> ชิ้น</span>
+              </div>`,
+        };
+    }
+
     function draw() {
         $('progress').textContent = `นับแล้ว ${countedN()}/${total}`;
         const cam = $('cam');
@@ -189,26 +240,37 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
         $('card').innerHTML = card;
 
-        $('lbl').textContent = mode === 'qty'
-            ? (packSize > 1 ? `จำนวนที่นับ (แพ็ค × ${packSize} ชิ้น)` : 'จำนวนที่นับ (ชิ้น)')
-            : (linkFor ? `บาร์โค้ดใหม่ของ ${linkFor.name}` : 'รหัสสินค้า / บาร์โค้ด');
-        $('val').innerHTML = input
-            ? escapeHtml(input) + (mode === 'qty' && packSize > 1 ? ` <small>= ${Number(input) * packSize} ชิ้น</small>` : '')
-            : '<span class="mc-ph">–</span>';
+        if (mode === 'qty') {
+            const { lbl, val } = qtyHtml();
+            $('lbl').innerHTML = lbl;
+            $('val').innerHTML = val;
+        } else {
+            $('lbl').textContent = linkFor ? `บาร์โค้ดใหม่ของ ${linkFor.name}` : 'รหัสสินค้า / บาร์โค้ด';
+            $('val').innerHTML = input ? escapeHtml(input) : '<span class="mc-ph">–</span>';
+        }
         $('val').classList.toggle('qty', mode === 'qty');
+        $('val').classList.toggle('split', mode === 'qty' && unit !== 'piece');
 
+        const ready = qtyTotal() !== null && !busy;
         $('actions').innerHTML = mode === 'qty'
             ? `<button type="button" class="mc-btn ghost" data-act="cancel">ยกเลิก</button>
-               <button type="button" class="mc-btn alt" data-act="add" ${input && !busy ? '' : 'disabled'}>+ บวกเพิ่ม</button>
-               <button type="button" class="mc-btn" data-act="set" ${input && !busy ? '' : 'disabled'}>✓ บันทึก</button>`
+               <button type="button" class="mc-btn alt" data-act="add" ${ready ? '' : 'disabled'}>+ บวกเพิ่ม</button>
+               <button type="button" class="mc-btn" data-act="set" ${ready ? '' : 'disabled'}>✓ บันทึก</button>`
             : `<button type="button" class="mc-btn" data-act="find" ${input && !busy ? '' : 'disabled'}>${linkFor ? 'ผูกบาร์โค้ด' : 'ค้นหา'}</button>`;
     }
 
+    /** Product found: key in its count. A scanned pack barcode starts in packs of that size. */
     function selectProduct(p, size = 1) {
         product = p;
-        packSize = size;
         mode = 'qty';
         input = '';
+        q = { size: String(size > 1 ? size : (packSizes(p)[0] || '')), packs: '', pieces: '' };
+        if (size > 1) {
+            unit = lastUnit === 'mix' ? 'mix' : 'pack';
+            field = 'packs';
+        } else {
+            setUnit(lastUnit);
+        }
         message = null;
         draw();
     }
@@ -247,8 +309,9 @@ export function openMobileCount({ stockCount, items, onClose }) {
     }
 
     async function saveQty(addTo) {
-        if (!product || !input || busy) return;
-        const pieces = Number(input) * packSize;
+        const pieces = qtyTotal();
+        if (!product || pieces === null || busy) return;
+        const how = unit === 'piece' ? '' : `(${Number(q.packs || 0)}×${q.size}${unit === 'mix' && q.pieces ? `+${Number(q.pieces)}` : ''}) `;
         const prev = counted.get(Number(product.id)) ?? 0;
         const value = addTo ? prev + pieces : pieces;
         busy = true;
@@ -257,12 +320,12 @@ export function openMobileCount({ stockCount, items, onClose }) {
             const res = await api.post(`/stockcounts/${stockCount.id}/count`, { product_id: product.id, counted_qty: value });
             if (!counted.has(Number(product.id))) total++;
             counted.set(Number(product.id), value);
-            log.unshift({ name: product.name, qty: addTo ? `${prev} + ${pieces} = ${value}` : value });
+            log.unshift({ name: product.name, qty: how + (addTo ? `${prev} + ${pieces} = ${value}` : value) });
             beep(true);
             product = res.data;
             mode = 'code';
             input = '';
-            packSize = 1;
+            resetQty();
             message = { kind: 'ok', text: `บันทึก ${product.name} = ${value} ชิ้น` };
         } catch (e) {
             beep(false);
@@ -273,7 +336,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
     }
 
-    /** Links `code` to product p; asks piece vs pack first unless packSize is given. */
+    /** Links `code` to product p; asks piece vs pack first unless size is given. */
     async function linkBarcode(p, code, size) {
         if (size === null) {
             openLinkSheet(p, code);
@@ -535,14 +598,25 @@ export function openMobileCount({ stockCount, items, onClose }) {
     // ---- input ----
     function press(key) {
         if (busy) return;
+        if (mode === 'qty') {
+            let v = q[field];
+            if (key === 'C') v = '';
+            else if (key === '⌫') v = v.slice(0, -1);
+            else if (/^\d$/.test(key)) {
+                if (v.length >= (field === 'size' ? 4 : 6)) return;
+                v = v === '0' ? key : v + key;
+            }
+            q[field] = v;
+            draw();
+            return;
+        }
         if (key === 'C') input = '';
         else if (key === '⌫') input = input.slice(0, -1);
         else if (/^\d$/.test(key)) {
-            if (mode === 'qty' && input.length >= 6) return;
-            if (mode === 'code' && input.length >= 32) return;
-            input = mode === 'qty' && input === '0' ? key : input + key;
+            if (input.length >= 32) return;
+            input += key;
         }
-        if (mode === 'code' && message?.kind !== 'info') message = null;
+        if (message?.kind !== 'info') message = null;
         draw();
     }
 
@@ -563,6 +637,17 @@ export function openMobileCount({ stockCount, items, onClose }) {
             press(key.dataset.key);
             return;
         }
+        const pick = e.target.closest('[data-unit], [data-field], [data-psize]');
+        if (pick && mode === 'qty') {
+            if (pick.dataset.unit) setUnit(pick.dataset.unit);
+            else if (pick.dataset.field) field = pick.dataset.field;
+            else {
+                q.size = pick.dataset.psize;
+                field = 'packs';
+            }
+            draw();
+            return;
+        }
         const act = e.target.closest('[data-act]')?.dataset.act;
         if (!act) return;
         if (act === 'close') close();
@@ -580,7 +665,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         else if (act === 'cancel') {
             mode = 'code';
             input = '';
-            packSize = 1;
+            resetQty();
             draw();
         } else if (act === 'addcode') {
             linkFor = linkFor ? null : product;
