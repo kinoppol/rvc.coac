@@ -392,6 +392,13 @@ $app->add(function (Request $request, $handler) use ($sessionWait) {
     $total = (microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000;
     $response = $response->withHeader('X-App-Build', AppShell::build())->withHeader('Server-Timing', sprintf('session;desc="session wait";dur=%.0f, total;dur=%.0f', $sessionWait * 1000, $total));
     RequestLog::write($request->getMethod(), $request->getUri()->getPath(), $total, $sessionWait * 1000, $response->getStatusCode(), (int) ($_SESSION['user_id'] ?? 0));
+    // session_start() sends "Pragma: no-cache" and an Expires in 1981. Chrome reads that
+    // Pragma as no-cache, so a cacheable response (a product photo) would still be asked
+    // for again on every load (a 304 round trip each). Drop them where we allow caching.
+    if (preg_match('/max-age=[1-9]/', $response->getHeaderLine('Cache-Control'))) {
+        header_remove('Pragma');
+        header_remove('Expires');
+    }
     return $response;
 });
 
