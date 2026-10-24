@@ -264,7 +264,7 @@ function onAuthenticated(data) {
     loadView(currentRoute());
 
     if (state.permissions.includes('ai.use')) {
-        mountAssistant({ user: state.user, navigate });
+        mountAssistant({ user: state.user, permissions: state.permissions, navigate });
     }
 }
 

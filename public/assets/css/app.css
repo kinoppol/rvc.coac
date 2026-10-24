@@ -681,3 +681,13 @@ div.pos-row.out { cursor: not-allowed; }
 .holiday-list { display: flex; flex-direction: column; gap: 8px; }
 .holiday-row { display: grid; grid-template-columns: 170px 1fr auto; gap: 8px; align-items: center; }
 @media (max-width: 560px) { .holiday-row { grid-template-columns: 1fr auto; } .holiday-row [data-hn] { grid-column: 1; } .holiday-row [data-holiday-del] { grid-row: 1; grid-column: 2; } }
+.perf-mode { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; font-size: 14px; }
+.perf-mode input { width: 18px; height: 18px; margin-top: 2px; }
+.perf-mode.on { border-color: var(--pri); background: var(--soft); }
+.perf-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+.perf-stats > div { flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; }
+.perf-stats b { font-size: 22px; }
+.perf-stats > div.bad { border-color: var(--bad); background: var(--bad-bg); color: var(--bad); }
+.perf-bad td { background: var(--bad-bg); }
+.perf-bar { height: 8px; border-radius: 99px; background: var(--surface2); overflow: hidden; }
+.perf-bar span { display: block; height: 100%; background: var(--pri); transition: width .2s; }

@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
+import { renderPerfPanel } from './settings-perf.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 
@@ -30,6 +31,7 @@ const TABS = [
     { key: 'rvcone', label: 'RVC-ONE', edit: true },
     { key: 'time', label: 'เขตเวลา (Time zone)' },
     { key: 'roles', label: 'สิทธิ์ตามบทบาท' },
+    { key: 'perf', label: 'ประสิทธิภาพ', edit: true },
     { key: 'history', label: 'ประวัติการเปลี่ยนแปลง' },
 ];
 
@@ -58,6 +60,7 @@ export async function render(page, { user, permissions, params = {} }) {
         container.replaceChildren(pane);
         if (key === 'users') return renderUsersPanel(pane, { user });
         if (key === 'rvcone') return renderOaPanel(pane);
+        if (key === 'perf') return renderPerfPanel(pane);
         await load();
     }
     page.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => show(b.dataset.tab)));

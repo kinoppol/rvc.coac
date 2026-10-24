@@ -17,6 +17,7 @@ use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
 use App\Controllers\MyConsignorController;
 use App\Controllers\OaAdminController;
+use App\Controllers\PerfController;
 use App\Controllers\PortalController;
 use App\Controllers\PosImportController;
 use App\Controllers\PurchaseController;
@@ -32,19 +33,31 @@ use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
 use App\Middleware\CsrfMiddleware;
 use App\Middleware\RoleGuard;
+use App\Services\SettingsService;
+use App\Support\AppShell;
 use App\Support\Config;
+use App\Support\Db;
+use App\Support\RequestLog;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+$requestStarted = microtime(true);
 if (session_status() === PHP_SESSION_NONE) {
+    // PHP locks the session file while a request holds it open, so one slow request
+    // (an AI receipt read, a POS import) would make every other request of that user
+    // wait. Only sign-in/out, role switching and impersonation change the session;
+    // every other request reads it and releases the lock at once.
+    $writesSession = preg_match('#/auth/|/impersonate$#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
     session_start([
         'cookie_httponly' => true,
         'cookie_samesite' => 'Lax',
+        'read_and_close' => !$writesSession,
     ]);
 }
+$sessionWait = microtime(true) - $requestStarted;
 
 if (!Config::isInstalled()) {
     header('Content-Type: application/json; charset=utf-8');
@@ -301,6 +314,11 @@ $app->group('/api', function ($group) {
     $group->get('/admin/audit-logs', [AuditController::class, 'index'])
         ->add(new RoleGuard('audit.view'));
 
+    $group->get('/admin/perf', [PerfController::class, 'requests'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->post('/admin/thumbnails', [PerfController::class, 'thumbnails'])
+        ->add(new RoleGuard('settings.edit'));
+
     $group->post('/attachments', [AttachmentController::class, 'store']);
     $group->get('/attachments/{token:[a-f0-9]{32}}', [AttachmentController::class, 'show']);
 
@@ -357,8 +375,24 @@ $app->group('/api', function ($group) {
 // ---- SPA shell fallback: any other GET request serves the app shell ----
 $app->get('/{path:.*}', function (Request $request, Response $response) {
     $html = file_get_contents(__DIR__ . '/app.html');
-    $response->getBody()->write($html);
-    return $response->withHeader('Content-Type', 'text/html; charset=utf-8');
+    try {
+        $mode = (string) (new SettingsService(Db::connection()))->get('asset_mode');
+    } catch (\Throwable $e) {
+        $mode = 'development';
+    }
+    $response->getBody()->write(AppShell::render($html, $mode));
+    // The shell names the asset versions, so it is never cached itself.
+    return $response->withHeader('Content-Type', 'text/html; charset=utf-8')->withHeader('Cache-Control', 'no-cache, must-revalidate');
+});
+
+// ---- Request timing (outermost): a Server-Timing header for the browser's
+// Network panel, and one line per request in storage/logs (Settings > ประสิทธิภาพ). ----
+$app->add(function (Request $request, $handler) use ($sessionWait) {
+    $response = $handler->handle($request);
+    $total = (microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000;
+    $response = $response->withHeader('Server-Timing', sprintf('session;desc="session wait";dur=%.0f, total;dur=%.0f', $sessionWait * 1000, $total));
+    RequestLog::write($request->getMethod(), $request->getUri()->getPath(), $total, $sessionWait * 1000, $response->getStatusCode(), (int) ($_SESSION['user_id'] ?? 0));
+    return $response;
 });
 
 $app->run();

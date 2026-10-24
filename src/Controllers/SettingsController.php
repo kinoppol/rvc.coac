@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Repositories\UserRepo;
 use App\Services\SettingsService;
+use App\Support\AppShell;
 use App\Support\Config;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -36,6 +37,9 @@ class SettingsController
         $body = (array) $request->getParsedBody();
         if (isset($body['login_methods']) && !in_array($body['login_methods'], SettingsService::LOGIN_METHODS, true)) {
             return $this->error($response, 'วิธีการเข้าสู่ระบบไม่ถูกต้อง', 422);
+        }
+        if (isset($body['asset_mode']) && !in_array($body['asset_mode'], AppShell::MODES, true)) {
+            return $this->error($response, 'โหมดการทำงานไม่ถูกต้อง', 422);
         }
         if (isset($body['qr_login'])) {
             $body['qr_login'] = in_array($body['qr_login'], ['1', 1, true], true) ? '1' : '0';

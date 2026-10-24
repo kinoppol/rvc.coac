@@ -46,7 +46,12 @@ class AuthMiddleware implements MiddlewareInterface
         if (!empty($_SESSION['impersonator_id'])) {
             $admin = $userRepo->find((int) $_SESSION['impersonator_id']);
             if (!$admin || !UserRepo::canSignIn($admin) || $admin['role'] !== 'admin') {
+                // Most requests read the session and release it (public/index.php): reopen it to clear it.
+                if (session_status() !== PHP_SESSION_ACTIVE) {
+                    session_start();
+                }
                 $_SESSION = [];
+                session_write_close();
                 return $this->deny(401, 'กรุณาเข้าสู่ระบบ');
             }
             $request = $request->withAttribute('impersonator', [

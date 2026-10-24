@@ -7,11 +7,17 @@ RewriteRule ^ - [L]
 # Everything else (the SPA shell and /api/*) goes through the front controller.
 RewriteRule ^ index.php [QSA,L]
 
-# JS/CSS change on every deploy and views are imported without a version tag:
-# make browsers and Cloudflare revalidate (cheap 304 via ETag) instead of
-# serving a stale copy for hours.
+# JS/CSS: in development mode (Settings > ประสิทธิภาพ) the app uses plain URLs, so
+# browsers and Cloudflare revalidate them on every load (cheap 304 via ETag).
+# In production mode every URL carries ?v=<file version> (see src/Support/AppShell.php):
+# those change with the file, so they are cached for a year without asking again.
 <IfModule mod_headers.c>
     <FilesMatch "\.(js|css|html)$">
         Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+    <FilesMatch "\.(js|css)$">
+        <If "%{QUERY_STRING} =~ /(^|&)v=/">
+            Header set Cache-Control "public, max-age=31536000, immutable"
+        </If>
     </FilesMatch>
 </IfModule>

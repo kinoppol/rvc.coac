@@ -59,13 +59,13 @@ function save(store, key, value) {
     try { store.setItem(storageKey(key), JSON.stringify(value)); } catch (e) { /* ignore */ }
 }
 
-export async function mountAssistant({ user, navigate }) {
+export async function mountAssistant({ user, permissions = [], navigate }) {
     unmountAssistant();
     const el = document.createElement('div');
     el.className = 'ai-root';
     document.body.appendChild(el);
     ctx = {
-        user, navigate, el,
+        user, permissions, navigate, el,
         state: {
             open: false, models: [], defaultId: null, modelId: null, loading: false, error: null,
             messages: [], pending: [], decisions: {}, listening: false, canManage: false,
@@ -89,9 +89,9 @@ export async function refreshAssistantModels() {
     if (!ctx) return;
     const s = ctx.state;
     try {
-        const me = await api.get('/auth/me');
-        s.canManage = (me.permissions || []).includes('ai.manage');
-        s.canPurchase = (me.permissions || []).includes('purchase.create');
+        // Permissions come from the app's own /auth/me (no second request while the page loads).
+        s.canManage = ctx.permissions.includes('ai.manage');
+        s.canPurchase = ctx.permissions.includes('purchase.create');
         const res = await api.get('/ai/models');
         s.models = res.data;
         s.defaultId = res.default_id ?? null;
