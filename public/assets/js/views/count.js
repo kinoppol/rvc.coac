@@ -48,16 +48,14 @@ export async function render(container, { permissions }) {
             return;
         }
 
-        const diffCount = items.filter((i) => i.diff_qty !== null && Number(i.diff_qty) !== 0).length;
-        const diffValue = items.reduce((s, i) => s + (i.diff_qty ? Number(i.diff_qty) * Number(i.sale_price) : 0), 0);
-        const countedN = items.filter((i) => i.counted_qty !== null).length;
+        const { diffCount, diffValue, countedN } = totals();
 
         container.innerHTML = `
         <div class="stat-row">
           <div class="kpi"><div class="lbl">รอบตรวจนับ</div><div class="val" style="font-size:16px">${escapeHtml(current.doc_no)}</div><div class="sub">${escapeHtml(current.count_date)}</div></div>
-          <div class="kpi"><div class="lbl">รายการที่นับแล้ว</div><div class="val">${countedN}/${items.length}</div></div>
-          <div class="kpi"><div class="lbl">พบผลต่าง</div><div class="val" style="color:${diffCount ? 'var(--bad)' : 'inherit'}">${diffCount}</div></div>
-          <div class="kpi"><div class="lbl">มูลค่าผลต่างสุทธิ</div><div class="val">฿ ${money(diffValue)}</div></div>
+          <div class="kpi"><div class="lbl">รายการที่นับแล้ว</div><div class="val" data-k="counted">${countedN}/${items.length}</div><div class="sub">ไม่ต้องนับครบทุกรายการ</div></div>
+          <div class="kpi"><div class="lbl">พบผลต่าง</div><div class="val" data-k="diff" style="color:${diffCount ? 'var(--bad)' : 'inherit'}">${diffCount}</div></div>
+          <div class="kpi"><div class="lbl">มูลค่าผลต่างสุทธิ</div><div class="val" data-k="value">฿ ${money(diffValue)}</div></div>
         </div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
         ${current.status === 'draft' ? `
@@ -70,18 +68,18 @@ export async function render(container, { permissions }) {
             <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th></tr></thead>
             <tbody>
               ${items.map((it, i) => {
-                  const diff = it.diff_qty === null ? null : Number(it.diff_qty);
-                  return `<tr style="${diff ? 'background:var(--bad-bg)' : ''}">
+                  const diff = diffOf(it);
+                  return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}">
                     <td>${escapeHtml(it.name)}</td><td class="muted">${escapeHtml(it.consignor_name)}</td>
                     <td class="num">${it.system_qty}</td>
-                    <td class="num"><input type="number" min="0" value="${it.counted_qty ?? ''}" data-idx="${i}" style="width:80px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}></td>
-                    <td>${diff === null ? '' : diff === 0 ? '<span class="pill ok">ตรง</span>' : `<span class="pill bad">${diff > 0 ? '+' + diff : diff}</span>`}</td>
+                    <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}></td>
+                    <td data-diff>${diffHtml(diff)}</td>
                   </tr>`;
               }).join('')}
             </tbody>
           </table></div>
         </section>
-        <p class="muted" style="font-size:12px">เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
+        <p class="muted" style="font-size:12px">กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
         <div class="actions-row">
           ${current.status === 'draft' ? `
             <button type="button" class="btn secondary" id="btn-save">บันทึกร่างไว้ก่อน</button>
@@ -92,8 +90,22 @@ export async function render(container, { permissions }) {
           ${current.status === 'submitted' && !canApprove ? `<span class="pill warn">ส่งรายงานแล้ว รออนุมัติจากผู้จัดการร้าน</span>` : ''}
         </div>`;
 
-        container.querySelectorAll('[data-idx]').forEach((inp) => inp.addEventListener('change', (e) => {
-            items[Number(e.target.dataset.idx)]._pendingCounted = e.target.value;
+        container.querySelectorAll('[data-idx]').forEach((inp) => inp.addEventListener('input', (e) => {
+            const i = Number(e.target.dataset.idx);
+            items[i]._pendingCounted = e.target.value.trim();
+            // Update the row and totals in place so the box keeps its focus.
+            const diff = diffOf(items[i]);
+            const tr = container.querySelector(`tr[data-tr="${i}"]`);
+            tr.style.background = diff ? 'var(--bad-bg)' : '';
+            tr.querySelector('[data-diff]').innerHTML = diffHtml(diff);
+            const t = totals();
+            container.querySelector('[data-k="counted"]').textContent = `${t.countedN}/${items.length}`;
+            const k = container.querySelector('[data-k="diff"]');
+            k.textContent = t.diffCount;
+            k.style.color = t.diffCount ? 'var(--bad)' : 'inherit';
+            container.querySelector('[data-k="value"]').textContent = `฿ ${money(t.diffValue)}`;
+            const sb = container.querySelector('#btn-submit');
+            if (sb) sb.disabled = !t.diffCount;
         }));
         const mobileBtn = container.querySelector('#btn-mobile');
         if (mobileBtn) mobileBtn.addEventListener('click', () => openMobileCount({
@@ -111,10 +123,40 @@ export async function render(container, { permissions }) {
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
     }
 
+    /** The count as on screen (typed but unsaved wins); null = not counted. */
+    function counted(it) {
+        const v = it._pendingCounted !== undefined ? it._pendingCounted : it.counted_qty;
+        return v === null || v === '' ? null : Number(v);
+    }
+    function diffOf(it) {
+        const c = counted(it);
+        return c === null ? null : c - Number(it.system_qty);
+    }
+    function diffHtml(diff) {
+        if (diff === null) return '<span class="muted" style="font-size:12px">ไม่ได้นับ</span>';
+        return diff === 0 ? '<span class="pill ok">ตรง</span>' : `<span class="pill bad">${diff > 0 ? '+' + diff : diff}</span>`;
+    }
+    function totals() {
+        let diffCount = 0;
+        let diffValue = 0;
+        let countedN = 0;
+        items.forEach((it) => {
+            const d = diffOf(it);
+            if (d === null) return;
+            countedN++;
+            if (d !== 0) {
+                diffCount++;
+                diffValue += d * Number(it.sale_price);
+            }
+        });
+        return { diffCount, diffValue, countedN };
+    }
+
     async function saveCounts(thenSubmit) {
+        // Only boxes changed here are sent; a cleared box sends null (not counted).
         const payload = items
-            .filter((it) => it._pendingCounted !== undefined && it._pendingCounted !== '')
-            .map((it, idx) => ({ item_id: it.id, counted_qty: Number(it._pendingCounted) }));
+            .filter((it) => it._pendingCounted !== undefined)
+            .map((it) => ({ item_id: it.id, counted_qty: counted(it) }));
         try {
             await api.post(`/stockcounts/${current.id}/counts`, { items: payload });
             if (thenSubmit) {

@@ -42,14 +42,20 @@ class StockCountService
         }
     }
 
-    /** @param array<int,array{item_id:int, counted_qty:int, note?:string}> $items */
+    /**
+     * A blank (null) count means the item was not counted: it keeps no count and
+     * its stock is left as it is. Not every item has to be counted.
+     *
+     * @param array<int,array{item_id:int, counted_qty:?int, note?:string}> $items
+     */
     public function saveCounts(int $stockCountId, array $items): void
     {
         $upd = $this->db->prepare(
             'UPDATE stock_count_items SET counted_qty = ?, diff_qty = ? - system_qty, note = ? WHERE id = ? AND stock_count_id = ?'
         );
         foreach ($items as $item) {
-            $counted = (int) $item['counted_qty'];
+            $raw = $item['counted_qty'] ?? null;
+            $counted = $raw === null || $raw === '' ? null : max(0, (int) $raw);
             $upd->execute([$counted, $counted, $item['note'] ?? null, (int) $item['item_id'], $stockCountId]);
         }
     }
