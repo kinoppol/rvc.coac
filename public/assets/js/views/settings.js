@@ -3,6 +3,22 @@ import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+
+/** Saved holidays (store_holidays JSON); ones over a month past no longer matter and are dropped on the next save. */
+function holidays(s) {
+    let list = [];
+    try { list = JSON.parse(s.store_holidays || '[]'); } catch (e) { list = []; }
+    const cutoff = new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10);
+    return list.filter((h) => h.date >= cutoff);
+}
+
+function holidayRow(h) {
+    return `<div class="holiday-row" data-holiday>
+      <input type="date" data-hd value="${escapeHtml(h.date)}" aria-label="วันที่">
+      <input data-hn value="${escapeHtml(h.name)}" placeholder="ชื่อวันหยุด เช่น วันปิยมหาราช" maxlength="100" aria-label="ชื่อวันหยุด">
+      <button type="button" class="btn secondary sm" data-holiday-del title="ลบ" aria-label="ลบวันหยุดนี้">✕</button>
+    </div>`;
+}
 const PAYMENT_LABEL ={ cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
@@ -137,11 +153,15 @@ export async function render(page, { user, permissions, params = {} }) {
                     <label class="field">เวลาเปิดร้าน <input type="time" name="store_open_time" value="${escapeHtml(s.store_open_time || '')}"></label>
                     <label class="field">เวลาปิดร้าน <input type="time" name="store_close_time" value="${escapeHtml(s.store_close_time || '')}"></label>
                   </div>
-                  <div style="margin-top:14px;font-weight:600;font-size:14px">วันที่ร้านปิด</div>
+                  <div style="margin-top:14px;font-weight:600;font-size:14px">วันที่ร้านเปิด <span class="muted" style="font-size:12.5px;font-weight:400">(วันที่ไม่ได้เลือก = ร้านปิด)</span></div>
                   <div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px">
                     ${WEEKDAYS.map((d, i) => `
-                      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="closed_day" value="${i}" ${(s.store_closed_days || '').split(',').includes(String(i)) ? 'checked' : ''} style="width:20px;height:20px"> ${d}</label>`).join('')}
+                      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="open_day" value="${i}" ${(s.store_closed_days || '').split(',').includes(String(i)) ? '' : 'checked'} style="width:20px;height:20px"> ${d}</label>`).join('')}
                   </div>
+                  <div style="margin-top:18px;font-weight:600;font-size:14px">วันหยุดนักขัตฤกษ์ / วันหยุดพิเศษ</div>
+                  <p class="muted" style="font-size:12.5px;margin:4px 0 8px">ร้านปิดในวันที่กำหนด แม้จะตรงกับวันที่ร้านเปิด — ยอดขายของวันนั้นลงบัญชีเป็นวันเปิดร้านถัดไป</p>
+                  <div class="holiday-list" id="holiday-list">${holidays(s).map(holidayRow).join('')}</div>
+                  <button type="button" class="btn secondary sm" id="holiday-add" style="margin-top:8px">+ เพิ่มวันหยุด</button>
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
                   <h2 style="margin-bottom:6px">สิทธิ์ใช้สวิตช์ในหน้าขายสินค้า</h2>
@@ -159,12 +179,24 @@ export async function render(page, { user, permissions, params = {} }) {
             </form>
           </div>`;
         if (!canEdit) return;
+        pane.querySelector('#holiday-add').addEventListener('click', () => {
+            const list = pane.querySelector('#holiday-list');
+            list.insertAdjacentHTML('beforeend', holidayRow({ date: '', name: '' }));
+            list.lastElementChild.querySelector('[data-hd]').focus();
+        });
+        pane.querySelector('#holiday-list').addEventListener('click', (e) => {
+            e.target.closest('[data-holiday-del]')?.closest('[data-holiday]').remove();
+        });
         pane.querySelector('#pos-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
                 await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
-                    store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'), store_closed_days: fd.getAll('closed_day').join(',') });
+                    store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),
+                    store_closed_days: WEEKDAYS.map((d, i) => String(i)).filter((i) => !fd.getAll('open_day').includes(i)).join(','),
+                    store_holidays: [...pane.querySelectorAll('[data-holiday]')]
+                        .map((row) => ({ date: row.querySelector('[data-hd]').value, name: row.querySelector('[data-hn]').value.trim() }))
+                        .filter((h) => h.date) });
                 saved = true;
                 error = null;
                 await load();

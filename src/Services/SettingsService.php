@@ -38,23 +38,38 @@ class SettingsService
         'store_open_time' => '',
         'store_close_time' => '',
         'store_closed_days' => '', // comma list of weekdays the store is closed, 0 = Sunday … 6 = Saturday
+        'store_holidays' => '[]', // JSON [{date: "Y-m-d", name}]: public holidays and other days the store is closed
     ];
+
+    /** @return array<string,string> date => name of the days off set in store_holidays */
+    public function holidays(): array
+    {
+        $out = [];
+        foreach ((array) json_decode((string) $this->get('store_holidays'), true) as $h) {
+            if (is_array($h) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($h['date'] ?? ''))) {
+                $out[$h['date']] = (string) ($h['name'] ?? '');
+            }
+        }
+        return $out;
+    }
 
     /**
      * The accounting day for a sale made at $at. After closing time, before
      * opening time on a closed day, or any time on a closed day, a sale counts
      * toward the next day the store opens; before opening on an open day it
-     * counts toward that same day.
-     * @return array{date:string, after_hours:bool}
+     * counts toward that same day. Holidays (store_holidays) are closed days too.
+     * @return array{date:string, after_hours:bool, holiday?:string}
      */
     public function businessDay(\DateTimeImmutable $at): array
     {
         $open = (string) $this->get('store_open_time');
         $close = (string) $this->get('store_close_time');
         $closedDays = array_filter(explode(',', (string) $this->get('store_closed_days')), 'strlen');
-        $isClosedDay = fn (\DateTimeImmutable $d) => in_array($d->format('w'), $closedDays, true);
+        $holidays = $this->holidays();
+        $isClosedDay = fn (\DateTimeImmutable $d) => in_array($d->format('w'), $closedDays, true) || isset($holidays[$d->format('Y-m-d')]);
         $nextOpenDay = function (\DateTimeImmutable $d) use ($isClosedDay): \DateTimeImmutable {
-            for ($i = 0, $n = $d->modify('+1 day'); $i < 7 && $isClosedDay($n); $i++) {
+            // A long holiday after a weekend can close the store for more than a week.
+            for ($i = 0, $n = $d->modify('+1 day'); $i < 60 && $isClosedDay($n); $i++) {
                 $n = $n->modify('+1 day');
             }
             return $n;
@@ -62,7 +77,9 @@ class SettingsService
 
         $day = $at->setTime(0, 0);
         if ($isClosedDay($day)) {
-            return ['date' => $nextOpenDay($day)->format('Y-m-d'), 'after_hours' => true];
+            $name = $holidays[$day->format('Y-m-d')] ?? null;
+            return ['date' => $nextOpenDay($day)->format('Y-m-d'), 'after_hours' => true]
+                + ($name !== null ? ['holiday' => $name !== '' ? $name : 'วันหยุด'] : []);
         }
         if ($open === '' || $close === '') {
             return ['date' => $day->format('Y-m-d'), 'after_hours' => false];

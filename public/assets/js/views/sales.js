@@ -373,7 +373,7 @@ export async function render(container, { user } = {}) {
         const h = options.store_hours || {};
         const hours = h.open && h.close ? ` (เวลาทำการ ${h.open}–${h.close} น.)` : '';
         el('hours').innerHTML = d?.after_hours ? `
-          <div class="pos-hours">🌙 <span><b>นอกเวลาทำการ${escapeHtml(hours)}</b>
+          <div class="pos-hours">🌙 <span><b>${d.holiday ? `วันนี้ร้านปิด (${escapeHtml(d.holiday)})` : `นอกเวลาทำการ${escapeHtml(hours)}`}</b>
             ${d.date !== options.today
                 ? `รายการที่ขายตอนนี้จะลงบัญชีเป็นยอดขายวันที่ <b>${escapeHtml(fmtDate(d.date))}</b> (ไม่กระทบยอดสรุปของวันนี้)`
                 : 'ยังไม่ถึงเวลาเปิดร้าน รายการที่ขายตอนนี้ลงบัญชีเป็นยอดขายวันนี้'}

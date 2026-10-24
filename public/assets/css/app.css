@@ -678,3 +678,6 @@ div.pos-row.out { cursor: not-allowed; }
 .drill-row:focus { outline: none; }
 .drill-link { color: var(--pri); font-weight: 600; }
 .drill-arrow { color: var(--pri); font-weight: 700; }
+.holiday-list { display: flex; flex-direction: column; gap: 8px; }
+.holiday-row { display: grid; grid-template-columns: 170px 1fr auto; gap: 8px; align-items: center; }
+@media (max-width: 560px) { .holiday-row { grid-template-columns: 1fr auto; } .holiday-row [data-hn] { grid-column: 1; } .holiday-row [data-holiday-del] { grid-row: 1; grid-column: 2; } }

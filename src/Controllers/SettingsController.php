@@ -67,6 +67,21 @@ class SettingsController
         }
         if (isset($body['store_closed_days'])) {
             $body['store_closed_days'] = implode(',', array_intersect(['0', '1', '2', '3', '4', '5', '6'], explode(',', (string) $body['store_closed_days'])));
+            if (count(explode(',', $body['store_closed_days'])) === 7) {
+                return $this->error($response, 'ต้องเปิดร้านอย่างน้อย 1 วันต่อสัปดาห์', 422);
+            }
+        }
+        if (isset($body['store_holidays'])) {
+            $holidays = [];
+            foreach ((array) (is_string($body['store_holidays']) ? json_decode($body['store_holidays'], true) : $body['store_holidays']) as $h) {
+                $date = (string) ($h['date'] ?? '');
+                if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m) || !checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+                    return $this->error($response, 'วันหยุดต้องระบุวันที่ให้ถูกต้อง', 422);
+                }
+                $holidays[$date] = ['date' => $date, 'name' => mb_substr(trim((string) ($h['name'] ?? '')), 0, 100)];
+            }
+            ksort($holidays);
+            $body['store_holidays'] = json_encode(array_values($holidays), JSON_UNESCAPED_UNICODE);
         }
         foreach (['pos_mixed_roles', 'pos_short_stock_roles'] as $key) {
             if (isset($body[$key])) {
