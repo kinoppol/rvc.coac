@@ -7,7 +7,7 @@ const MODES = {
     production: ['ทำงานปกติ', 'ไฟล์ JS/CSS ถูกเก็บไว้ในเบราว์เซอร์และ Cloudflare โดยไม่ต้องถามเซิร์ฟเวอร์ซ้ำ — เมื่ออัปเดตระบบ ไฟล์ที่เปลี่ยนจะได้เวอร์ชันใหม่เองอัตโนมัติ'],
 };
 
-const sec = (ms) => `${(ms / 1000).toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} วิ`;
+const sec = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} วิ`);
 
 /** Settings > ประสิทธิภาพ (admin): asset caching mode, request timings, product thumbnails. */
 export async function renderPerfPanel(el) {

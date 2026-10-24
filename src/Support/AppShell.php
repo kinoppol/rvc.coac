@@ -30,7 +30,8 @@ class AppShell
         $core = array_map(fn ($f) => 'js/' . basename($f), glob($assets . '/js/*.js') ?: []);
         $views = array_map(fn ($f) => 'js/views/' . basename($f), glob($assets . '/js/views/*.js') ?: []);
 
-        $head = '';
+        // Lets the app notice a deploy while it is open (X-App-Build on API responses).
+        $head = '<meta name="app-build" content="' . self::build() . "\">\n";
         if ($prod) {
             $imports = [];
             foreach (array_merge($core, $views) as $rel) {
@@ -56,6 +57,18 @@ class AppShell
         $html = str_replace('src="assets/js/app.js"', 'src="' . htmlspecialchars($url('js/app.js')) . '"', $html);
         // Before the stylesheet and scripts: an import map must come before any module loads.
         return preg_replace('#<link rel="preconnect"#', $head . '<link rel="preconnect"', $html, 1) ?? $html;
+    }
+
+    /** One id for the current set of JS/CSS files: changes when any of them does. */
+    public static function build(): string
+    {
+        static $build = null;
+        if ($build === null) {
+            $assets = __DIR__ . '/../../public/assets';
+            $files = array_merge(glob($assets . '/js/*.js') ?: [], glob($assets . '/js/views/*.js') ?: [], glob($assets . '/css/*.css') ?: []);
+            $build = base_convert((string) crc32(implode(',', array_map([self::class, 'version'], $files))), 10, 36);
+        }
+        return $build;
     }
 
     /** Changes whenever the file does (a deploy rewrites it). */

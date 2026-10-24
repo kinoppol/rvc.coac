@@ -1,4 +1,4 @@
-import { api, setCsrfToken } from './api.js';
+import { api, setCsrfToken, isStaleBuild } from './api.js';
 import { renderShell, setActiveNav, updateThemeButton, updateBadges } from './layout.js';
 import { initTheme, cycleTheme } from './theme.js';
 import { escapeHtml, setAppTimeZone } from './util.js';
@@ -33,6 +33,11 @@ function homeRoute() {
 }
 
 async function loadView({ key, params }) {
+    // The system was updated since this page loaded: start fresh rather than mix old and new files.
+    if (isStaleBuild()) {
+        location.reload();
+        return;
+    }
     const view = document.getElementById('view');
     if (!view) return;
 

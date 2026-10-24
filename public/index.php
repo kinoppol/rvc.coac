@@ -390,7 +390,7 @@ $app->get('/{path:.*}', function (Request $request, Response $response) {
 $app->add(function (Request $request, $handler) use ($sessionWait) {
     $response = $handler->handle($request);
     $total = (microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000;
-    $response = $response->withHeader('Server-Timing', sprintf('session;desc="session wait";dur=%.0f, total;dur=%.0f', $sessionWait * 1000, $total));
+    $response = $response->withHeader('X-App-Build', AppShell::build())->withHeader('Server-Timing', sprintf('session;desc="session wait";dur=%.0f, total;dur=%.0f', $sessionWait * 1000, $total));
     RequestLog::write($request->getMethod(), $request->getUri()->getPath(), $total, $sessionWait * 1000, $response->getStatusCode(), (int) ($_SESSION['user_id'] ?? 0));
     return $response;
 });

@@ -2,6 +2,15 @@ const BASE = '.'; // relative to /public/ — app.html and index.php share this 
 
 let csrfToken = null;
 
+// The JS/CSS build this page was loaded with; the server names the current one on
+// every response, so after a deploy the app reloads itself at the next page change.
+const PAGE_BUILD = document.querySelector('meta[name="app-build"]')?.content || null;
+let staleBuild = false;
+
+export function isStaleBuild() {
+    return staleBuild;
+}
+
 export function setCsrfToken(token) {
     csrfToken = token;
 }
@@ -25,6 +34,8 @@ async function request(method, path, body) {
     }
 
     const res = await fetch(`${BASE}/api${path}`, opts);
+    const build = res.headers.get('X-App-Build');
+    if (build && PAGE_BUILD && build !== PAGE_BUILD) staleBuild = true;
 
     if (res.status === 401) {
         window.dispatchEvent(new CustomEvent('app:unauthorized'));
