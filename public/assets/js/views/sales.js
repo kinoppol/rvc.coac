@@ -44,6 +44,14 @@ const METHOD_ICON = { cash: '💵', transfer: '🏦', qr: '📱', card: '💳' }
 // keyboard every time (a barcode scanner types into it like a keyboard).
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 
+/** Placeholder tiles/rows shaped like the product list, shown while it loads. */
+function skeletonHtml(view) {
+    const label = '<span class="sr-only">กำลังโหลดสินค้า…</span>';
+    return view === 'list'
+        ? `<div class="pos-list">${label}${'<div class="pos-row pos-sk-row"><span class="sk sk-line" style="width:55%"></span><span class="sk sk-line" style="width:60px"></span><span class="sk sk-line" style="width:70px;height:18px"></span></div>'.repeat(10)}</div>`
+        : `<div class="pos-grid">${label}${'<div class="pos-tile pos-sk-tile"><span class="sk pos-tile-img"></span><span class="sk sk-line" style="width:90%"></span><span class="sk sk-line" style="width:60%"></span><span class="pos-tile-meta"><span class="sk sk-line" style="width:50px;height:18px"></span><span class="sk sk-line" style="width:44px"></span></span></div>'.repeat(12)}</div>`;
+}
+
 function pref(key, fallback) {
     try { return localStorage.getItem(`pos.${key}`) ?? fallback; } catch (e) { return fallback; }
 }
@@ -126,7 +134,7 @@ export async function render(container, { user } = {}) {
         <div data-el="shortbar"></div>
         <div data-el="msg"></div>
         <div class="pos-main">
-          <section class="pos-products card" data-el="products"><div class="empty">กำลังโหลดสินค้า...</div></section>
+          <section class="pos-products card" data-el="products" aria-busy="true">${skeletonHtml(view)}</section>
           <aside class="pos-cart card">
             <div class="pos-cart-head"><h2 data-el="cart-title">ตะกร้าสินค้า</h2>
               <div class="pos-cart-tools">
@@ -253,6 +261,7 @@ export async function render(container, { user } = {}) {
         root.querySelector('[data-act="clear-q"]').hidden = !q.value;
         const list = matches();
         const box = el('products');
+        box.removeAttribute('aria-busy');
         if (!list.length) {
             const term = q.value.trim();
             box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : group !== 'all' ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
@@ -939,6 +948,7 @@ export async function render(container, { user } = {}) {
     });
 
     setKeyboard();
+    drawDropdowns();
     drawCart();
     focusSearch();
     const loadOptions = () => api.get('/sales/options').then((o) => {
