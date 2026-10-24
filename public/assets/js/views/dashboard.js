@@ -8,37 +8,37 @@ export async function render(container, { navigate }) {
 
     container.innerHTML = `
     <div class="kpi-grid">
-      <div class="kpi kpi-link" data-detail="sales_today" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-sales" data-detail="sales_today" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ยอดขายของฝากขายวันนี้</div>
         <div class="val">฿ ${money(k.sales_today_value)}</div>
         <div class="sub">${count(k.sales_today_qty)} ชิ้น</div>
       </div>
-      <div class="kpi kpi-link" data-detail="fee_today" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-income" data-detail="fee_today" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ค่าฝากขายที่ร้านได้รับ (วันนี้)</div>
         <div class="val">฿ ${money(k.fee_today)}</div>
         <div class="sub">รวมค่าทำข้อมูล ฿ ${money(k.listing_fee_today)}</div>
       </div>
-      <div class="kpi kpi-link" data-detail="outstanding" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-owed" data-detail="outstanding" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ยอดคงเหลือค้างจ่ายผู้ฝาก</div>
         <div class="val">฿ ${money(k.outstanding_balance)}</div>
         <div class="sub">ผู้ฝากที่มีเงินคงเหลือ ${count(k.outstanding_consignor_count)} ราย</div>
       </div>
-      <div class="kpi kpi-link" data-detail="consign_stock" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-stock" data-detail="consign_stock" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">สินค้าในสต๊อก</div>
         <div class="val">${count(k.stock_units)} ชิ้น</div>
         <div class="sub">${count(k.stock_items)} รายการ · ผู้ฝาก ${count(k.stock_consignors)} ราย</div>
       </div>
-      <div class="kpi kpi-link" data-detail="purchases" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-cost" data-detail="purchases" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ต้นทุนซื้อสินค้าทั้งหมด</div>
         <div class="val">฿ ${money(k.purchase_total_cost)}</div>
         <div class="sub">สินค้าขาย ฿ ${money(k.purchase_total_cost - k.purchase_supply_cost)} · วัสดุใช้ในร้าน ฿ ${money(k.purchase_supply_cost)}</div>
       </div>
-      <div class="kpi kpi-link" data-detail="store_sales_today" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-sales" data-detail="store_sales_today" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">ขายสินค้าของร้านวันนี้</div>
         <div class="val">฿ ${money(k.store_sales_today)}</div>
-        <div class="sub">${count(k.store_qty_today)} ชิ้น · กำไรขั้นต้น ฿ ${money(k.store_profit_today)}</div>
+        <div class="sub">${count(k.store_qty_today)} ชิ้น · <span class="${Number(k.store_profit_today) < 0 ? 'neg' : 'pos'}">กำไรขั้นต้น ฿ ${money(k.store_profit_today)}</span></div>
       </div>
-      <div class="kpi kpi-link" data-detail="store_stock" role="button" tabindex="0" title="ดูรายละเอียด">
+      <div class="kpi kpi-link tone-stock" data-detail="store_stock" role="button" tabindex="0" title="ดูรายละเอียด">
         <div class="lbl">สต๊อกสินค้าของร้าน (ต้นทุน)</div>
         <div class="val">฿ ${money(k.store_stock_cost)}</div>
         <div class="sub">${count(k.store_stock_units)} ชิ้น · ${count(k.store_stock_items)} รายการ · ราคาขาย ฿ ${money(k.store_stock_retail)}</div>

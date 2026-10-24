@@ -4,6 +4,7 @@
     --soft: #eef3fd; --sidebar: #0f2f6b; --hover: #f6f8fd;
     --ok: #0f8a4d; --bad: #c22b2b; --warn: #9a6700;
     --ok-bg: #eafaf0; --bad-bg: #fdecec; --warn-bg: #fff7e6;
+    --amber: #b45309; --violet: #6d28d9;
 }
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -12,6 +13,7 @@
         --soft: #16224a; --sidebar: #08122a; --hover: #182545;
         --ok: #3fd17e; --bad: #ff6b6b; --warn: #e2b33e;
         --ok-bg: #10321f; --bad-bg: #3a1414; --warn-bg: #3a2c0c;
+        --amber: #f0a43a; --violet: #a78bfa;
     }
 }
 :root[data-theme="dark"] {
@@ -20,6 +22,7 @@
     --soft: #16224a; --sidebar: #08122a; --hover: #182545;
     --ok: #3fd17e; --bad: #ff6b6b; --warn: #e2b33e;
     --ok-bg: #10321f; --bad-bg: #3a1414; --warn-bg: #3a2c0c;
+    --amber: #f0a43a; --violet: #a78bfa;
 }
 
 * { box-sizing: border-box; }
@@ -119,8 +122,22 @@ input, select, textarea, button { font-family: inherit; font-size: 14px; }
 .report-type select { flex: 1; max-width: 460px; font-size: 15px; font-weight: 600; padding: 10px 12px; }
 .kpi-link { cursor: pointer; position: relative; transition: border-color .15s, box-shadow .15s; }
 .kpi-link:hover, .kpi-link:focus-visible { border-color: var(--pri); box-shadow: 0 4px 14px rgba(21,82,209,.12); outline: none; }
-.kpi-link::after { content: 'ดูรายละเอียด ›'; position: absolute; top: 14px; right: 14px; font-size: 11px; color: var(--pri); opacity: 0; transition: opacity .15s; }
-.kpi-link:hover::after, .kpi-link:focus-visible::after { opacity: 1; }
+.kpi-link .lbl { padding-right: 28px; }
+/* A small › in the corner (beside the title, never over it) says the card opens its details. */
+.kpi-link::after { content: '›'; position: absolute; top: 13px; right: 13px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; font-size: 16px; line-height: 1; color: var(--tone, var(--pri)); background: var(--surface2); opacity: .55; transition: opacity .15s, background .15s; }
+.kpi-link:hover::after, .kpi-link:focus-visible::after { opacity: 1; background: var(--soft); }
+/* Card colours by what the figure means: sales, the store's income, money owed to
+   consignors, goods in stock, money spent. */
+.kpi[class*="tone-"] { border-top: 3px solid var(--tone); }
+.kpi[class*="tone-"] .val { color: var(--tone); }
+.kpi-link[class*="tone-"]:hover, .kpi-link[class*="tone-"]:focus-visible { border-color: var(--tone); }
+.kpi.tone-sales { --tone: var(--pri); }
+.kpi.tone-income { --tone: var(--ok); }
+.kpi.tone-owed { --tone: var(--amber); }
+.kpi.tone-stock { --tone: var(--violet); }
+.kpi.tone-cost { --tone: var(--bad); }
+.kpi .sub .pos { color: var(--ok); font-weight: 600; }
+.kpi .sub .neg { color: var(--bad); font-weight: 600; }
 
 .two-col { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 980px) { .two-col { grid-template-columns: 1fr; } }
