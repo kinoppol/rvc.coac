@@ -39,7 +39,7 @@ class SettingsService
         'store_close_time' => '',
         'store_closed_days' => '', // comma list of weekdays the store is closed, 0 = Sunday … 6 = Saturday
         'store_holidays' => '[]', // JSON [{date: "Y-m-d", name}]: public holidays and other days the store is closed
-        'asset_mode' => 'development', // development | production — how JS/CSS are cached (App\Support\AppShell)
+        'asset_mode' => 'production', // production | development — how JS/CSS are cached (App\Support\AppShell)
     ];
 
     /** @return array<string,string> date => name of the days off set in store_holidays */

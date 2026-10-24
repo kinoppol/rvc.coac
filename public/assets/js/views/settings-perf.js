@@ -4,14 +4,14 @@ import { confirmDialog } from '../dialog.js';
 
 const MODES = {
     development: ['กำลังพัฒนาระบบ', 'เบราว์เซอร์ถามเซิร์ฟเวอร์ทุกครั้งว่าไฟล์ JS/CSS เปลี่ยนหรือไม่ — แก้ไฟล์แล้วเห็นผลทันที แต่เปิดหน้าช้ากว่าเมื่อเซิร์ฟเวอร์ตอบช้า'],
-    production: ['ทำงานปกติ', 'ไฟล์ JS/CSS ถูกเก็บไว้ในเบราว์เซอร์และ Cloudflare โดยไม่ต้องถามเซิร์ฟเวอร์ซ้ำ — เมื่ออัปเดตระบบ ไฟล์ที่เปลี่ยนจะได้เวอร์ชันใหม่เองอัตโนมัติ'],
+    production: ['ทำงานปกติ (ค่าเริ่มต้น)', 'ไฟล์ JS/CSS ถูกเก็บไว้ในเบราว์เซอร์และ Cloudflare โดยไม่ต้องถามเซิร์ฟเวอร์ซ้ำ — เมื่ออัปเดตระบบ ไฟล์ที่เปลี่ยนจะได้เวอร์ชันใหม่เองอัตโนมัติ'],
 };
 
 const sec = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} วิ`);
 
 /** Settings > ประสิทธิภาพ (admin): asset caching mode, request timings, product thumbnails. */
 export async function renderPerfPanel(el) {
-    let mode = 'development';
+    let mode = 'production';
     let perf = null;
     let date = '';
     let routeFilter = '';
@@ -20,7 +20,7 @@ export async function renderPerfPanel(el) {
     let modeMsg = null;
 
     try {
-        mode = (await api.get('/settings')).settings.asset_mode || 'development';
+        mode = (await api.get('/settings')).settings.asset_mode || 'production';
     } catch (e) { /* keep default */ }
     await loadPerf();
     draw();

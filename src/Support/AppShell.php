@@ -71,10 +71,55 @@ class AppShell
         return $build;
     }
 
-    /** Changes whenever the file does (a deploy rewrites it). */
+    /** @var array<string,array{0:string,1:string}>|null path => [stat key, version] */
+    private static ?array $versions = null;
+    private static bool $versionsChanged = false;
+
+    /**
+     * A hash of the file's content, so the version changes exactly when the content
+     * does — also after a deploy that keeps the files' old modification times (an
+     * unpacked zip, a copy that preserves times). Hashes are kept in storage/cache and
+     * redone only when the file's mtime, ctime or size change (any write moves ctime).
+     */
     private static function version(string $path): string
     {
+        static $seen = []; // checked once per request (render() and build() both ask)
+        if (isset($seen[$path])) {
+            return $seen[$path];
+        }
+        return $seen[$path] = self::checkVersion($path);
+    }
+
+    private static function checkVersion(string $path): string
+    {
         $stat = @stat($path);
-        return $stat ? base_convert((string) crc32($stat['mtime'] . ':' . $stat['size']), 10, 36) : '0';
+        if (!$stat) {
+            return '0';
+        }
+        if (self::$versions === null) {
+            self::$versions = json_decode((string) @file_get_contents(self::cacheFile()), true) ?: [];
+            register_shutdown_function([self::class, 'saveVersions']);
+        }
+        $key = $stat['mtime'] . ':' . $stat['ctime'] . ':' . $stat['size'];
+        // On Windows ctime is the creation time, which an in-place write does not move: always hash there.
+        if (PHP_OS_FAMILY === 'Windows' || (self::$versions[$path][0] ?? null) !== $key) {
+            $hash = hash_file(in_array('xxh3', hash_algos(), true) ? 'xxh3' : 'md5', $path);
+            self::$versions[$path] = [$key, substr((string) $hash, 0, 10)];
+            self::$versionsChanged = true;
+        }
+        return self::$versions[$path][1];
+    }
+
+    /** @internal shutdown function */
+    public static function saveVersions(): void
+    {
+        if (self::$versionsChanged) {
+            @file_put_contents(self::cacheFile(), json_encode(self::$versions, JSON_UNESCAPED_SLASHES), LOCK_EX);
+        }
+    }
+
+    private static function cacheFile(): string
+    {
+        return dirname(__DIR__, 2) . '/storage/cache/asset-versions.json';
     }
 }
