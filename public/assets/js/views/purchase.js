@@ -388,6 +388,7 @@ export async function render(container) {
         });
         tr.querySelector('[data-status] [data-new]')?.addEventListener('click', () => markNew(it));
         tr.querySelector('[data-status] [data-unnew]')?.addEventListener('click', () => {
+            if (it.nameBefore != null && it.name === it.receipt_name) it.name = it.nameBefore;
             it.forceNew = false;
             it.notMatch = '';
             it.priceTouched = false;
@@ -399,6 +400,9 @@ export async function render(container) {
     /** The line is not the product it was matched with: save it as a new product instead. */
     function markNew(it) {
         it.notMatch = it.match?.name || it.notMatch;
+        // A line still named after the wrong product takes the receipt's wording (ยกเลิก brings the name back).
+        it.nameBefore = it.name;
+        if (it.receipt_name && (!it.name.trim() || it.name.trim() === it.notMatch)) it.name = it.receipt_name;
         it.forceNew = true;
         it.pickedId = null;
         it.match = null;
