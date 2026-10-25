@@ -30,13 +30,14 @@ export async function render(container, { permissions = [] } = {}) {
         <section class="card">
           <div class="card-head"><h2>คำขอฝากจากผู้ฝากขาย <span class="pill warn">${requests.length} รอตรวจรับ</span></h2></div>
           <div class="table-wrap"><table>
-            <thead><tr><th>เลขที่</th><th>ผู้ฝากขาย</th><th>รายการ</th><th>แจ้งเมื่อ</th><th></th></tr></thead>
+            <thead><tr><th>เลขที่</th><th>ผู้ฝากขาย</th><th>รายการ</th><th>วันที่ฝาก</th><th>แจ้งเมื่อ</th><th></th></tr></thead>
             <tbody>${requests.map((r) => `
               <tr>
                 <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(r.request_no)}</td>
                 <td>${escapeHtml(r.consignor_code)} - ${escapeHtml(r.consignor_name)}
                   ${r.note ? `<div class="muted" style="font-size:12px">หมายเหตุ: ${escapeHtml(r.note)}</div>` : ''}</td>
                 <td style="font-size:12.5px">${r.items.map((i) => `${escapeHtml(i.name)} × ${Number(i.qty)}`).join('<br>')}</td>
+                <td style="font-size:12.5px;white-space:nowrap">${r.deposit_date ? `${fmtDate(r.deposit_date)}${r.deposit_date > todayISO() ? ' <span class="pill muted">ล่วงหน้า</span>' : ''}` : '<span class="muted">-</span>'}</td>
                 <td class="muted" style="font-size:12.5px">${fmtDateTime(r.created_at)}</td>
                 <td style="text-align:right;white-space:nowrap">
                   ${loaded?.id === r.id ? '<span class="pill ok">กำลังตรวจรับ</span>'

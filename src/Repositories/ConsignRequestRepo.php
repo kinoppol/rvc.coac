@@ -23,9 +23,11 @@ class ConsignRequestRepo
     /**
      * Validates and normalises request items; throws with a message for the user.
      * Also used for staff receive slips (with a higher $maxItems).
+     * $depositDate: the day the goods are brought in (a request may be made ahead); nothing
+     * may be made after it. Without it, nothing may be made after today.
      * @return array<int,array{name:string,cost_price:float,qty:int,barcode:?string,mfg_date:string,expiry_date:?string}>
      */
-    public static function cleanItems(mixed $items, int $maxItems = self::MAX_ITEMS): array
+    public static function cleanItems(mixed $items, int $maxItems = self::MAX_ITEMS, ?string $depositDate = null): array
     {
         if (!is_array($items) || !$items) {
             throw new \RuntimeException('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ');
@@ -47,8 +49,9 @@ class ConsignRequestRepo
             if ($mfg === null) {
                 throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): กรุณาระบุวันที่ผลิต');
             }
-            if ($mfg > $today) {
-                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): วันที่ผลิตต้องไม่เกินวันนี้');
+            if ($mfg > ($depositDate ?? $today)) {
+                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): '
+                    . ($depositDate !== null ? 'วันที่ผลิตต้องไม่เกินวันที่ฝาก' : 'วันที่ผลิตต้องไม่เกินวันนี้'));
             }
             if ($expiry !== null && $expiry < $mfg) {
                 throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $name . '): วันหมดอายุต้องไม่ก่อนวันที่ผลิต');
@@ -74,16 +77,22 @@ class ConsignRequestRepo
         return $d && $d->format('Y-m-d') === $v ? $v : null;
     }
 
-    public function create(int $consignorId, array $items, ?string $note, int $userId, ?string $ip): array
+    /** A Y-m-d date string, or null when it is not one. */
+    public static function validDate(mixed $value): ?string
+    {
+        return self::date($value);
+    }
+
+    public function create(int $consignorId, array $items, ?string $note, int $userId, ?string $ip, ?string $depositDate = null): array
     {
         $note = $note !== null && trim($note) !== '' ? mb_substr(trim($note), 0, 500) : null;
         $this->db->beginTransaction();
         try {
             $no = (new DocumentNumberService($this->db))->next('RQ', 'consign_requests', 'request_no');
             $this->db->prepare(
-                "INSERT INTO consign_requests (request_no, consignor_id, created_by, status, note, created_at)
-                 VALUES (?, ?, ?, 'pending', ?, NOW())"
-            )->execute([$no, $consignorId, $userId, $note]);
+                "INSERT INTO consign_requests (request_no, consignor_id, created_by, status, note, deposit_date, created_at)
+                 VALUES (?, ?, ?, 'pending', ?, ?, NOW())"
+            )->execute([$no, $consignorId, $userId, $note, $depositDate]);
             $id = (int) $this->db->lastInsertId();
             $ins = $this->db->prepare(
                 'INSERT INTO consign_request_items (request_id, name, cost_price, qty, barcode, mfg_date, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?)'

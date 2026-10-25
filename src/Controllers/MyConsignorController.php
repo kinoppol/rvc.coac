@@ -99,15 +99,23 @@ class MyConsignorController
             return $this->error($response, 'บัญชีนี้ยังไม่ได้ผูกกับผู้ฝากขาย', 404);
         }
         $body = (array) $request->getParsedBody();
+        // The day the goods are brought in: today, or up to 3 days ahead (goods made fresh each day).
+        $today = date('Y-m-d');
+        $deposit = ConsignRequestRepo::validDate($body['deposit_date'] ?? $today);
+        if ($deposit === null || $deposit < $today || $deposit > date('Y-m-d', strtotime('+3 days'))) {
+            return $this->error($response, 'วันที่ฝากต้องเป็นวันนี้ หรือล่วงหน้าได้ไม่เกิน 3 วัน', 422);
+        }
         try {
-            $items = ConsignRequestRepo::cleanItems($body['items'] ?? null);
+            $items = ConsignRequestRepo::cleanItems($body['items'] ?? null, ConsignRequestRepo::MAX_ITEMS, $deposit);
+            $created = $this->requestRepo()->create(
+                (int) $consignor['id'], $items, isset($body['note']) ? (string) $body['note'] : null,
+                (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, $deposit
+            );
+        } catch (\PDOException $e) {
+            return $this->error($response, 'ยังส่งคำขอฝากไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0043) ก่อน', 422);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
-        $created = $this->requestRepo()->create(
-            (int) $consignor['id'], $items, isset($body['note']) ? (string) $body['note'] : null,
-            (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
-        );
         return $this->json($response, ['data' => $created], 201);
     }
 

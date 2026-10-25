@@ -14,6 +14,13 @@ const STATUS = {
 export async function render(container) {
     let cart = [];
     let note = '';
+    // The day the goods are brought in: today or up to 3 days ahead; nothing may be made after it.
+    let depositDate = todayISO();
+    const plusDays = (iso, n) => {
+        const d = new Date(`${iso}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + n);
+        return d.toISOString().slice(0, 10);
+    };
     let error = null;
     let success = null;
     let requests = [];
@@ -44,7 +51,7 @@ export async function render(container) {
           <div class="card-head">
             <h2 style="font-size:14px">${escapeHtml(r.request_no)} <span class="pill ${cls}">${label}</span></h2>
             <div class="actions-row">
-              <span class="muted" style="font-size:12.5px">${fmtDateTime(r.created_at)} · ${r.items.length} รายการ ${qty} ชิ้น</span>
+              <span class="muted" style="font-size:12.5px">${r.deposit_date ? `ฝากวันที่ <b>${fmtDate(r.deposit_date)}</b> · ` : ''}แจ้งเมื่อ ${fmtDateTime(r.created_at)} · ${r.items.length} รายการ ${qty} ชิ้น</span>
               ${r.status !== 'cancelled' ? `<button type="button" class="btn sm secondary" data-print="${r.id}">พิมพ์ใบฝากขาย</button>` : ''}
               ${r.status === 'pending' ? `<button type="button" class="btn sm secondary" data-cancel="${r.id}">ยกเลิกคำขอ</button>` : ''}
               ${r.status === 'cancelled' ? `<button type="button" class="btn sm secondary" data-delete="${r.id}">ลบ</button>` : ''}
@@ -80,11 +87,14 @@ export async function render(container) {
               <div class="muted" style="font-size:12.5px">กรอกสินค้าทีละรายการแล้วกด «เพิ่มลงรายการ» เมื่อครบแล้วกด «ส่งคำขอฝาก» จากนั้นนำสินค้ามาที่ร้าน</div>
               <div class="error-box" id="modal-error" ${error ? '' : 'hidden'}>${escapeHtml(error || '')}</div>
               <div class="form-grid">
+                <label class="field">วันที่ฝาก (วันที่นำของมาส่ง) * <input id="f-deposit" type="date" value="${depositDate}" min="${todayISO()}" max="${plusDays(todayISO(), 3)}" required>
+                  <span class="muted" style="font-size:11.5px;font-weight:400">ทำรายการล่วงหน้าได้ไม่เกิน 3 วัน</span></label>
                 <label class="field" style="grid-column:span 2">ชื่อสินค้า * <input id="f-name" placeholder="เช่น ขนมทองม้วนสมุนไพร"></label>
                 <label class="field">ราคาที่ต้องการได้ต่อชิ้น (บาท) * <input id="f-cost" type="number" step="0.25" min="0"></label>
                 <div class="field">ราคาขายหน้าร้าน <div id="f-price" class="price-preview">-</div></div>
                 <label class="field">จำนวน (ชิ้น) * <input id="f-qty" type="number" min="1" value="1"></label>
-                <label class="field">วันที่ผลิต * <input id="f-mfg" type="date" value="${todayISO()}" max="${todayISO()}" required></label>
+                <label class="field">วันที่ผลิต * <input id="f-mfg" type="date" value="${depositDate}" max="${depositDate}" required>
+                  <span class="muted" style="font-size:11.5px;font-weight:400">ไม่เกินวันที่ฝาก</span></label>
                 <label class="field">วันหมดอายุ (ถ้ามี) <input id="f-expiry" type="date"></label>
                 <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode"></label>
               </div>
@@ -208,6 +218,15 @@ export async function render(container) {
         container.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal));
         container.querySelector('#f-cost').addEventListener('input', updateQuote);
         container.querySelector('#f-note').addEventListener('input', (e) => { note = e.target.value; });
+        container.querySelector('#f-deposit')?.addEventListener('change', (e) => {
+            const v = e.target.value;
+            depositDate = v >= todayISO() && v <= plusDays(todayISO(), 3) ? v : todayISO();
+            e.target.value = depositDate;
+            // Made on or before the deposit day: a later production date follows it back.
+            const mfg = container.querySelector('#f-mfg');
+            mfg.max = depositDate;
+            if (!mfg.value || mfg.value > depositDate) mfg.value = depositDate;
+        });
         container.querySelector('#btn-add').addEventListener('click', addItem);
         container.querySelector('#btn-submit').addEventListener('click', submit);
         container.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', () => {
@@ -248,7 +267,7 @@ export async function render(container) {
             box.hidden = false;
         };
         if (!name || !cost || !qty || !mfg) return fail('กรุณากรอกชื่อสินค้า ราคา จำนวน และวันที่ผลิตให้ครบ');
-        if (mfg > todayISO()) return fail('วันที่ผลิตต้องไม่เกินวันนี้');
+        if (mfg > depositDate) return fail('วันที่ผลิตต้องไม่เกินวันที่ฝาก');
         if (expiry && expiry < mfg) return fail('วันหมดอายุต้องไม่ก่อนวันที่ผลิต');
         const q = (await api.post('/my/quote', { cost_price: cost })).data;
         cart.push({ name, cost_price: cost, qty, barcode: barcode || null, mfg_date: mfg, expiry_date: expiry || null, price: q.price });
@@ -256,13 +275,21 @@ export async function render(container) {
     }
 
     async function submit() {
+        const late = cart.find((it) => it.mfg_date > depositDate);
+        if (late) {
+            error = `«${late.name}» วันที่ผลิตเกินวันที่ฝาก — แก้วันที่ฝาก หรือลบรายการแล้วเพิ่มใหม่`;
+            draw();
+            return;
+        }
         try {
             const res = await api.post('/my/requests', {
                 note,
+                deposit_date: depositDate,
                 items: cart.map(({ name, cost_price, qty, barcode, mfg_date, expiry_date }) => ({ name, cost_price, qty, barcode, mfg_date, expiry_date })),
             });
             cart = [];
             note = '';
+            depositDate = todayISO();
             error = null;
             open = false;
             success = `ส่งคำขอฝาก ${res.data.request_no} แล้ว — นำสินค้ามาที่ร้านเพื่อให้พนักงานตรวจรับ`;
