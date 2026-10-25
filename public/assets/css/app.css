@@ -780,3 +780,8 @@ div.pos-row.out { cursor: not-allowed; }
 .snd-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
 .snd-list button { padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .snd-list button:hover { background: var(--soft); }
+
+/* Stock count: photos taken while counting */
+.cnt-photo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cnt-photo-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.cnt-photo-row label.btn { cursor: pointer; }

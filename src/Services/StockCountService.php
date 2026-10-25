@@ -78,6 +78,68 @@ class StockCountService
         )->execute([$stockCountId]);
     }
 
+    /** Days a counting photo is kept before its file is removed. */
+    public const PHOTO_DAYS = 30;
+
+    /**
+     * Keeps a photo taken while counting a product (already shrunk by the browser to a
+     * size that still shows clearly full screen on a computer).
+     */
+    public function addPhoto(int $stockCountId, int $productId, string $dataUrl, ?string $note, int $userId): string
+    {
+        $sc = $this->get($stockCountId);
+        if (!$sc || !in_array($sc['status'], ['draft', 'submitted'], true)) {
+            throw new \RuntimeException('รอบตรวจนับนี้อนุมัติหรือยกเลิกไปแล้ว เพิ่มรูปไม่ได้');
+        }
+        $row = (new AttachmentService($this->db))->saveDataUrl($dataUrl, $userId, 'counts');
+        $this->db->prepare('INSERT INTO stock_count_photos (stock_count_id, product_id, token, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, NOW())')
+            ->execute([$stockCountId, $productId, $row['token'], $note !== null ? mb_substr($note, 0, 100) : null, $userId]);
+        return $row['token'];
+    }
+
+    /** product id => [{token (null once removed), note, created_at}], oldest first. */
+    public function photosFor(int $stockCountId): array
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT product_id, token, note, created_at FROM stock_count_photos WHERE stock_count_id = ? ORDER BY id');
+            $stmt->execute([$stockCountId]);
+        } catch (\PDOException $e) {
+            return []; // migration 0044 not run yet
+        }
+        $out = [];
+        foreach ($stmt->fetchAll() as $p) {
+            $out[(int) $p['product_id']][] = ['token' => $p['token'], 'note' => $p['note'], 'created_at' => $p['created_at']];
+        }
+        return $out;
+    }
+
+    /** Removes the files of counting photos older than PHOTO_DAYS (the rows stay, token NULL). */
+    public function purgeOldPhotos(): int
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT id, token FROM stock_count_photos WHERE token IS NOT NULL AND created_at < NOW() - INTERVAL ? DAY LIMIT 500');
+            $stmt->execute([self::PHOTO_DAYS]);
+            $old = $stmt->fetchAll();
+        } catch (\PDOException $e) {
+            return 0;
+        }
+        $files = new AttachmentService($this->db);
+        foreach ($old as $p) {
+            $a = $files->findByToken((string) $p['token']);
+            if ($a) {
+                try {
+                    @unlink($files->absolutePath($a));
+                } catch (\RuntimeException $e) {
+                    // already gone
+                }
+                @unlink($files->thumbPath($a['token']));
+                $this->db->prepare('DELETE FROM attachments WHERE id = ?')->execute([$a['id']]);
+            }
+            $this->db->prepare('UPDATE stock_count_photos SET token = NULL WHERE id = ?')->execute([$p['id']]);
+        }
+        return count($old);
+    }
+
     public function diffSummary(int $stockCountId): array
     {
         $stmt = $this->db->prepare(
@@ -90,6 +152,11 @@ class StockCountService
         );
         $stmt->execute([$stockCountId]);
         $items = $stmt->fetchAll();
+        $photos = $this->photosFor($stockCountId);
+        foreach ($items as &$item) {
+            $item['photos'] = $photos[(int) $item['product_id']] ?? [];
+        }
+        unset($item);
 
         $diffCount = 0;
         $diffValue = 0.0;

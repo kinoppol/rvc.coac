@@ -74,6 +74,9 @@ function loadPadSize() {
     try { const v = localStorage.getItem(PAD_KEY) || ''; return PAD_SIZES.some(([k]) => k === v) ? v : ''; } catch { return ''; }
 }
 
+/** Counting photos: shrunk to fit a common computer screen full size and still read clearly. */
+export const COUNT_PHOTO_SIZE = 1600;
+
 /** A sound for the event (see sound.js) and a short buzz on phones. */
 function beep(kind = 'scan') {
     play(kind);
@@ -130,6 +133,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
       </div>
       <div class="mc-actions" data-el="actions"></div>
       <input type="file" accept="image/*" capture="environment" data-el="photo" hidden>
+      <input type="file" accept="image/*" capture="environment" data-el="countphoto" hidden>
       <div class="mc-sheet" data-el="sheet" hidden></div>`;
     let padSize = loadPadSize();
     if (padSize) root.classList.add(`pad-${padSize}`);
@@ -311,16 +315,57 @@ export function openMobileCount({ stockCount, items, onClose }) {
         if (message?.linkCode) openSearch(message.linkCode);
     }
 
+    /**
+     * Opens the camera for a photo of what was counted (required with every save); resolves to
+     * a JPEG shrunk to COUNT_PHOTO_SIZE, or null when the counter backs out of the camera.
+     */
+    function takeCountPhoto() {
+        return new Promise((resolve) => {
+            const inp = $('countphoto');
+            let done = false;
+            const finish = async (file) => {
+                if (done) return;
+                done = true;
+                window.removeEventListener('focus', onFocus);
+                resolve(file ? await thumbDataUrl(await fileToDataUrl(file), COUNT_PHOTO_SIZE) : null);
+            };
+            // Browsers without the cancel event: back from the camera with no file means cancelled.
+            const onFocus = () => setTimeout(() => { if (!inp.files.length) finish(null); }, 1500);
+            inp.onchange = () => {
+                const f = inp.files[0];
+                inp.value = '';
+                finish(f || null);
+            };
+            inp.oncancel = () => finish(null);
+            window.addEventListener('focus', onFocus);
+            inp.click();
+        });
+    }
+
     async function saveQty(addTo) {
         const pieces = qtyTotal();
         if (!product || pieces === null || busy) return;
         const how = unit === 'piece' ? '' : `(${Number(q.packs || 0)}×${q.size}${unit === 'mix' && q.pieces ? `+${Number(q.pieces)}` : ''}) `;
         const prev = counted.get(Number(product.id)) ?? 0;
         const value = addTo ? prev + pieces : pieces;
+        // The camera opens straight from the tap (browsers allow it only then).
+        const shot = takeCountPhoto();
         busy = true;
+        message = { kind: 'info', text: `ถ่ายรูป ${product.name} ที่นับไว้เป็นหลักฐาน…` };
         draw();
+        const photo = await shot;
+        if (!photo) {
+            busy = false;
+            beep('warn');
+            message = { kind: 'bad', text: 'ต้องถ่ายรูปสินค้าที่นับก่อนบันทึก — กดบันทึกอีกครั้งเพื่อถ่ายรูป' };
+            draw();
+            return;
+        }
         try {
-            const res = await api.post(`/stockcounts/${stockCount.id}/count`, { product_id: product.id, counted_qty: value });
+            const res = await api.post(`/stockcounts/${stockCount.id}/count`, {
+                product_id: product.id, counted_qty: value, photo,
+                photo_note: addTo ? `บวกเพิ่ม ${how}${pieces} → ${value}` : `${how}${value}`,
+            });
             if (!counted.has(Number(product.id))) total++;
             counted.set(Number(product.id), value);
             log.unshift({ name: product.name, qty: how + (addTo ? `${prev} + ${pieces} = ${value}` : value) });

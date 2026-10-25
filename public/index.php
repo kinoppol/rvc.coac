@@ -231,6 +231,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id:[0-9]+}/count', [StockCountController::class, 'countOne'])
         ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/photo', [StockCountController::class, 'addPhoto'])
+        ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id:[0-9]+}/barcode', [StockCountController::class, 'assignBarcode'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/products/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])

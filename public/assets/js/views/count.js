@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml } from '../util.js';
-import { openMobileCount } from './count-mobile.js';
+import { openMobileCount, COUNT_PHOTO_SIZE } from './count-mobile.js';
+import { attachmentUrl, fileToDataUrl, thumbDataUrl } from '../images.js';
 import { confirmDialog } from '../dialog.js';
 
 export async function render(container, { permissions }) {
@@ -65,7 +66,7 @@ export async function render(container, { permissions }) {
           </section>` : ''}
         <section class="card">
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th></tr></thead>
+            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th></tr></thead>
             <tbody>
               ${items.map((it, i) => {
                   const diff = diffOf(it);
@@ -75,12 +76,13 @@ export async function render(container, { permissions }) {
                     <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}>
                       ${current.status === 'draft' ? `<button type="button" class="btn secondary sm" data-zero="${i}" title="ขายหมดแล้ว ไม่มีของให้นับ: บันทึกว่านับได้ 0" ${counted(it) === 0 ? 'hidden' : ''}>หมด (0)</button>` : ''}</td>
                     <td data-diff>${diffHtml(diff)}</td>
+                    <td class="cnt-photos">${photosHtml(it, i)}</td>
                   </tr>`;
               }).join('')}
             </tbody>
           </table></div>
         </section>
-        <p class="muted" style="font-size:12px">กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
+        <p class="muted" style="font-size:12px">ทุกรายการที่นับควรมีรูปประกอบการนับ (โหมดนับด้วยมือถือบังคับถ่ายรูปทุกครั้งที่บันทึก) · รูปย่อให้ดูเต็มจอได้ชัด และลบอัตโนมัติเมื่อครบ 30 วัน<br>กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
         <div class="actions-row">
           ${current.status === 'draft' ? `
             <button type="button" class="btn secondary" id="btn-save">บันทึกร่างไว้ก่อน</button>
@@ -116,6 +118,10 @@ export async function render(container, { permissions }) {
             inp.value = '0';
             inp.dispatchEvent(new Event('input'));
         }));
+        container.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', () => {
+            const file = inp.files[0];
+            if (file) addPhoto(Number(inp.dataset.photo), file);
+        }));
         const mobileBtn = container.querySelector('#btn-mobile');
         if (mobileBtn) mobileBtn.addEventListener('click', () => openMobileCount({
             stockCount: current,
@@ -130,6 +136,31 @@ export async function render(container, { permissions }) {
         if (approveBtn) approveBtn.addEventListener('click', approveCount);
         const cancelBtn = container.querySelector('#btn-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
+    }
+
+    /** Counting photos of a line (open full size), and a button to add one while the round is open. */
+    function photosHtml(it, i) {
+        const shots = (it.photos || []).map((p) => (p.token
+            ? `<a href="${attachmentUrl(p.token)}" target="_blank" rel="noopener" title="${escapeHtml([p.note, p.created_at].filter(Boolean).join(' · '))}"><img src="${attachmentUrl(p.token)}" alt="รูปประกอบการนับ"></a>`
+            : '<span class="pill muted" title="ลบอัตโนมัติเมื่อครบ 30 วัน">รูปถูกลบแล้ว</span>')).join('');
+        const missing = counted(it) !== null && !(it.photos || []).length ? '<span class="pill warn">ยังไม่มีรูป</span>' : '';
+        const add = ['draft', 'submitted'].includes(current.status)
+            ? `<label class="btn secondary sm" title="แนบรูปถ่ายตอนนับ">📷<input type="file" accept="image/*" capture="environment" data-photo="${i}" hidden></label>` : '';
+        return `<div class="cnt-photo-row">${shots}${missing}${add}</div>`;
+    }
+
+    async function addPhoto(i, file) {
+        const it = items[i];
+        try {
+            const dataUrl = await thumbDataUrl(await fileToDataUrl(file), COUNT_PHOTO_SIZE);
+            if (!dataUrl) throw new Error('อ่านไฟล์รูปไม่ได้');
+            const res = await api.post(`/stockcounts/${current.id}/photo`, { product_id: it.product_id, data_url: dataUrl });
+            it.photos = [...(it.photos || []), { token: res.data.token, note: null, created_at: null }];
+            error = null;
+        } catch (e) {
+            error = e.message;
+        }
+        draw();
     }
 
     /** The count as on screen (typed but unsaved wins); null = not counted. */

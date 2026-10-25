@@ -27,6 +27,7 @@ class StockCountController
 
     public function index(Request $request, Response $response): Response
     {
+        $this->service()->purgeOldPhotos(); // counting photos are kept PHOTO_DAYS days
         return $this->json($response, ['data' => $this->service()->list()]);
     }
 
@@ -44,6 +45,7 @@ class StockCountController
         if (!$sc) {
             return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
         }
+        $this->service()->purgeOldPhotos();
         $this->service()->refreshSystemQty($id);
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
     }
@@ -81,15 +83,43 @@ class StockCountController
     }
 
     /** POST /stockcounts/{id}/count {product_id, counted_qty} — one product counted on the phone. */
+    /**
+     * POST /stockcounts/{id}/count {product_id, counted_qty, photo, photo_note?} — one product
+     * counted on the phone. A photo of what was counted is required (kept PHOTO_DAYS days).
+     */
     public function countOne(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
+        $photo = (string) ($body['photo'] ?? '');
+        if ($photo === '') {
+            return $this->error($response, 'กรุณาถ่ายรูปสินค้าที่นับไว้เป็นหลักฐานก่อนบันทึก', 422);
+        }
+        $service = $this->service();
         try {
-            $data = $this->service()->setCount((int) $args['id'], (int) ($body['product_id'] ?? 0), (int) ($body['counted_qty'] ?? -1));
+            $service->addPhoto((int) $args['id'], (int) ($body['product_id'] ?? 0), $photo,
+                isset($body['photo_note']) ? (string) $body['photo_note'] : null, (int) $request->getAttribute('user')['id']);
+            $data = $service->setCount((int) $args['id'], (int) ($body['product_id'] ?? 0), (int) ($body['counted_qty'] ?? -1));
+        } catch (\PDOException $e) {
+            return $this->error($response, 'ยังบันทึกรูปประกอบการนับไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0044) ก่อน', 422);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $data]);
+    }
+
+    /** POST /stockcounts/{id}/photo {product_id, data_url} — a counting photo added from the count table. */
+    public function addPhoto(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        try {
+            $token = $this->service()->addPhoto((int) $args['id'], (int) ($body['product_id'] ?? 0), (string) ($body['data_url'] ?? ''),
+                null, (int) $request->getAttribute('user')['id']);
+        } catch (\PDOException $e) {
+            return $this->error($response, 'ยังบันทึกรูปประกอบการนับไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0044) ก่อน', 422);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => ['token' => $token]], 201);
     }
 
     /** POST /stockcounts/{id}/barcode {product_id, barcode, pack_size} */

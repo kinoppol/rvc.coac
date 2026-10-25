@@ -44,7 +44,10 @@ class AttachmentController
         $user = $request->getAttribute('user');
         $service = new AttachmentService(Db::connection());
         $row = $service->findByToken((string) $args['token']);
-        $allowed = $row && ((int) $row['uploaded_by'] === (int) $user['id'] || $this->can($user, 'purchase.create'));
+        // Counting photos are for whoever counts or approves counts.
+        $countPhoto = $row && str_starts_with((string) $row['file_path'], 'counts/')
+            && ($this->can($user, 'stockcount.create') || $this->can($user, 'stockcount.approve') || $this->can($user, 'reports.view'));
+        $allowed = $row && ((int) $row['uploaded_by'] === (int) $user['id'] || $this->can($user, 'purchase.create') || $countPhoto);
         if (!$allowed) {
             return $this->error($response, 'ไม่พบไฟล์', 404);
         }
