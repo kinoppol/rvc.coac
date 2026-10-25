@@ -44,6 +44,7 @@ class StockCountController
         if (!$sc) {
             return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
         }
+        $this->service()->refreshSystemQty($id);
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
     }
 

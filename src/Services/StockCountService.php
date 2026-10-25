@@ -51,13 +51,31 @@ class StockCountService
     public function saveCounts(int $stockCountId, array $items): void
     {
         $upd = $this->db->prepare(
-            'UPDATE stock_count_items SET counted_qty = ?, diff_qty = ? - system_qty, note = ? WHERE id = ? AND stock_count_id = ?'
+            'UPDATE stock_count_items sci JOIN products p ON p.id = sci.product_id
+             SET sci.system_qty = p.qty_stock, sci.counted_qty = ?, sci.diff_qty = ? - p.qty_stock, sci.note = ?
+             WHERE sci.id = ? AND sci.stock_count_id = ?'
         );
         foreach ($items as $item) {
             $raw = $item['counted_qty'] ?? null;
             $counted = $raw === null || $raw === '' ? null : max(0, (int) $raw);
             $upd->execute([$counted, $counted, $item['note'] ?? null, (int) $item['item_id'], $stockCountId]);
         }
+    }
+
+    /**
+     * A draft round keeps the system quantity of lines not counted yet in step with the
+     * stock now: sales imported after the round was opened (a late POS import) would
+     * otherwise leave it showing what was there when the round started.
+     */
+    public function refreshSystemQty(int $stockCountId): void
+    {
+        $this->db->prepare(
+            "UPDATE stock_count_items sci
+             JOIN stock_counts sc ON sc.id = sci.stock_count_id AND sc.status = 'draft'
+             JOIN products p ON p.id = sci.product_id
+             SET sci.system_qty = p.qty_stock
+             WHERE sci.stock_count_id = ? AND sci.counted_qty IS NULL AND sci.system_qty <> p.qty_stock"
+        )->execute([$stockCountId]);
     }
 
     public function diffSummary(int $stockCountId): array
@@ -170,7 +188,9 @@ class StockCountService
                 ->execute([$stockCountId, $productId, (int) $info['qty_stock']]);
         }
         $this->db->prepare(
-            'UPDATE stock_count_items SET counted_qty = ?, diff_qty = ? - system_qty WHERE stock_count_id = ? AND product_id = ?'
+            'UPDATE stock_count_items sci JOIN products p ON p.id = sci.product_id
+             SET sci.system_qty = p.qty_stock, sci.counted_qty = ?, sci.diff_qty = ? - p.qty_stock
+             WHERE sci.stock_count_id = ? AND sci.product_id = ?'
         )->execute([$counted, $counted, $stockCountId, $productId]);
         return $this->productInfo($stockCountId, $productId);
     }
@@ -212,6 +232,10 @@ class StockCountService
 
                 $upd = $this->db->prepare('UPDATE products SET qty_stock = ? WHERE id = ?');
                 $upd->execute([(int) $item['counted_qty'], $item['product_id']]);
+                // Keep on the line what the stock really was and how much it moved, so the
+                // stock card adds up even when sales were recorded between counting and approval.
+                $this->db->prepare('UPDATE stock_count_items SET system_qty = ?, diff_qty = ? WHERE id = ?')
+                    ->execute([(int) $old['qty_stock'], (int) $item['counted_qty'] - (int) $old['qty_stock'], $item['id']]);
 
                 $new = $old;
                 $new['qty_stock'] = (int) $item['counted_qty'];
