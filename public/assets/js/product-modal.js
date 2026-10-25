@@ -7,7 +7,7 @@ import { skBlock } from './skeleton.js';
 // receipt, sale, return to the consignor, stock count) with the balance after each, up to now.
 
 const KIND = {
-    opening: ['ยอดตั้งต้น', 'muted'],
+    opening: ['ยอดยกมา', 'muted'],
     purchase: ['ซื้อเข้า', 'ok'],
     receive: ['รับฝาก', 'ok'],
     sale: ['ขาย', 'bad'],
@@ -47,7 +47,7 @@ export async function openProductModal(productId) {
     const p = d.product;
     const t = d.totals;
     let group = 'all';
-    let newestFirst = true;
+    let newestFirst = false; // a stock card reads oldest first, in document-date order
 
     function tableHtml() {
         const fn = GROUPS.find(([k]) => k === group)[2];
@@ -55,24 +55,45 @@ export async function openProductModal(productId) {
         if (newestFirst) rows.reverse();
         if (!rows.length) return '<div class="empty" style="padding:14px">ไม่มีรายการ</div>';
         return `<div class="table-wrap" style="max-height:420px;border:1px solid var(--border);border-radius:10px"><table>
-          <thead><tr><th>วันที่</th><th>รายการ</th><th>เอกสาร</th><th>คู่ค้า / หมายเหตุ</th>
-            <th class="num">ราคา/ชิ้น</th><th class="num">เข้า</th><th class="num">ออก</th><th class="num">คงเหลือ</th></tr></thead>
+          <thead><tr><th>วันที่เอกสาร</th><th>รายการ</th><th>เลขที่เอกสาร</th><th>คู่ค้า / หมายเหตุ</th>
+            <th class="num">รับ</th><th class="num">จ่าย</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">มูลค่าทุน</th></tr></thead>
           <tbody>${rows.map((r) => {
               const [label, tone] = KIND[r.kind] || [r.kind, 'muted'];
               const detail = [r.party, r.note].filter(Boolean).map(escapeHtml).join('<br>');
               return `<tr>
-                <td style="white-space:nowrap">${r.date ? escapeHtml(fmtDate(r.date)) : '<span class="muted">ปัจจุบัน</span>'}
-                  ${r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : ''}</td>
+                <td style="white-space:nowrap">${r.date ? escapeHtml(fmtDate(r.date)) : '<span class="muted">-</span>'}
+                  ${r.late ? `<div class="pm-late" title="บันทึกเข้าระบบหลังวันที่ในเอกสาร">บันทึกล่าช้า ${escapeHtml(fmtDateTime(r.at))}</div>`
+                      : r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : ''}</td>
                 <td><span class="pill ${tone}">${label}</span></td>
                 <td style="white-space:nowrap">${r.doc_no ? escapeHtml(r.doc_no) : '<span class="muted">-</span>'}
                   ${r.user_name ? `<div class="muted" style="font-size:11.5px">${escapeHtml(r.user_name)}</div>` : ''}</td>
                 <td style="font-size:12.5px">${detail || '<span class="muted">-</span>'}</td>
-                <td class="num">${r.unit_price !== null ? money(r.unit_price) : '<span class="muted">-</span>'}</td>
-                <td class="num pm-in">${r.qty_in ? `+${count(r.qty_in)}` : ''}</td>
-                <td class="num pm-out">${r.qty_out ? `−${count(r.qty_out)}` : ''}</td>
+                <td class="num pm-in">${r.qty_in ? count(r.qty_in) : ''}</td>
+                <td class="num pm-out">${r.qty_out ? count(r.qty_out) : ''}</td>
                 <td class="num" style="font-weight:600${r.balance < 0 ? ';color:var(--bad)' : ''}">${count(r.balance)}</td>
+                <td class="num">${r.unit_cost !== null ? money(r.unit_cost) : '<span class="muted">-</span>'}</td>
+                <td class="num">${money(Math.abs(r.value))}</td>
               </tr>`;
           }).join('')}</tbody></table></div>`;
+    }
+
+    /** Opening + received − sold − returned ± adjustments = closing, in pieces and at cost. */
+    function summaryHtml() {
+        const line = (label, v, sign, cls = '') => `<tr class="${cls}"><td>${label}</td>
+            <td class="num">${sign}${count(Math.abs(v.qty))}</td><td class="num">${sign}${money(Math.abs(v.value))}</td></tr>`;
+        const adj = t.adjusted;
+        const adjSign = adj.qty < 0 || (adj.qty === 0 && adj.value < 0) ? '−' : '+';
+        return `<table class="pm-sum">
+          <thead><tr><th>สรุปบัญชีคุมสินค้า</th><th class="num">จำนวน (ชิ้น)</th><th class="num">มูลค่าทุน (บาท)</th></tr></thead>
+          <tbody>
+            ${line('ยอดยกมา (ไม่มีเอกสารรับเข้า)', t.opening, '')}
+            ${line('บวก รับเข้า (ซื้อ / รับฝาก)', t.received, '+')}
+            ${line('หัก ขายออก (ต้นทุนขาย)', t.sold, '−')}
+            ${t.returned.qty ? line('หัก คืนผู้ฝาก', t.returned, '−') : ''}
+            ${line('ปรับปรุงจากการตรวจนับ / ส่วนต่าง', adj, adjSign)}
+            ${line('คงเหลือยกไป', t.closing, '', 'pm-sum-total')}
+          </tbody></table>
+          <div class="muted" style="font-size:11.5px;margin-top:4px">มูลค่าคงเหลือคิดจากต้นทุนเฉลี่ยปัจจุบัน ฿${money(p.cost_price)}/ชิ้น · ต้นทุนขายตามที่บันทึกไว้ในแต่ละบิล</div>`;
     }
 
     function draw() {
@@ -96,13 +117,7 @@ export async function openProductModal(productId) {
                 ${p.expiry_date ? info('วันหมดอายุ', escapeHtml(fmtDate(p.expiry_date))) : ''}
               </div>
             </div>
-            <div class="pm-stats">
-              <div><div class="muted">รับเข้า</div><b class="pm-in">+${count(t.in)}</b></div>
-              <div><div class="muted">ขายออก</div><b class="pm-out">−${count(t.sold)}</b></div>
-              ${t.returned ? `<div><div class="muted">คืนผู้ฝาก</div><b class="pm-out">−${count(t.returned)}</b></div>` : ''}
-              <div><div class="muted">ตรวจนับ / ปรับยอด</div><b>${t.count_adjust > 0 ? '+' : t.count_adjust < 0 ? '−' : ''}${count(Math.abs(t.count_adjust))}</b></div>
-              <div><div class="muted">คงเหลือปัจจุบัน</div><b style="${p.qty_stock < 0 ? 'color:var(--bad)' : ''}">${count(p.qty_stock)}</b></div>
-            </div>
+            ${summaryHtml()}
             <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
               <div class="tabs" role="group" aria-label="กรองความเคลื่อนไหว">
                 ${GROUPS.map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(d.movements.filter(fn).length)})</button>`).join('')}
@@ -110,7 +125,7 @@ export async function openProductModal(productId) {
               <button type="button" class="btn secondary sm" data-order>${newestFirst ? 'ล่าสุดก่อน ▼' : 'เก่าสุดก่อน ▲'}</button>
             </div>
             ${tableHtml()}
-            <div class="muted" style="font-size:12px;margin-top:8px">คงเหลือคำนวณต่อเนื่องจากเอกสารทุกรายการ · การตรวจนับที่อนุมัติแล้วจะตั้งยอดคงเหลือเท่ากับจำนวนที่นับได้ · ใบซื้อ/การนำเข้าที่ถูกยกเลิกไม่แสดง</div>
+            <div class="muted" style="font-size:12px;margin-top:8px">เรียงตามวันที่ในเอกสาร (วันเดียวกัน: รับก่อนจ่าย แล้วปรับปรุงตรวจนับท้ายวัน) · รายการที่บันทึกล่าช้ายังอยู่ในวันที่ของเอกสาร · ตรวจนับลงผลต่างระหว่างที่นับได้กับยอดในระบบตอนนับ · ใบซื้อ/การนำเข้าที่ถูกยกเลิกไม่แสดง</div>
           </div>
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));

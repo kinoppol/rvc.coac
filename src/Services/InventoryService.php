@@ -95,50 +95,61 @@ class InventoryService
         $stmt->execute([$productId]);
         $packs = $stmt->fetchAll();
 
-        // [at, date, kind, doc_no, party, user, qty (+in / -out) or counted, unit price, sort id]
+        // Stock card in document order: the date printed on each document (a receipt keyed in a
+        // week late still sits on its own day), then receipts before issues on the same day.
+        // qty is +in / -out; a count's qty is its adjustment (counted - system qty when counted).
         $stmt = $this->db->prepare(
             "SELECT * FROM (
                 SELECT pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
-                       pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty, pi.piece_cost AS unit_price,
-                       NULL AS system_qty, 1 AS ord, pi.id AS rid
+                       pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty,
+                       pi.piece_cost AS unit_cost, ROUND(pi.units * pi.piece_cost, 2) AS value, NULL AS sale_price,
+                       NULL AS counted_qty, NULL AS system_qty, 1 AS ord, pi.id AS rid
                 FROM purchase_items pi
                 JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
                 LEFT JOIN users u ON u.id = pd.user_id
                 WHERE pi.product_id = ? AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
               UNION ALL
-                SELECT rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty, ri.cost_price, NULL, 1, ri.id
+                SELECT rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty,
+                       ri.cost_price, ROUND(ri.qty * ri.cost_price, 2), NULL, NULL, NULL, 1, ri.id
                 FROM receive_items ri
                 JOIN receive_documents rd ON rd.id = ri.receive_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
                 WHERE ri.product_id = ?
               UNION ALL
-                SELECT sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.counted_qty, NULL, sci.system_qty, 2, sci.id
-                FROM stock_count_items sci
-                JOIN stock_counts sc ON sc.id = sci.stock_count_id
-                LEFT JOIN users u ON u.id = sc.approved_by
-                WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
-              UNION ALL
                 SELECT s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
                        IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
-                       s.doc_no, NULL, u.full_name, -si.qty, si.unit_price, NULL, 3, si.id
+                       s.doc_no, NULL, u.full_name, -si.qty,
+                       IF(si.qty <> 0, ROUND(si.cost_amount / si.qty, 2), NULL), -si.cost_amount, si.unit_price, NULL, NULL, 2, si.id
                 FROM sale_items si
                 JOIN sales s ON s.id = si.sale_id
                 LEFT JOIN users u ON u.id = s.cashier_id
                 WHERE si.product_id = ?
               UNION ALL
                 SELECT rd.created_at, DATE(rd.created_at), 'return', rd.doc_no, COALESCE(NULLIF(rd.recipient_name, ''), c.name), u.full_name,
-                       -ri.qty, ri.sale_price, NULL, 3, ri.id
+                       -ri.qty, NULL, NULL, NULL, NULL, NULL, 2, ri.id
                 FROM return_items ri
                 JOIN return_documents rd ON rd.id = ri.return_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
                 WHERE ri.product_id = ?
-             ) m ORDER BY at ASC, ord ASC, rid ASC"
+              UNION ALL
+                SELECT sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
+                       NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
+                FROM stock_count_items sci
+                JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                LEFT JOIN users u ON u.id = sc.approved_by
+                WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
+             ) m ORDER BY date ASC, ord ASC, at ASC, rid ASC"
         );
         $stmt->execute([$productId, $productId, $productId, $productId, $productId]);
         $events = $stmt->fetchAll();
 
+        $cost = (float) $p['cost_price'];
+        $row = fn (array $r) => $r + [
+            'at' => null, 'date' => null, 'doc_no' => null, 'party' => null, 'user_name' => null,
+            'unit_cost' => null, 'sale_price' => null, 'note' => null,
+        ];
         $docIn = 0;
         foreach ($events as $e) {
             if ($e['kind'] === 'purchase' || $e['kind'] === 'receive') {
@@ -147,55 +158,64 @@ class InventoryService
         }
         $rows = [];
         $balance = 0;
+        // Stock that came in with no receiving document, when the product was created.
         $untracked = (int) $p['qty_received'] - $docIn;
         if ($untracked !== 0) {
             $balance = $untracked;
-            $rows[] = [
-                'at' => $p['created_at'], 'date' => substr((string) $p['created_at'], 0, 10), 'kind' => 'opening', 'doc_no' => null,
-                'party' => null, 'user_name' => null, 'qty_in' => max($untracked, 0), 'qty_out' => max(-$untracked, 0),
-                'unit_price' => null, 'balance' => $balance,
-                'note' => 'รับเข้าตอนสร้างสินค้า (ไม่มีเอกสารรับเข้า เช่น สินค้าที่สร้างจากการนำเข้ายอดขาย POS)',
-            ];
+            $created = substr((string) $p['created_at'], 0, 10);
+            $rows[] = $row([
+                'at' => $p['created_at'], 'date' => $events ? min($created, (string) $events[0]['date']) : $created, 'kind' => 'opening',
+                'qty' => $untracked, 'unit_cost' => $cost, 'value' => round($untracked * $cost, 2), 'balance' => $balance,
+                'note' => 'รับเข้าตอนสร้างสินค้า ไม่มีเอกสารรับเข้า (เช่น สินค้าที่สร้างจากการนำเข้ายอดขาย POS)',
+            ]);
         }
         foreach ($events as $e) {
             $qty = (int) $e['qty'];
+            $balance += $qty;
             $note = null;
             if ($e['kind'] === 'count') {
-                $note = 'นับได้ ' . $qty . ' (ระบบตอนนับ ' . (int) $e['system_qty'] . ')';
-                $qty -= $balance; // a count sets the balance; the change is whatever it takes to get there
-                $balance = (int) $e['qty'];
-            } else {
-                $balance += $qty;
+                $note = 'นับได้ ' . (int) $e['counted_qty'] . ' · ในระบบตอนนับ ' . (int) $e['system_qty'];
+            } elseif ($e['sale_price'] !== null) {
+                $note = 'ราคาขาย ฿' . number_format((float) $e['sale_price'], 2);
             }
-            $rows[] = [
+            $unit = $e['unit_cost'] !== null ? (float) $e['unit_cost'] : $cost;
+            $rows[] = $row([
                 'at' => $e['at'], 'date' => $e['date'], 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'],
-                'user_name' => $e['user_name'], 'qty_in' => max($qty, 0), 'qty_out' => max(-$qty, 0),
-                'unit_price' => $e['unit_price'], 'balance' => $balance, 'note' => $note,
-            ];
+                'user_name' => $e['user_name'], 'qty' => $qty, 'unit_cost' => $unit,
+                'value' => $e['value'] !== null ? (float) $e['value'] : round($qty * $unit, 2),
+                'sale_price' => $e['sale_price'], 'balance' => $balance, 'note' => $note,
+            ]);
         }
         $gap = (int) $p['qty_stock'] - $balance;
         if ($gap !== 0) {
             $balance += $gap;
-            $rows[] = [
-                'at' => null, 'date' => null, 'kind' => 'adjust', 'doc_no' => null, 'party' => null, 'user_name' => null,
-                'qty_in' => max($gap, 0), 'qty_out' => max(-$gap, 0), 'unit_price' => null, 'balance' => $balance,
-                'note' => 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง (ปรับให้ตรงกับยอดคงเหลือปัจจุบัน)',
-            ];
+            $rows[] = $row([
+                'date' => date('Y-m-d'), 'kind' => 'adjust', 'qty' => $gap, 'unit_cost' => $cost, 'value' => round($gap * $cost, 2),
+                'balance' => $balance, 'note' => 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง ปรับให้ตรงกับยอดคงเหลือในระบบ',
+            ]);
         }
+        foreach ($rows as &$r) {
+            $r['qty_in'] = max($r['qty'], 0);
+            $r['qty_out'] = max(-$r['qty'], 0);
+            // Keyed in on a later day than the document's own date.
+            $r['late'] = $r['at'] !== null && $r['kind'] !== 'opening' && substr((string) $r['at'], 0, 10) > (string) $r['date'];
+        }
+        unset($r);
 
-        $totals = ['in' => 0, 'sold' => 0, 'returned' => 0, 'count_adjust' => 0];
-        foreach ($rows as $r) {
-            $net = $r['qty_in'] - $r['qty_out'];
-            if (in_array($r['kind'], ['purchase', 'receive', 'opening'], true)) {
-                $totals['in'] += $net;
-            } elseif ($r['kind'] === 'sale' || $r['kind'] === 'pos') {
-                $totals['sold'] -= $net;
-            } elseif ($r['kind'] === 'return') {
-                $totals['returned'] -= $net;
-            } else {
-                $totals['count_adjust'] += $net;
-            }
+        // Stock card summary: opening + received - sold - returned +/- adjustments = closing (qty and cost).
+        $totals = [];
+        foreach (['opening', 'received', 'sold', 'returned', 'adjusted'] as $k) {
+            $totals[$k] = ['qty' => 0, 'value' => 0.0];
         }
+        $bucket = ['opening' => 'opening', 'purchase' => 'received', 'receive' => 'received', 'sale' => 'sold', 'pos' => 'sold',
+                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted'];
+        foreach ($rows as $r) {
+            $k = $bucket[$r['kind']];
+            $sign = in_array($k, ['sold', 'returned'], true) ? -1 : 1;
+            $totals[$k]['qty'] += $sign * $r['qty'];
+            $totals[$k]['value'] = round($totals[$k]['value'] + $sign * $r['value'], 2);
+        }
+        $totals['closing'] = ['qty' => (int) $p['qty_stock'], 'value' => round((int) $p['qty_stock'] * $cost, 2)];
 
         $price = (float) $p['sale_price'];
         return [
