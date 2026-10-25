@@ -30,6 +30,16 @@ class InventoryController
         ]);
     }
 
+    /** One product's details and every stock movement up to its current balance. */
+    public function movements(Request $request, Response $response, array $args): Response
+    {
+        $data = (new InventoryService(Db::connection()))->movements((int) $args['id']);
+        if ($data === null) {
+            return $this->error($response, 'ไม่พบสินค้า', 404);
+        }
+        return $this->json($response, ['data' => $data]);
+    }
+
     /** Admin / manager: store sales with no cost that a first purchase can now cost (preview). */
     public function zeroCost(Request $request, Response $response): Response
     {

@@ -73,6 +73,148 @@ class InventoryService
     }
 
     /**
+     * One product with every document that moved its stock, oldest first, and the balance
+     * after each: purchases and consignment receipts in, sales and returns to the consignor
+     * out, approved stock counts set the balance to what was counted. Stock that came in
+     * with no document (a product created by a POS import) opens the list; anything else
+     * the documents do not explain closes it, so the last balance is always qty_stock.
+     */
+    public function movements(int $productId): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT p.*, c.name AS consignor_name, c.code AS consignor_code,
+                    (SELECT MAX(s.business_date) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id) AS last_sale
+             FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id WHERE p.id = ?"
+        );
+        $stmt->execute([$productId]);
+        $p = $stmt->fetch();
+        if (!$p) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT barcode, pack_size FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
+        $stmt->execute([$productId]);
+        $packs = $stmt->fetchAll();
+
+        // [at, date, kind, doc_no, party, user, qty (+in / -out) or counted, unit price, sort id]
+        $stmt = $this->db->prepare(
+            "SELECT * FROM (
+                SELECT pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
+                       pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty, pi.piece_cost AS unit_price,
+                       NULL AS system_qty, 1 AS ord, pi.id AS rid
+                FROM purchase_items pi
+                JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                LEFT JOIN users u ON u.id = pd.user_id
+                WHERE pi.product_id = ? AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
+              UNION ALL
+                SELECT rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty, ri.cost_price, NULL, 1, ri.id
+                FROM receive_items ri
+                JOIN receive_documents rd ON rd.id = ri.receive_document_id
+                LEFT JOIN consignors c ON c.id = rd.consignor_id
+                LEFT JOIN users u ON u.id = rd.user_id
+                WHERE ri.product_id = ?
+              UNION ALL
+                SELECT sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.counted_qty, NULL, sci.system_qty, 2, sci.id
+                FROM stock_count_items sci
+                JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                LEFT JOIN users u ON u.id = sc.approved_by
+                WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
+              UNION ALL
+                SELECT s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
+                       IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
+                       s.doc_no, NULL, u.full_name, -si.qty, si.unit_price, NULL, 3, si.id
+                FROM sale_items si
+                JOIN sales s ON s.id = si.sale_id
+                LEFT JOIN users u ON u.id = s.cashier_id
+                WHERE si.product_id = ?
+              UNION ALL
+                SELECT rd.created_at, DATE(rd.created_at), 'return', rd.doc_no, COALESCE(NULLIF(rd.recipient_name, ''), c.name), u.full_name,
+                       -ri.qty, ri.sale_price, NULL, 3, ri.id
+                FROM return_items ri
+                JOIN return_documents rd ON rd.id = ri.return_document_id
+                LEFT JOIN consignors c ON c.id = rd.consignor_id
+                LEFT JOIN users u ON u.id = rd.user_id
+                WHERE ri.product_id = ?
+             ) m ORDER BY at ASC, ord ASC, rid ASC"
+        );
+        $stmt->execute([$productId, $productId, $productId, $productId, $productId]);
+        $events = $stmt->fetchAll();
+
+        $docIn = 0;
+        foreach ($events as $e) {
+            if ($e['kind'] === 'purchase' || $e['kind'] === 'receive') {
+                $docIn += (int) $e['qty'];
+            }
+        }
+        $rows = [];
+        $balance = 0;
+        $untracked = (int) $p['qty_received'] - $docIn;
+        if ($untracked !== 0) {
+            $balance = $untracked;
+            $rows[] = [
+                'at' => $p['created_at'], 'date' => substr((string) $p['created_at'], 0, 10), 'kind' => 'opening', 'doc_no' => null,
+                'party' => null, 'user_name' => null, 'qty_in' => max($untracked, 0), 'qty_out' => max(-$untracked, 0),
+                'unit_price' => null, 'balance' => $balance,
+                'note' => 'รับเข้าตอนสร้างสินค้า (ไม่มีเอกสารรับเข้า เช่น สินค้าที่สร้างจากการนำเข้ายอดขาย POS)',
+            ];
+        }
+        foreach ($events as $e) {
+            $qty = (int) $e['qty'];
+            $note = null;
+            if ($e['kind'] === 'count') {
+                $note = 'นับได้ ' . $qty . ' (ระบบตอนนับ ' . (int) $e['system_qty'] . ')';
+                $qty -= $balance; // a count sets the balance; the change is whatever it takes to get there
+                $balance = (int) $e['qty'];
+            } else {
+                $balance += $qty;
+            }
+            $rows[] = [
+                'at' => $e['at'], 'date' => $e['date'], 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'],
+                'user_name' => $e['user_name'], 'qty_in' => max($qty, 0), 'qty_out' => max(-$qty, 0),
+                'unit_price' => $e['unit_price'], 'balance' => $balance, 'note' => $note,
+            ];
+        }
+        $gap = (int) $p['qty_stock'] - $balance;
+        if ($gap !== 0) {
+            $balance += $gap;
+            $rows[] = [
+                'at' => null, 'date' => null, 'kind' => 'adjust', 'doc_no' => null, 'party' => null, 'user_name' => null,
+                'qty_in' => max($gap, 0), 'qty_out' => max(-$gap, 0), 'unit_price' => null, 'balance' => $balance,
+                'note' => 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง (ปรับให้ตรงกับยอดคงเหลือปัจจุบัน)',
+            ];
+        }
+
+        $totals = ['in' => 0, 'sold' => 0, 'returned' => 0, 'count_adjust' => 0];
+        foreach ($rows as $r) {
+            $net = $r['qty_in'] - $r['qty_out'];
+            if (in_array($r['kind'], ['purchase', 'receive', 'opening'], true)) {
+                $totals['in'] += $net;
+            } elseif ($r['kind'] === 'sale' || $r['kind'] === 'pos') {
+                $totals['sold'] -= $net;
+            } elseif ($r['kind'] === 'return') {
+                $totals['returned'] -= $net;
+            } else {
+                $totals['count_adjust'] += $net;
+            }
+        }
+
+        $price = (float) $p['sale_price'];
+        return [
+            'product' => [
+                'id' => (int) $p['id'], 'name' => $p['name'], 'barcode' => $p['barcode'], 'image_token' => $p['image_token'],
+                'consignor_id' => $p['consignor_id'], 'consignor_name' => $p['consignor_name'], 'consignor_code' => $p['consignor_code'],
+                'cost_price' => $p['cost_price'], 'sale_price' => $p['sale_price'],
+                'margin_percent' => $price > 0 ? round(($price - (float) $p['cost_price']) / $price * 100, 1) : 0.0,
+                'qty_received' => (int) $p['qty_received'], 'qty_sold' => (int) $p['qty_sold'],
+                'qty_returned' => (int) $p['qty_returned'], 'qty_stock' => (int) $p['qty_stock'],
+                'mfg_date' => $p['mfg_date'] ?? null, 'expiry_date' => $p['expiry_date'] ?? null,
+                'created_at' => $p['created_at'], 'last_sale' => $p['last_sale'], 'pack_barcodes' => $packs,
+            ],
+            'totals' => $totals,
+            'movements' => $rows,
+        ];
+    }
+
+    /**
      * Store sales booked with no cost (sold before the goods were ever bought in, so the
      * product had no cost yet), per product, priced at the piece cost of the product's
      * first purchase. Products never bought in are left out: there is no cost to use.
