@@ -25,7 +25,8 @@ class SaleService
     }
 
     /**
-     * @param array<int,array{product_id:int, qty:int, unit_price?:float}> $items unit_price defaults to the product's sale price
+     * @param array<int,array{product_id:int, qty:int, unit_price?:float, pack_size?:int}> $items unit_price defaults to the product's
+     *        sale price; pack_size > 1 sells whole packs (qty in pieces) at that pack's sale price
      * @param array{sale_datetime?:string, business_date?:string, after_hours?:bool, allow_short_stock?:bool, note?:string} $opts
      *        sale_datetime for sales recorded after the fact (imported from an external POS); business_date is the
      *        accounting day (defaults to the day of sale_datetime; later for a sale made after the store closed);
@@ -66,6 +67,7 @@ class SaleService
             // Group fee/credit postings per consignor so each sale produces one
             // ledger credit + one ledger debit per consignor, as in the mockup.
             $perConsignor = [];
+            $insPack = null; // sale_items with pack_size (migration 0039), prepared on the first pack line
 
             foreach ($items as $line) {
                 $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
@@ -80,6 +82,17 @@ class SaleService
                 }
 
                 $unitPrice = isset($line['unit_price']) ? round((float) $line['unit_price'], 2) : (float) $product['sale_price'];
+                // A whole pack: qty is still in pieces, each at the pack price per piece.
+                $packSize = (int) ($line['pack_size'] ?? 1);
+                if ($packSize > 1) {
+                    $pack = $this->db->prepare('SELECT sale_price FROM product_pack_barcodes WHERE product_id = ? AND pack_size = ? AND sale_price IS NOT NULL LIMIT 1');
+                    $pack->execute([$product['id'], $packSize]);
+                    $packPrice = $pack->fetchColumn();
+                    if ($packPrice === false || $qty % $packSize !== 0) {
+                        throw new \RuntimeException("{$product['name']} ไม่มีราคาขายยกแพ็ค {$packSize} ชิ้น");
+                    }
+                    $unitPrice = round((float) $packPrice / $packSize, 4);
+                }
                 $isStoreOwned = $product['consignor_id'] === null;
 
                 if ($isStoreOwned) {
@@ -96,7 +109,7 @@ class SaleService
                     $costAmount = round(($unitPrice - $feeOutPerUnit) * $qty, 2);
                 }
 
-                $insItem->execute([
+                $row = [
                     $saleId,
                     $product['id'],
                     $product['consignor_id'],
@@ -104,7 +117,16 @@ class SaleService
                     $unitPrice,
                     round($feeOutPerUnit * $qty, 2),
                     $costAmount,
-                ]);
+                ];
+                if ($packSize > 1) {
+                    $insPack ??= $this->db->prepare(
+                        'INSERT INTO sale_items (sale_id, product_id, consignor_id, qty, unit_price, fee_amount, cost_amount, pack_size)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                    );
+                    $insPack->execute([...$row, $packSize]);
+                } else {
+                    $insItem->execute($row);
+                }
 
                 $this->products->applySale((int) $product['id'], $qty, $cashierId, $ip);
 

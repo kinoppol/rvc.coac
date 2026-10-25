@@ -57,10 +57,13 @@ class InventoryService
         if ($rows) {
             $ids = array_column($rows, 'id');
             $in = implode(',', array_fill(0, count($ids), '?'));
-            $stmt = $this->db->prepare("SELECT product_id, barcode, pack_size FROM product_pack_barcodes WHERE product_id IN ($in) ORDER BY pack_size ASC, id ASC");
+            $stmt = $this->db->prepare("SELECT * FROM product_pack_barcodes WHERE product_id IN ($in) ORDER BY pack_size ASC, id ASC");
             $stmt->execute($ids);
             foreach ($stmt->fetchAll() as $b) {
-                $packs[(int) $b['product_id']][] = ['barcode' => $b['barcode'], 'pack_size' => (int) $b['pack_size']];
+                $packs[(int) $b['product_id']][] = [
+                    'barcode' => $b['barcode'], 'pack_size' => (int) $b['pack_size'],
+                    'sale_price' => isset($b['sale_price']) ? (float) $b['sale_price'] : null,
+                ];
             }
         }
         foreach ($rows as &$r) {
@@ -148,9 +151,7 @@ class InventoryService
         if (!$p) {
             return null;
         }
-        $stmt = $this->db->prepare('SELECT barcode, pack_size FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
-        $stmt->execute([$productId]);
-        $packs = $stmt->fetchAll();
+        $packs = (new \App\Repositories\ProductRepo($this->db, new AuditLogger($this->db)))->packBarcodes($productId);
 
         $events = $this->stockEvents($productId);
 

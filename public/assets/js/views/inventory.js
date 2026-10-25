@@ -231,7 +231,7 @@ export async function render(container, { navigate, permissions, user }) {
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
-            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span></div>`).join('')}
+            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
             ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
           </td>
@@ -251,7 +251,7 @@ export async function render(container, { navigate, permissions, user }) {
         const e = editing;
         return `
         <div class="modal-backdrop">
-          <div class="modal" role="dialog" aria-modal="true" style="width:560px">
+          <div class="modal" role="dialog" aria-modal="true" style="width:660px">
             <div class="modal-head">
               <h2>${e.consigned ? 'แก้ไขบาร์โค้ดสินค้าฝากขาย' : 'แก้ไขสินค้า'}</h2>
               <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button>
@@ -297,14 +297,28 @@ export async function render(container, { navigate, permissions, user }) {
               <div style="font-weight:600;margin-bottom:4px">บาร์โค้ดแพ็ค/ลัง</div>
               <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง
                 ระบบใช้จับคู่สินค้าและเติมจำนวนชิ้น/แพ็คให้ตอนซื้อเข้า</div>
-              <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th><th></th></tr></thead><tbody>
+              <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th>
+                <th class="num" title="เว้นว่าง = ไม่ขายยกแพ็ค ขายแยกชิ้นเท่านั้น">ราคาขายยกแพ็ค</th><th></th></tr></thead><tbody>
                 ${e.packs.map((p, i) => `<tr data-pack="${i}">
                   <td><input data-pf="barcode" value="${escapeHtml(p.barcode)}" style="width:100%"></td>
                   <td><input data-pf="pack_size" type="number" min="2" step="1" value="${escapeHtml(p.pack_size)}" class="num" style="width:80px"></td>
+                  <td><input data-pf="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(p.sale_price ?? '')}" placeholder="ไม่ขายยกแพ็ค" class="num" style="width:110px">
+                    <div class="muted" data-pack-hint style="font-size:11.5px">${packHint(p)}</div></td>
                   <td><button type="button" class="btn secondary sm" data-del-pack="${i}" title="ลบ">✕</button></td>
                 </tr>`).join('')}
               </tbody></table>
-              <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>`;
+              <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
+              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายยกแพ็ค: สแกนบาร์โค้ดแพ็คที่หน้าขายจะขายทั้งแพ็คในราคานี้ (หรือกด "+ ยกแพ็ค" ในตะกร้า) · เว้นว่างถ้าขายแยกชิ้นเท่านั้น</div>`;
+    }
+
+    /** Pack price per piece next to the piece price, so the discount is visible. */
+    function packHint(p) {
+        const price = Number(p.sale_price);
+        const size = Number(p.pack_size);
+        if (p.sale_price === '' || p.sale_price == null || !(price > 0) || !(size > 1)) return '';
+        const per = price / size;
+        const piece = editing ? Number(editing.salePrice) : 0;
+        return `ชิ้นละ ฿${money(per)}${piece > 0 ? ` (แยกชิ้น ฿${money(piece)}${per < piece ? `, ถูกกว่า ฿${money((piece - per) * size)}/แพ็ค` : ''})` : ''}`;
     }
 
     /** Admin section: turn this store product into a consignor's product. */
@@ -366,7 +380,10 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];
-            tr.querySelectorAll('[data-pf]').forEach((inp) => inp.addEventListener('input', () => { p[inp.dataset.pf] = inp.value; }));
+            tr.querySelectorAll('[data-pf]').forEach((inp) => inp.addEventListener('input', () => {
+                p[inp.dataset.pf] = inp.value;
+                tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
+            }));
         });
         container.querySelectorAll('[data-del-pack]').forEach((b) => b.addEventListener('click', () => {
             e.packs.splice(Number(b.dataset.delPack), 1);
@@ -404,7 +421,10 @@ export async function render(container, { navigate, permissions, user }) {
                     barcode: e.barcode.trim(),
                     pack_barcodes: e.packs
                         .filter((p) => String(p.barcode).trim())
-                        .map((p) => ({ barcode: String(p.barcode).trim(), pack_size: Number(p.pack_size) })),
+                        .map((p) => ({
+                            barcode: String(p.barcode).trim(), pack_size: Number(p.pack_size),
+                            sale_price: p.sale_price === '' || p.sale_price == null ? null : Number(p.sale_price),
+                        })),
                 });
                 const p = res.data.find((x) => x.id === e.id);
                 p.name = out.data.name;

@@ -252,8 +252,20 @@ export async function render(container, { user } = {}) {
         drawProducts();
     }
 
+    /** Pieces one cart line takes from stock (a whole pack is pack_size pieces) and its price per line unit. */
+    const lineSize = (it) => it.pack?.pack_size || 1;
+    const linePrice = (it) => (it.pack ? it.pack.sale_price : it.sale_price);
+
+    /** Pieces of this product already in the cart, in every line (pieces and whole packs). */
     function inCart(id) {
-        return cart.find((c) => c.id === id)?.qty || 0;
+        return cart.filter((c) => c.id === id).reduce((s, c) => s + c.qty * lineSize(c), 0);
+    }
+
+    /** A cart line rebuilt from fresh product data; a pack no longer sold whole falls back to pieces. */
+    function freshLine(c, p) {
+        if (!c.pack) return { ...p, qty: c.qty };
+        const pack = (p.packs || []).find((k) => k.pack_size === c.pack.pack_size);
+        return pack ? { ...p, qty: c.qty, pack } : { ...p, qty: c.qty * c.pack.pack_size };
     }
 
     function drawProducts() {
@@ -313,11 +325,11 @@ export async function render(container, { user } = {}) {
     }
 
     function cartTotal() {
-        return Math.round(cart.reduce((s, i) => s + i.sale_price * i.qty, 0) * 100) / 100;
+        return Math.round(cart.reduce((s, i) => s + linePrice(i) * i.qty, 0) * 100) / 100;
     }
 
     function drawCart() {
-        const qty = cart.reduce((s, i) => s + i.qty, 0);
+        const qty = cart.reduce((s, i) => s + i.qty * lineSize(i), 0);
         el('cart-title').textContent = `ตะกร้าสินค้า (${cart.length})`;
         el('cart-qty').textContent = qty ? `${qty} ชิ้น` : '';
         el('total').textContent = `฿ ${money(cartTotal())}`;
@@ -329,13 +341,15 @@ export async function render(container, { user } = {}) {
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
             <span class="pos-line-img">${photoImg(it)}</span>
-            <div class="pos-line-name">${escapeHtml(it.name)}<small>฿${money(it.sale_price)} · ${escapeHtml(it.consignor_name)}</small></div>
+            <div class="pos-line-name">${escapeHtml(it.name)}${it.pack ? ` <span class="pill ok pos-pack-pill">ยกแพ็ค ×${it.pack.pack_size}</span>` : ''}
+              <small>${it.pack ? `แพ็คละ ฿${money(it.pack.sale_price)} (${it.pack.pack_size} ชิ้น)` : `฿${money(it.sale_price)}`} · ${escapeHtml(it.consignor_name)}</small>
+              ${!it.pack && it.packs?.length ? `<span class="pos-pack-adds">${it.packs.map((k) => `<button type="button" class="link-btn" data-add-pack="${i}" data-size="${k.pack_size}" title="เพิ่มยกแพ็ค ${k.pack_size} ชิ้น ราคาแพ็ค">+ ยกแพ็ค ×${k.pack_size} ฿${money(k.sale_price)}</button>`).join(' ')}</span>` : ''}</div>
             <div class="pos-qty">
               <button type="button" data-dec="${i}" aria-label="ลดจำนวน">−</button>
-              <input data-qty="${i}" inputmode="numeric" value="${it.qty}" aria-label="จำนวน">
-              <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${it.qty >= it.qty_stock && !allowShort() ? 'disabled' : ''}>+</button>
+              <input data-qty="${i}" inputmode="numeric" value="${it.qty}" aria-label="${it.pack ? 'จำนวนแพ็ค' : 'จำนวน'}">
+              <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${inCart(it.id) + lineSize(it) > it.qty_stock && !allowShort() ? 'disabled' : ''}>+</button>
             </div>
-            <b class="pos-line-total">฿${money(it.sale_price * it.qty)}</b>
+            <b class="pos-line-total">฿${money(linePrice(it) * it.qty)}</b>
             <button type="button" class="pos-line-del" data-remove="${i}" aria-label="เอาออกจากตะกร้า">✕</button>
           </div>`).join('') || '<div class="empty">ยังไม่มีสินค้าในตะกร้า<br><small class="muted">สแกนบาร์โค้ด หรือแตะสินค้าเพื่อเพิ่ม</small></div>';
     }
@@ -344,10 +358,10 @@ export async function render(container, { user } = {}) {
         const box = el('held');
         box.hidden = !held.length;
         box.innerHTML = held.length ? `<span class="pos-held-label">ตะกร้าที่พักไว้</span>${held.map((h) => {
-            const total = h.items.reduce((s, i) => s + i.sale_price * i.qty, 0);
-            const pieces = h.items.reduce((s, i) => s + i.qty, 0);
+            const total = h.items.reduce((s, i) => s + linePrice(i) * i.qty, 0);
+            const pieces = h.items.reduce((s, i) => s + i.qty * lineSize(i), 0);
             return `<span class="pos-held-chip">
-              <button type="button" data-resume="${h.id}" title="${escapeHtml(h.items.map((i) => `${i.name} x${i.qty}`).join(', '))}">
+              <button type="button" data-resume="${h.id}" title="${escapeHtml(h.items.map((i) => `${i.name}${i.pack ? ` (แพ็ค ×${i.pack.pack_size})` : ''} x${i.qty}`).join(', '))}">
                 <b>#${h.no}</b> ${pieces} ชิ้น · ฿${money(total)}<small>พักเมื่อ ${escapeHtml(h.at)}</small></button>
               <button type="button" class="pos-held-del" data-drop="${h.id}" aria-label="ลบตะกร้าที่พัก #${h.no}">✕</button>
             </span>`;
@@ -370,7 +384,7 @@ export async function render(container, { user } = {}) {
         // A cart in progress is held in its place, so nothing is lost by switching.
         const swapped = cart.length ? holdCart() : null;
         held = held.filter((x) => x !== h);
-        cart = h.items.map((c) => ({ ...(products.find((p) => p.id === c.id) || c), qty: c.qty }));
+        cart = h.items.map((c) => freshLine(c, products.find((p) => p.id === c.id) || c));
         saveJson(HELD_KEY, held);
         message(`เปิดตะกร้าที่พัก #${h.no}${swapped ? ` (พักตะกร้าเดิมไว้เป็น #${swapped})` : ''}`);
         redraw();
@@ -524,20 +538,25 @@ export async function render(container, { user } = {}) {
         drawCart();
     }
 
-    function add(p) {
-        const line = cart.find((c) => c.id === p.id);
-        const short = (line?.qty || 0) >= p.qty_stock;
+    /** One more piece, or with pack one more whole pack at the pack price. */
+    function add(p, pack = null) {
+        const size = pack?.pack_size || 1;
+        const line = cart.find((c) => c.id === p.id && lineSize(c) === size);
+        const short = inCart(p.id) + size > p.qty_stock;
         if (short && !allowShort()) {
             beep(false);
-            message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น`, 'error');
+            message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น${size > 1 ? ` (ยกแพ็คใช้ ${size} ชิ้น)` : ''}`, 'error');
             return;
         }
         if (line) line.qty += 1;
-        else cart.push({ ...p, qty: 1 });
+        else {
+            const { pack: _old, ...base } = p;
+            cart.push(pack ? { ...base, qty: 1, pack } : { ...base, qty: 1 });
+        }
         beep(true);
         message(short ? `${p.name}: คงเหลือในระบบ ${p.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ ควรตรวจนับ/บันทึกรับสินค้าภายหลัง` : '', 'warn');
         redraw();
-        const idx = cart.findIndex((c) => c.id === p.id);
+        const idx = cart.findIndex((c) => c.id === p.id && lineSize(c) === size);
         el('cart').children[idx]?.scrollIntoView({ block: 'nearest' });
     }
 
@@ -545,7 +564,16 @@ export async function render(container, { user } = {}) {
     async function submitSearch() {
         const code = q.value.trim();
         if (!code) return;
-        let p = products.find((x) => x.barcode && x.barcode === code);
+        // A pack barcode with a whole-pack price sells the pack.
+        const byCode = (list) => {
+            for (const x of list) {
+                if (x.barcode && x.barcode === code) return [x, null];
+                const k = (x.packs || []).find((pk) => pk.barcode === code);
+                if (k) return [x, k];
+            }
+            return [null, null];
+        };
+        let [p, pack] = byCode(products);
         if (!p) {
             const list = matches();
             if (list.length === 1) p = list[0];
@@ -553,7 +581,7 @@ export async function render(container, { user } = {}) {
         if (!p && /^\d{4,}$/.test(code)) {
             // Not in the loaded list (e.g. stock arrived after the page was opened).
             const res = await api.get(`/sales/products?q=${encodeURIComponent(code)}`).catch(() => ({ data: [] }));
-            p = res.data.find((x) => x.barcode === code);
+            [p, pack] = byCode(res.data.map(normalize));
             if (p && !products.some((x) => x.id === p.id)) products.push(p);
         }
         if (!p) {
@@ -563,13 +591,20 @@ export async function render(container, { user } = {}) {
             return;
         }
         q.value = '';
-        add(p);
+        add(p, pack);
+    }
+
+    function normalize(p) {
+        return {
+            ...p, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), sold_qty: Number(p.sold_qty),
+            packs: (p.packs || []).map((k) => ({ ...k, pack_size: Number(k.pack_size), sale_price: Number(k.sale_price) })),
+        };
     }
 
     async function loadProducts() {
         try {
             const res = await api.get(`/sales/products?all=1&sort=popular${allowShort() ? '&short=1' : ''}`);
-            products = res.data.map((p) => ({ ...p, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), sold_qty: Number(p.sold_qty) }));
+            products = res.data.map(normalize);
         } catch (e) {
             message(e.message, 'error');
             redraw();
@@ -578,9 +613,9 @@ export async function render(container, { user } = {}) {
         // Keep cart lines in step with the new prices and stock figures.
         const gone = [];
         cart = cart.filter((c) => products.some((p) => p.id === c.id) || !gone.push(c.name)).map((c) => {
-            const p = products.find((x) => x.id === c.id);
-            return { ...p, qty: allowShort() ? c.qty : Math.min(c.qty, p.qty_stock) };
-        });
+            const line = freshLine(c, products.find((x) => x.id === c.id));
+            return { ...line, qty: allowShort() ? line.qty : Math.min(line.qty, Math.floor(line.qty_stock / lineSize(line))) };
+        }).filter((c) => c.qty > 0);
         if (gone.length) message(`เอาออกจากตะกร้าเพราะสินค้าหมด: ${gone.join(', ')}`, 'warn');
         redraw();
     }
@@ -721,7 +756,7 @@ export async function render(container, { user } = {}) {
             draw();
             try {
                 const res = await api.post('/sales', {
-                    items: cart.map((i) => ({ product_id: i.id, qty: i.qty })),
+                    items: cart.map((i) => ({ product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) })),
                     allow_short: allowShort(),
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
@@ -849,14 +884,18 @@ export async function render(container, { user } = {}) {
         if (i === undefined) return;
         const line = cart[Number(i)];
         const n = Math.floor(Number(e.target.value));
+        // Most of this line the stock allows, after the product's other lines (pieces / packs).
+        const size = lineSize(line);
+        const max = Math.floor((line.qty_stock - (inCart(line.id) - line.qty * size)) / size);
         if (!(n > 0)) cart.splice(Number(i), 1);
         else {
-            if (n > line.qty_stock) {
+            if (n > max) {
                 message(allowShort()
                     ? `${line.name}: คงเหลือในระบบ ${line.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ`
                     : `${line.name} มีคงเหลือเพียง ${line.qty_stock} ชิ้น`, allowShort() ? 'warn' : 'error');
             }
-            line.qty = allowShort() ? n : Math.min(n, line.qty_stock);
+            line.qty = allowShort() ? n : Math.min(n, max);
+            if (line.qty < 1) cart.splice(Number(i), 1);
         }
         redraw();
         q.focus({ preventScroll: true });
@@ -883,7 +922,11 @@ export async function render(container, { user } = {}) {
                 pickDropdown(t.dataset.ddPick, t.dataset.value);
             } else if (t.dataset.inc) {
                 const line = cart[Number(t.dataset.inc)];
-                if (line) add(line);
+                if (line) add(line, line.pack || null);
+            } else if (t.dataset.addPack) {
+                const line = cart[Number(t.dataset.addPack)];
+                const k = line?.packs?.find((x) => x.pack_size === Number(t.dataset.size));
+                if (k) add(line, k);
             } else if (t.dataset.dec) {
                 const i = Number(t.dataset.dec);
                 if (cart[i].qty > 1) cart[i].qty -= 1;
@@ -905,7 +948,7 @@ export async function render(container, { user } = {}) {
                 resumeCart(Number(t.dataset.resume));
             } else if (t.dataset.drop) {
                 const h = held.find((x) => x.id === Number(t.dataset.drop));
-                const pieces = h ? h.items.reduce((s, i) => s + i.qty, 0) : 0;
+                const pieces = h ? h.items.reduce((s, i) => s + i.qty * lineSize(i), 0) : 0;
                 if (h) confirmDialog(`สินค้า ${pieces} ชิ้นในตะกร้านี้จะถูกนำออกทั้งหมด`, { title: `ลบตะกร้าที่พัก #${h.no}?`, okText: 'ลบตะกร้า', danger: true }).then((yes) => {
                     if (!yes) return;
                     held = held.filter((x) => x !== h);

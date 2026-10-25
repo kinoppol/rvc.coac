@@ -44,9 +44,13 @@ class ProductRepo
     /** @return array<int,array{barcode:string,pack_size:int}> */
     public function packBarcodes(int $productId): array
     {
-        $stmt = $this->db->prepare('SELECT barcode, pack_size FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
+        // SELECT * so this still works before migration 0039 adds sale_price.
+        $stmt = $this->db->prepare('SELECT * FROM product_pack_barcodes WHERE product_id = ? ORDER BY pack_size ASC, id ASC');
         $stmt->execute([$productId]);
-        return array_map(fn ($r) => ['barcode' => $r['barcode'], 'pack_size' => (int) $r['pack_size']], $stmt->fetchAll());
+        return array_map(fn ($r) => [
+            'barcode' => $r['barcode'], 'pack_size' => (int) $r['pack_size'],
+            'sale_price' => isset($r['sale_price']) ? (float) $r['sale_price'] : null,
+        ], $stmt->fetchAll());
     }
 
     /** Links a pack barcode to a product (moving it if it pointed elsewhere). */
@@ -63,7 +67,7 @@ class ProductRepo
      * Sets a store product's piece barcode and its full list of pack barcodes.
      * A barcode may identify only one thing: the piece of one product, or one pack.
      *
-     * @param array<int,array{barcode:string,pack_size:int}> $packs
+     * @param array<int,array{barcode:string,pack_size:int,sale_price?:?float}> $packs sale_price: whole-pack price, null = not sold whole
      */
     /**
      * Name (null = keep), piece barcode and pack barcodes of a store product.
@@ -97,7 +101,13 @@ class ProductRepo
             if ($code === $barcode || isset($clean[$code])) {
                 throw new \RuntimeException("บาร์โค้ด {$code} ซ้ำกัน");
             }
-            $clean[$code] = $size;
+            // Price for selling the whole pack (blank = the pack is not sold whole).
+            $price = $p['sale_price'] ?? null;
+            $price = $price === null || $price === '' ? null : round((float) $price, 2);
+            if ($price !== null && ($price <= 0 || $price > 1000000)) {
+                throw new \RuntimeException("บาร์โค้ดแพ็ค {$code}: ราคาขายยกแพ็คไม่ถูกต้อง");
+            }
+            $clean[$code] = ['size' => $size, 'price' => $price];
         }
         $check = function (string $sql, array $params): ?string {
             $stmt = $this->db->prepare($sql);
@@ -124,11 +134,11 @@ class ProductRepo
             }
         }
         $upsert = $this->db->prepare(
-            'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, created_at) VALUES (?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE pack_size = VALUES(pack_size)'
+            'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, sale_price, created_at) VALUES (?, ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE pack_size = VALUES(pack_size), sale_price = VALUES(sale_price)'
         );
-        foreach ($clean as $code => $size) {
-            $upsert->execute([$productId, (string) $code, $size]);
+        foreach ($clean as $code => $p) {
+            $upsert->execute([$productId, (string) $code, $p['size'], $p['price']]);
         }
         $this->audit->log(
             'products', $productId, 'update',

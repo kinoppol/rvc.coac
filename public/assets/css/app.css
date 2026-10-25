@@ -743,3 +743,8 @@ div.pos-row.out { cursor: not-allowed; }
 .pm-in { color: var(--ok); }
 .pm-out { color: var(--bad); }
 @media (max-width: 600px) { .pm-top { flex-direction: column; } .pm-photo { width: 88px; height: 88px; } }
+
+/* POS: whole-pack lines */
+.pos-pack-pill { font-size: 10.5px; padding: 1px 7px; vertical-align: middle; }
+.pos-pack-adds { display: block; margin-top: 2px; font-size: 12px; }
+.pos-pack-adds .link-btn { font-size: 12px; padding: 0; }

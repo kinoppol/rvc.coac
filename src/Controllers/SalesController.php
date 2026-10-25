@@ -66,16 +66,30 @@ class SalesController
                 WHERE sa.sale_datetime >= NOW() - INTERVAL 90 DAY
                 GROUP BY si.product_id
              ) s ON s.product_id = p.id
-             WHERE {$stock} AND (p.name LIKE ? OR p.barcode LIKE ?)
+             WHERE {$stock} AND (p.name LIKE ? OR p.barcode LIKE ?
+                OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))
              ORDER BY {$order} LIMIT " . ($all ? 500 : 20)
         );
         $like = '%' . $q . '%';
-        $stmt->execute([$like, $like]);
+        $stmt->execute([$like, $like, $q]);
         $rows = $stmt->fetchAll();
         // Photos still without a small copy: the POS makes one from the first load.
         $attachments = new AttachmentService($db);
+        // Packs that can be sold whole (scanned by their pack barcode or picked in the cart).
+        $packs = [];
+        if ($rows) {
+            $ids = array_column($rows, 'id');
+            $stmt = $db->prepare('SELECT * FROM product_pack_barcodes WHERE product_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY pack_size, id');
+            $stmt->execute($ids);
+            foreach ($stmt->fetchAll() as $b) {
+                if (isset($b['sale_price']) && $b['sale_price'] !== null) {
+                    $packs[(int) $b['product_id']][] = ['barcode' => $b['barcode'], 'pack_size' => (int) $b['pack_size'], 'sale_price' => (float) $b['sale_price']];
+                }
+            }
+        }
         foreach ($rows as &$r) {
             $r['has_thumb'] = $r['image_token'] && $attachments->hasThumb($r['image_token']);
+            $r['packs'] = $packs[(int) $r['id']] ?? [];
         }
         unset($r);
         return $this->json($response, ['data' => $rows]);
