@@ -89,23 +89,32 @@ class ProductRepo
         $name = mb_substr($name, 0, 191);
         $barcode = trim((string) $barcode) ?: null;
         $clean = [];
+        $noCode = []; // pack size => price: packs sold whole that have no barcode of their own
         foreach ($packs as $p) {
             $code = trim((string) ($p['barcode'] ?? ''));
             $size = (int) ($p['pack_size'] ?? 0);
-            if ($code === '') {
-                continue;
-            }
-            if ($size < 2 || $size > 1000) {
-                throw new \RuntimeException("บาร์โค้ดแพ็ค {$code}: จำนวนชิ้นต่อแพ็คต้องอยู่ระหว่าง 2–1000");
-            }
-            if ($code === $barcode || isset($clean[$code])) {
-                throw new \RuntimeException("บาร์โค้ด {$code} ซ้ำกัน");
-            }
             // Price for selling the whole pack (blank = the pack is not sold whole).
             $price = $p['sale_price'] ?? null;
             $price = $price === null || $price === '' ? null : round((float) $price, 2);
+            $label = $code !== '' ? "บาร์โค้ดแพ็ค {$code}" : 'แพ็คที่ไม่มีบาร์โค้ด';
+            if ($code === '' && $price === null) {
+                continue; // an empty row
+            }
+            if ($size < 2 || $size > 1000) {
+                throw new \RuntimeException("{$label}: จำนวนชิ้นต่อแพ็คต้องอยู่ระหว่าง 2–1000");
+            }
             if ($price !== null && ($price <= 0 || $price > 1000000)) {
-                throw new \RuntimeException("บาร์โค้ดแพ็ค {$code}: ราคาขายยกแพ็คไม่ถูกต้อง");
+                throw new \RuntimeException("{$label}: ราคาขายยกแพ็คไม่ถูกต้อง");
+            }
+            if ($code === '') {
+                if (isset($noCode[$size])) {
+                    throw new \RuntimeException("แพ็ค {$size} ชิ้นที่ไม่มีบาร์โค้ดซ้ำกัน");
+                }
+                $noCode[$size] = $price;
+                continue;
+            }
+            if ($code === $barcode || isset($clean[$code])) {
+                throw new \RuntimeException("บาร์โค้ด {$code} ซ้ำกัน");
             }
             $clean[$code] = ['size' => $size, 'price' => $price];
         }
@@ -129,9 +138,15 @@ class ProductRepo
         $keep = array_map('strval', array_keys($clean));
         $del = $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode = ?');
         foreach ($oldPacks as $p) {
-            if (!in_array($p['barcode'], $keep, true)) {
+            if ($p['barcode'] !== null && !in_array($p['barcode'], $keep, true)) {
                 $del->execute([$productId, $p['barcode']]);
             }
+        }
+        // Packs without a barcode have nothing to match on: replace them all.
+        $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode IS NULL')->execute([$productId]);
+        $insNoCode = $this->db->prepare('INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, sale_price, created_at) VALUES (?, NULL, ?, ?, NOW())');
+        foreach ($noCode as $size => $price) {
+            $insNoCode->execute([$productId, $size, $price]);
         }
         $upsert = $this->db->prepare(
             'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, sale_price, created_at) VALUES (?, ?, ?, ?, NOW())

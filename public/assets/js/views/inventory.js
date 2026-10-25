@@ -231,7 +231,7 @@ export async function render(container, { navigate, permissions, user }) {
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
-            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
+            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
             ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
           </td>
@@ -295,12 +295,12 @@ export async function render(container, { navigate, permissions, user }) {
     function packsHtml(e) {
         return `
               <div style="font-weight:600;margin-bottom:4px">บาร์โค้ดแพ็ค/ลัง</div>
-              <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง
+              <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง (แพ็คที่ไม่มีบาร์โค้ดใส่เฉพาะชิ้น/แพ็คกับราคายกแพ็คได้)
                 ระบบใช้จับคู่สินค้าและเติมจำนวนชิ้น/แพ็คให้ตอนซื้อเข้า</div>
               <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th>
                 <th class="num" title="เว้นว่าง = ไม่ขายยกแพ็ค ขายแยกชิ้นเท่านั้น">ราคาขายยกแพ็ค</th><th></th></tr></thead><tbody>
                 ${e.packs.map((p, i) => `<tr data-pack="${i}">
-                  <td><input data-pf="barcode" value="${escapeHtml(p.barcode)}" style="width:100%"></td>
+                  <td><input data-pf="barcode" value="${escapeHtml(p.barcode)}" placeholder="ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค" style="width:100%"></td>
                   <td><input data-pf="pack_size" type="number" min="2" step="1" value="${escapeHtml(p.pack_size)}" class="num" style="width:80px"></td>
                   <td><input data-pf="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(p.sale_price ?? '')}" placeholder="ไม่ขายยกแพ็ค" class="num" style="width:110px">
                     <div class="muted" data-pack-hint style="font-size:11.5px">${packHint(p)}</div></td>
@@ -419,12 +419,13 @@ export async function render(container, { navigate, permissions, user }) {
                 const out = await api.put(`/inventory/${e.id}/barcodes`, {
                     name: e.name.trim(),
                     barcode: e.barcode.trim(),
+                    // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
                     pack_barcodes: e.packs
-                        .filter((p) => String(p.barcode).trim())
                         .map((p) => ({
-                            barcode: String(p.barcode).trim(), pack_size: Number(p.pack_size),
+                            barcode: String(p.barcode ?? '').trim(), pack_size: Number(p.pack_size),
                             sale_price: p.sale_price === '' || p.sale_price == null ? null : Number(p.sale_price),
-                        })),
+                        }))
+                        .filter((p) => p.barcode || p.sale_price !== null),
                 });
                 const p = res.data.find((x) => x.id === e.id);
                 p.name = out.data.name;

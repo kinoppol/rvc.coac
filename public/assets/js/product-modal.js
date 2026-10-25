@@ -109,7 +109,7 @@ export async function openProductModal(productId, navigate) {
               <div class="pm-grid">
                 ${info('เจ้าของสินค้า', p.consignor_id != null ? `ฝากขาย: ${escapeHtml(p.consignor_code ? `${p.consignor_code} - ` : '')}${escapeHtml(p.consignor_name || '')}` : 'สินค้าของร้าน')}
                 ${info('บาร์โค้ดชิ้น', p.barcode ? escapeHtml(p.barcode) : '<span class="muted">-</span>')}
-                ${info('บาร์โค้ดแพ็ค', p.pack_barcodes.length ? p.pack_barcodes.map((b) => `${escapeHtml(b.barcode)} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">ยกแพ็ค ฿${money(b.sale_price)}</span>` : ''}`).join('<br>') : '<span class="muted">-</span>')}
+                ${info('บาร์โค้ดแพ็ค', p.pack_barcodes.length ? p.pack_barcodes.map((b) => `${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">ยกแพ็ค ฿${money(b.sale_price)}</span>` : ''}`).join('<br>') : '<span class="muted">-</span>')}
                 ${info(p.consignor_id != null ? 'ผู้ฝากได้/ชิ้น' : 'ต้นทุน/ชิ้น (เฉลี่ย)', `฿ ${money(p.cost_price)}`)}
                 ${info('ราคาขาย', `฿ ${money(p.sale_price)} <span class="muted">(กำไร ${p.margin_percent}%)</span>`)}
                 ${info('มูลค่าทุนคงเหลือ', `฿ ${money(p.qty_stock * p.cost_price)}`)}

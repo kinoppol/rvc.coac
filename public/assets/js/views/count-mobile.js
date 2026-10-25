@@ -232,7 +232,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
                   </div>
                   <div class="mc-codes">
                     ${product.barcode ? `<span class="mc-chip">${escapeHtml(product.barcode)}</span>` : ''}
-                    ${product.pack_barcodes.map((b) => `<span class="mc-chip">${escapeHtml(b.barcode)} ×${b.pack_size}</span>`).join('')}
+                    ${product.pack_barcodes.map((b) => `<span class="mc-chip">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} ×${b.pack_size}</span>`).join('')}
                     <button type="button" class="mc-chip add${linkFor ? ' on' : ''}" data-act="addcode">${linkFor ? 'รอสแกนบาร์โค้ด… (ยกเลิก)' : '+ บาร์โค้ด'}</button>
                   </div>
                 </div>
