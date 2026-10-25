@@ -3,6 +3,7 @@ import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
+import { openPoBuilder } from '../po-builder.js';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -42,6 +43,7 @@ export async function render(container, { navigate, permissions, user }) {
     const canFixCost = ['admin', 'manager'].includes(user?.role);
     let zeroCost = [];
     let consignors = null; // loaded the first time an admin opens the editor
+    const picked = new Set(); // store products ticked for a purchase order
     let sort = { key: 'name', dir: 'asc' };
     try {
         const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
@@ -75,7 +77,7 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     function headHtml() {
-        return COLUMNS.map(([key, label, title, type]) => {
+        return (canEdit ? '<th class="pick-col"><input type="checkbox" data-pick-all title="เลือกสินค้าของร้านที่แสดงทั้งหมด" aria-label="เลือกทั้งหมด"></th>' : '') + COLUMNS.map(([key, label, title, type]) => {
             const on = sort.key === key;
             const aria = on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
             return `<th aria-sort="${aria}" class="${type === 'num' ? 'num' : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>
@@ -92,6 +94,7 @@ export async function render(container, { navigate, permissions, user }) {
 
     function draw() {
         const s = res.summary;
+        const shown = sorted(res.data.filter(FILTERS.find(([k]) => k === filter)[2]));
         const canBuy = permissions.includes('purchase.create');
         container.innerHTML = `
         <div class="kpi-grid">
@@ -110,6 +113,7 @@ export async function render(container, { navigate, permissions, user }) {
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
+              ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${picked.size ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ">สร้างใบรายการสั่งซื้อ (${picked.size})</button>` : ''}
               ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
             </div>
           </div>
@@ -121,8 +125,8 @@ export async function render(container, { navigate, permissions, user }) {
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr>${headHtml()}</tr></thead>
-            <tbody>${sorted(res.data.filter(FILTERS.find(([k]) => k === filter)[2])).map(row).join('')
-                || `<tr><td colspan="12" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
+            <tbody>${shown.map(row).join('')
+                || `<tr><td colspan="${canEdit ? 13 : 12}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
           </table></div>
         </section>
         ${editing ? editHtml() : ''}`;
@@ -167,6 +171,36 @@ export async function render(container, { navigate, permissions, user }) {
             sections: [{ title: 'แยกตามสินค้า', columns: [['product', 'สินค้า', 'text'], ['first_purchase', 'ใบซื้อแรก', 'text'], ['qty', 'ชิ้นที่ขาย', 'qty'], ['sales', 'ยอดขาย', 'money'], ['piece_cost', 'ทุน/ชิ้น', 'money'], ['cost', 'ต้นทุนที่จะเติม', 'money']], rows: zeroCost }],
         })));
         container.querySelector('#zc-fill')?.addEventListener('click', fillZeroCost);
+        // Ticking products for a purchase order: the button count updates without redrawing the table.
+        const poBtn = container.querySelector('#make-po');
+        const syncPick = () => {
+            if (poBtn) {
+                poBtn.textContent = `สร้างใบรายการสั่งซื้อ (${picked.size})`;
+                poBtn.disabled = !picked.size;
+            }
+            const boxes = [...container.querySelectorAll('[data-pick]')];
+            const all = container.querySelector('[data-pick-all]');
+            if (all) {
+                all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
+                all.indeterminate = !all.checked && boxes.some((b) => b.checked);
+            }
+        };
+        container.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('change', () => {
+            if (b.checked) picked.add(Number(b.dataset.pick)); else picked.delete(Number(b.dataset.pick));
+            syncPick();
+        }));
+        container.querySelector('[data-pick-all]')?.addEventListener('change', (e) => {
+            container.querySelectorAll('[data-pick]').forEach((b) => {
+                b.checked = e.target.checked;
+                if (b.checked) picked.add(Number(b.dataset.pick)); else picked.delete(Number(b.dataset.pick));
+            });
+            syncPick();
+        });
+        syncPick();
+        poBtn?.addEventListener('click', () => openPoBuilder([...picked], {
+            navigate,
+            onDone: () => { picked.clear(); draw(); },
+        }));
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
@@ -225,7 +259,10 @@ export async function render(container, { navigate, permissions, user }) {
 
     function row(p) {
         const low = Number(p.qty_stock) <= 3;
-        return `<tr>
+        // Only the store's own goods are bought from suppliers.
+        const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null
+            ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
+        return `<tr>${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
             ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}</td>

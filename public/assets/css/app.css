@@ -753,3 +753,9 @@ div.pos-row.out { cursor: not-allowed; }
 .ai-doc-kind { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; width: 100%; font-size: 12.5px; color: var(--text); }
 .ai-doc-kind label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .ai-doc-kind small { color: var(--muted); }
+
+/* Stock: pick products for a purchase order */
+.pick-col { width: 34px; text-align: center; }
+.po-table td { vertical-align: top; }
+.po-table tr.po-off td { opacity: .55; }
+.po-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; }

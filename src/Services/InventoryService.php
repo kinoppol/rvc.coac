@@ -346,6 +346,67 @@ class InventoryService
     }
 
     /**
+     * For building purchase orders from stock: per product, every supplier it was bought from
+     * with that supplier's latest line (pack, cost), cheapest piece cost first, plus the
+     * orders still waiting for delivery that already include it.
+     * @param int[] $ids store product ids
+     */
+    public function supplierOptions(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare("SELECT id, name, barcode, qty_stock, cost_price, sale_price FROM products WHERE consignor_id IS NULL AND id IN ($in) ORDER BY name");
+        $stmt->execute($ids);
+        $products = [];
+        foreach ($stmt->fetchAll() as $p) {
+            $products[(int) $p['id']] = $p + ['suppliers' => [], 'pending' => []];
+        }
+
+        $stmt = $this->db->prepare(
+            "SELECT * FROM (
+                SELECT pi.product_id, pd.supplier_name, pd.supplier_tax_id, pi.receipt_name, pi.barcode, pi.qty, pi.pack_size,
+                       pi.unit_cost, pi.piece_cost, pd.doc_no, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS last_date,
+                       COUNT(*) OVER (PARTITION BY pi.product_id, pd.supplier_name) AS times,
+                       ROW_NUMBER() OVER (PARTITION BY pi.product_id, pd.supplier_name
+                                          ORDER BY COALESCE(pd.receipt_date, DATE(pd.created_at)) DESC, pi.id DESC) AS rn
+                FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                WHERE pi.product_id IN ($in) AND pi.item_type = 'stock' AND pd.status = 'active' AND pi.piece_cost > 0
+             ) x WHERE rn = 1 ORDER BY product_id, piece_cost ASC, last_date DESC"
+        );
+        $stmt->execute($ids);
+        foreach ($stmt->fetchAll() as $s) {
+            $pid = (int) $s['product_id'];
+            if (isset($products[$pid])) {
+                $products[$pid]['suppliers'][] = [
+                    'supplier_name' => $s['supplier_name'], 'supplier_tax_id' => $s['supplier_tax_id'], 'receipt_name' => $s['receipt_name'],
+                    'barcode' => $s['barcode'], 'qty' => (int) $s['qty'], 'pack_size' => (int) $s['pack_size'],
+                    'unit_cost' => (float) $s['unit_cost'], 'piece_cost' => (float) $s['piece_cost'],
+                    'doc_no' => $s['doc_no'], 'last_date' => $s['last_date'], 'times' => (int) $s['times'],
+                ];
+            }
+        }
+
+        // Orders not delivered yet (migration 0041) that already list the product.
+        try {
+            $orders = $this->db->query("SELECT doc_no, supplier_name, order_items FROM purchase_documents WHERE status = 'ordered'")->fetchAll();
+        } catch (\PDOException $e) {
+            $orders = [];
+        }
+        foreach ($orders as $o) {
+            foreach ((array) (json_decode((string) $o['order_items'], true) ?: []) as $line) {
+                $pid = (int) ($line['product_id'] ?? 0);
+                if (isset($products[$pid])) {
+                    $products[$pid]['pending'][] = ['doc_no' => $o['doc_no'], 'supplier_name' => $o['supplier_name']];
+                }
+            }
+        }
+        return array_values($products);
+    }
+
+    /**
      * The document behind a stock movement, shaped for the drill-down dialog
      * ({title, note, sections: [{title, columns, rows}]}). Null when it does not exist.
      */

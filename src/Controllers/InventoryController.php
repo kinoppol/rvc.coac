@@ -49,6 +49,62 @@ class InventoryController
         return $this->json($response, ['data' => (new InventoryService(Db::connection()))->orderCheck()]);
     }
 
+    /** Suppliers each selected product was bought from (?ids=1,2,3), for building purchase orders. */
+    public function supplierOptions(Request $request, Response $response): Response
+    {
+        $ids = explode(',', (string) ($request->getQueryParams()['ids'] ?? ''));
+        return $this->json($response, ['data' => (new InventoryService(Db::connection()))->supplierOptions(array_slice($ids, 0, 300))]);
+    }
+
+    /**
+     * Creates one purchase order (waiting for delivery) per supplier from products picked in stock.
+     * Body: {orders: [{supplier_name, supplier_tax_id?, funding?, items: [{product_id, name, receipt_name?, barcode?, qty, pack_size, unit_cost}]}]}
+     */
+    public function createOrders(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        $service = PurchaseController::service();
+        $made = [];
+        foreach (array_slice((array) ($body['orders'] ?? []), 0, 50) as $o) {
+            $o = (array) $o;
+            $items = [];
+            foreach ((array) ($o['items'] ?? []) as $it) {
+                $it = (array) $it;
+                $qty = (int) ($it['qty'] ?? 0);
+                $cost = round((float) ($it['unit_cost'] ?? 0), 2);
+                if ($qty <= 0) {
+                    continue;
+                }
+                $items[] = [
+                    'name' => (string) (($it['receipt_name'] ?? '') ?: ($it['name'] ?? '')), 'product_name' => (string) ($it['name'] ?? ''),
+                    'product_id' => (int) ($it['product_id'] ?? 0) ?: null, 'item_type' => 'stock', 'barcode' => (string) ($it['barcode'] ?? ''),
+                    'qty' => $qty, 'pack_size' => max(1, (int) ($it['pack_size'] ?? 1)), 'unit_cost' => $cost,
+                    'line_total' => round($qty * $cost, 2), 'sale_price' => null,
+                ];
+            }
+            if (!$items) {
+                continue;
+            }
+            try {
+                $made[] = $service->createOrder([
+                    'supplier_name' => (string) ($o['supplier_name'] ?? ''), 'supplier_tax_id' => (string) ($o['supplier_tax_id'] ?? ''),
+                    'receipt_date' => date('Y-m-d'), 'funding' => $o['funding'] ?? 'capital',
+                    'note' => 'สร้างจากหน้าสต๊อกสินค้าของร้าน',
+                ], $items, [], 'manual', (int) $user['id'], $ip) + ['supplier_name' => (string) ($o['supplier_name'] ?? '')];
+            } catch (\RuntimeException $e) {
+                $msg = $e instanceof \PDOException ? 'ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041) ก่อน' : $e->getMessage();
+                return $this->error($response, ($made ? 'สร้างแล้ว ' . implode(', ', array_column($made, 'doc_no')) . ' แต่' : '')
+                    . 'สร้างใบสั่งซื้อของ ' . ($o['supplier_name'] ?? '') . ' ไม่ได้: ' . $msg, 422);
+            }
+        }
+        if (!$made) {
+            return $this->error($response, 'ไม่มีรายการที่จะสั่งซื้อ', 422);
+        }
+        return $this->json($response, ['data' => $made], 201);
+    }
+
     /** The document behind one stock movement (?kind=purchase|receive|sale|pos|return|count&doc_no=...). */
     public function document(Request $request, Response $response): Response
     {
