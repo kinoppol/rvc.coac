@@ -759,3 +759,9 @@ div.pos-row.out { cursor: not-allowed; }
 .po-table td { vertical-align: top; }
 .po-table tr.po-off td { opacity: .55; }
 .po-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; }
+
+/* Purchase list: filters and pages */
+.pc-filters .search-input { flex: 1 1 280px; }
+.pc-filters select, .pc-filters input[type="date"] { height: 38px; }
+.pc-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 18px; border-top: 1px solid var(--border); font-size: 13px; }
+.pc-pager select { margin-left: 4px; }

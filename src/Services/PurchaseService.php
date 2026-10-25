@@ -778,7 +778,53 @@ class PurchaseService
         return (bool) $stmt->fetchColumn();
     }
 
-    public function recent(int $limit = 30): array
+    /**
+     * The purchase list, newest first, a page at a time.
+     * @param array{q?:string, status?:string, from?:?string, to?:?string, page?:int, per?:int} $f
+     *        status: '' = everything except cancelled, or one status; from/to: date on the receipt
+     * @return array{data:array, total:int, counts:array<string,int>}
+     */
+    public function search(array $f): array
+    {
+        $where = [];
+        $params = [];
+        $date = 'COALESCE(pd.receipt_date, DATE(pd.created_at))';
+        if (!empty($f['from']) && !empty($f['to'])) {
+            $where[] = "$date BETWEEN ? AND ?";
+            array_push($params, $f['from'], $f['to']);
+        }
+        $q = trim((string) ($f['q'] ?? ''));
+        if ($q !== '') {
+            // Doc no., supplier, receipt no. or a product on it.
+            $where[] = "(pd.doc_no LIKE ? OR pd.supplier_name LIKE ? OR pd.receipt_no LIKE ? OR pd.note LIKE ?
+                OR EXISTS (SELECT 1 FROM purchase_items pi LEFT JOIN products p ON p.id = pi.product_id
+                           WHERE pi.purchase_document_id = pd.id AND (pi.receipt_name LIKE ? OR p.name LIKE ? OR pi.barcode = ?)))";
+            $like = '%' . $q . '%';
+            array_push($params, $like, $like, $like, $like, $like, $like, $q);
+        }
+        $base = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+        // Counts per status for the filter chips (same search and dates).
+        $stmt = $this->db->prepare("SELECT pd.status, COUNT(*) AS n FROM purchase_documents pd $base GROUP BY pd.status");
+        $stmt->execute($params);
+        $counts = array_map('intval', array_column($stmt->fetchAll(), 'n', 'status'));
+
+        $status = (string) ($f['status'] ?? '');
+        if (in_array($status, ['draft', 'ordered', 'active', 'cancelled'], true)) {
+            $where[] = 'pd.status = ?';
+            $params[] = $status;
+        } else {
+            $where[] = "pd.status <> 'cancelled'";
+        }
+        $cond = 'WHERE ' . implode(' AND ', $where);
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM purchase_documents pd $cond");
+        $stmt->execute($params);
+        $total = (int) $stmt->fetchColumn();
+        $per = max(1, min(100, (int) ($f['per'] ?? 10)));
+        $page = max(1, (int) ($f['page'] ?? 1));
+        return ['data' => $this->recent($per, ($page - 1) * $per, $cond, $params), 'total' => $total, 'counts' => $counts];
+    }
+
+    public function recent(int $limit = 30, int $offset = 0, string $cond = '', array $params = []): array
     {
         $stmt = $this->db->prepare(
             "SELECT pd.*, u.full_name AS user_name,
@@ -787,10 +833,10 @@ class PurchaseService
                     (SELECT COUNT(*) FROM attachments a WHERE a.purchase_document_id = pd.id AND a.mime LIKE 'image/%') AS image_count,
                     (SELECT COUNT(*) FROM attachments a WHERE a.purchase_document_id = pd.id AND a.mime NOT LIKE 'image/%') AS file_count
              FROM purchase_documents pd LEFT JOIN users u ON u.id = pd.user_id
-             ORDER BY pd.id DESC LIMIT ?"
+             {$cond}
+             ORDER BY pd.id DESC LIMIT " . (int) $limit . ' OFFSET ' . (int) $offset
         );
-        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $stmt->execute($params);
         return array_map(function ($d) {
             // A cancelled purchase has no lines left; show the counts from its snapshot.
             // An order not delivered yet has no lines either: count from what was ordered.

@@ -34,6 +34,12 @@ function emptyItem() {
     return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, presetPrice: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const PER_PAGE = [10, 20, 50, 100];
+const RANGES = [
+    ['all', 'ทุกช่วงเวลา'], ['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['year', 'ปีนี้'],
+    ['7d', '7 วันล่าสุด'], ['last_month', 'เดือนที่แล้ว'], ['custom', 'กำหนดเอง'],
+];
+const STATUSES = [['', 'ทั้งหมด'], ['draft', 'ร่างใบสั่งซื้อ'], ['ordered', 'รอส่งของ'], ['active', 'รับเข้าแล้ว'], ['cancelled', 'ยกเลิกแล้ว']];
 
 export async function render(container) {
     let photos = []; // receipt evidence: [{ token, preview, mime?, name? }] — photos and .md files
@@ -52,8 +58,14 @@ export async function render(container) {
     let mdOpen = null; // { token, name, html } — a .md file opened in the detail modal
     let evidenceBusy = false;
     let editing = null; // { id, doc_no, ordered?, receive? } while the form holds a saved purchase (ordered: an order not delivered yet)
-    let showCancelled = false; // cancelled purchases are hidden from the list unless asked for
-    try { showCancelled = localStorage.getItem('purchase.showCancelled') === '1'; } catch (e) { /* private mode */ }
+    // The list: status '' = everything but cancelled; range = when the receipt is dated.
+    const list = { q: '', status: '', range: 'all', from: todayISO(), to: todayISO(), page: 1, per: 10, total: 0, counts: {} };
+    try {
+        const saved = JSON.parse(localStorage.getItem('purchase.list') || 'null');
+        if (saved && PER_PAGE.includes(saved.per)) list.per = saved.per;
+        if (saved && RANGES.some(([k]) => k === saved.range)) list.range = saved.range;
+    } catch (e) { /* private mode / bad value */ }
+    let searchTimer = null;
     let orderDraft = false; // a new form filled from an order document (the assistant's "ใบสั่งของ"): save as an order by default
     let formOpen = false; // the purchase form modal
     let previewTimer = null;
@@ -171,9 +183,63 @@ export async function render(container) {
     }
 
     async function loadDocs() {
-        const res = await api.get('/purchases');
+        const p = new URLSearchParams({ q: list.q, status: list.status, range: list.range, page: list.page, per: list.per });
+        if (list.range === 'custom') { p.set('from', list.from); p.set('to', list.to); }
+        const res = await api.get(`/purchases?${p}`);
         docs = res.data;
+        list.total = res.total ?? docs.length;
+        list.counts = res.counts || {};
         markup = res.markup_percent;
+        // A page past the end (e.g. after cancelling the last one on it): go back to the last page.
+        const last = Math.max(1, Math.ceil(list.total / list.per));
+        if (list.page > last) {
+            list.page = last;
+            await loadDocs();
+        }
+    }
+
+    async function reloadList() {
+        try { localStorage.setItem('purchase.list', JSON.stringify({ per: list.per, range: list.range })); } catch (e) { /* private mode */ }
+        try {
+            await loadDocs();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        draw();
+    }
+
+    function filtersHtml() {
+        const n = (k) => (k === '' ? Object.entries(list.counts).filter(([s]) => s !== 'cancelled').reduce((t, [, v]) => t + v, 0) : list.counts[k] || 0);
+        return `
+        <section class="card card-pad pc-filters">
+          <div class="actions-row">
+            <input type="search" id="pc-q" class="search-input" placeholder="🔍 ค้นหาเลขที่ ร้าน/ผู้ขาย เลขใบเสร็จ หรือสินค้า" value="${escapeHtml(list.q)}">
+            <select id="pc-range" title="ช่วงวันที่ในใบเสร็จ">${RANGES.map(([k, l]) => `<option value="${k}" ${k === list.range ? 'selected' : ''}>${l}</option>`).join('')}</select>
+            ${list.range === 'custom' ? `<input type="date" id="pc-from" value="${escapeHtml(list.from)}"> ถึง <input type="date" id="pc-to" value="${escapeHtml(list.to)}">` : ''}
+          </div>
+          <div class="tabs" role="group" aria-label="สถานะ" style="margin-top:10px">
+            ${STATUSES.map(([k, l]) => `<button type="button" class="tab-btn ${k === list.status ? 'active' : ''}" data-list-status="${k}">${l} (${n(k)})</button>`).join('')}
+          </div>
+        </section>`;
+    }
+
+    function pagerHtml() {
+        const pages = Math.max(1, Math.ceil(list.total / list.per));
+        const from = list.total ? (list.page - 1) * list.per + 1 : 0;
+        const to = Math.min(list.total, list.page * list.per);
+        // First, last and the pages around the current one.
+        const nums = [...new Set([1, list.page - 1, list.page, list.page + 1, pages])].filter((p) => p >= 1 && p <= pages).sort((a, b) => a - b);
+        const btns = nums.map((p, i) => `${i && p - nums[i - 1] > 1 ? '<span class="muted">…</span>' : ''}<button type="button" class="btn ${p === list.page ? '' : 'secondary'} sm" data-page="${p}" ${p === list.page ? 'aria-current="page"' : ''}>${p}</button>`).join('');
+        return `
+        <div class="pc-pager">
+          <span class="muted">แสดง ${from}–${to} จาก ${list.total} ใบ</span>
+          <label class="muted">ต่อหน้า <select id="pc-per">${PER_PAGE.map((p) => `<option value="${p}" ${p === list.per ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <span class="actions-row" style="gap:4px">
+            <button type="button" class="btn secondary sm" data-page="${list.page - 1}" ${list.page <= 1 ? 'disabled' : ''} aria-label="หน้าก่อน">‹</button>
+            ${btns}
+            <button type="button" class="btn secondary sm" data-page="${list.page + 1}" ${list.page >= pages ? 'disabled' : ''} aria-label="หน้าถัดไป">›</button>
+          </span>
+        </div>`;
     }
 
     // ---------------- Rendering ----------------
@@ -327,9 +393,8 @@ export async function render(container) {
     }
 
     function draw() {
-        const waiting = docs.filter(isOrdered);
-        const drafts = docs.filter(isDraft);
-        const cancelledCount = docs.filter(isCancelled).length;
+        const waiting = list.counts.ordered || 0;
+        const drafts = list.counts.draft || 0;
         container.innerHTML = `
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
         <div class="hint"><div class="dot">i</div><div>
@@ -338,17 +403,15 @@ export async function render(container) {
           ระบบตั้งราคาขายเริ่มต้นเป็นทุน + ${escapeHtml(markup)}% แก้ได้ทุกรายการ
         </div></div>
         <div class="actions-row" style="justify-content:space-between">
-          <h2 style="font-size:15px;margin:0">ใบซื้อล่าสุด${drafts.length ? ` <span class="pill muted" title="ร่างใบสั่งซื้อที่ยังไม่ได้สั่ง">ร่าง ${drafts.length} ใบ</span>` : ''}${waiting.length ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting.length} ใบ</span>` : ''}</h2>
-          <span class="actions-row">
-            ${cancelledCount ? `<button type="button" class="btn secondary sm" id="pc-show-cancelled" aria-pressed="${showCancelled}">${showCancelled ? 'ซ่อน' : 'แสดง'}รายการที่ยกเลิกแล้ว (${cancelledCount})</button>` : ''}
-            <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
-          </span>
+          <h2 style="font-size:15px;margin:0">ใบซื้อ${drafts ? ` <span class="pill muted" title="ร่างใบสั่งซื้อที่ยังไม่ได้สั่ง">ร่าง ${drafts} ใบ</span>` : ''}${waiting ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting} ใบ</span>` : ''}</h2>
+          <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
         </div>
+        ${filtersHtml()}
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th title="หลักฐานใบเสร็จ: รูปภาพ / ไฟล์ .md">หลักฐาน</th><th>บันทึกโดย</th><th></th></tr></thead>
             <tbody>
-              ${docs.filter((d) => showCancelled || !isCancelled(d)).map((d) => `
+              ${docs.map((d) => `
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
                   <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}
                     ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}
@@ -366,9 +429,10 @@ export async function render(container) {
                     ${isDraft(d) ? `<button type="button" class="btn sm" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}" title="สั่งซื้อกับร้านเรียบร้อยแล้ว: เปลี่ยนเป็นรอรับของ">ยืนยันสั่งซื้อแล้ว</button>` : ''}
                     ${isCancelled(d) ? '' : `<button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button>
                     <button type="button" class="btn secondary sm pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิก</button>`}</td>
-                </tr>`).join('') || '<tr><td colspan="9" class="empty">ยังไม่มีใบซื้อ</td></tr>'}
+                </tr>`).join('') || `<tr><td colspan="9" class="empty">${list.q || list.status || list.range !== 'all' ? 'ไม่พบใบซื้อตามเงื่อนไขที่เลือก' : 'ยังไม่มีใบซื้อ'}</td></tr>`}
             </tbody>
           </table></div>
+          ${list.total > 0 ? pagerHtml() : ''}
         </section>
         ${formOpen ? formHtml() : ''}
         ${viewing ? viewHtml(viewing) : ''}`;
@@ -793,11 +857,26 @@ export async function render(container) {
             draw();
         };
         container.querySelector('#pc-reset')?.addEventListener('click', resetForm);
-        container.querySelector('#pc-show-cancelled')?.addEventListener('click', () => {
-            showCancelled = !showCancelled;
-            try { localStorage.setItem('purchase.showCancelled', showCancelled ? '1' : '0'); } catch (e) { /* private mode */ }
-            draw();
+        // List filters: any change goes back to page 1.
+        const q = container.querySelector('#pc-q');
+        q?.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(async () => {
+                list.q = q.value.trim();
+                list.page = 1;
+                const caret = q.selectionStart;
+                await reloadList();
+                const again = container.querySelector('#pc-q');
+                again?.focus();
+                again?.setSelectionRange(caret, caret);
+            }, 350);
         });
+        container.querySelector('#pc-range')?.addEventListener('change', (e) => { list.range = e.target.value; list.page = 1; reloadList(); });
+        container.querySelector('#pc-from')?.addEventListener('change', (e) => { list.from = e.target.value || todayISO(); list.page = 1; reloadList(); });
+        container.querySelector('#pc-to')?.addEventListener('change', (e) => { list.to = e.target.value || todayISO(); list.page = 1; reloadList(); });
+        container.querySelectorAll('[data-list-status]').forEach((b) => b.addEventListener('click', () => { list.status = b.dataset.listStatus; list.page = 1; reloadList(); }));
+        container.querySelector('#pc-per')?.addEventListener('change', (e) => { list.per = Number(e.target.value); list.page = 1; reloadList(); });
+        container.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => { list.page = Number(b.dataset.page); reloadList(); }));
         container.querySelector('#pc-open').addEventListener('click', () => {
             formOpen = true;
             error = null;

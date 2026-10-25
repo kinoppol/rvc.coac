@@ -40,7 +40,15 @@ class PurchaseController
     public function index(Request $request, Response $response): Response
     {
         $service = self::service();
-        return $this->json($response, ['data' => $service->recent(), 'markup_percent' => $service->markupPercent()]);
+        // ?q= &status= &range=all|today|week|month|year|custom (&from= &to=) &page= &per=
+        $q = $request->getQueryParams();
+        $range = (string) ($q['range'] ?? 'all');
+        [$from, $to] = $range === 'all' ? [null, null] : \App\Services\ReportService::resolveRange($range, $q['from'] ?? null, $q['to'] ?? null);
+        $list = $service->search([
+            'q' => (string) ($q['q'] ?? ''), 'status' => (string) ($q['status'] ?? ''), 'from' => $from, 'to' => $to,
+            'page' => (int) ($q['page'] ?? 1), 'per' => (int) ($q['per'] ?? 10),
+        ]);
+        return $this->json($response, $list + ['from' => $from, 'to' => $to, 'markup_percent' => $service->markupPercent()]);
     }
 
     public function show(Request $request, Response $response, array $args): Response
