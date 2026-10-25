@@ -52,6 +52,8 @@ export async function render(container) {
     let mdOpen = null; // { token, name, html } — a .md file opened in the detail modal
     let evidenceBusy = false;
     let editing = null; // { id, doc_no, ordered?, receive? } while the form holds a saved purchase (ordered: an order not delivered yet)
+    let showCancelled = false; // cancelled purchases are hidden from the list unless asked for
+    try { showCancelled = localStorage.getItem('purchase.showCancelled') === '1'; } catch (e) { /* private mode */ }
     let orderDraft = false; // a new form filled from an order document (the assistant's "ใบสั่งของ"): save as an order by default
     let formOpen = false; // the purchase form modal
     let previewTimer = null;
@@ -327,6 +329,7 @@ export async function render(container) {
     function draw() {
         const waiting = docs.filter(isOrdered);
         const drafts = docs.filter(isDraft);
+        const cancelledCount = docs.filter(isCancelled).length;
         container.innerHTML = `
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
         <div class="hint"><div class="dot">i</div><div>
@@ -336,13 +339,16 @@ export async function render(container) {
         </div></div>
         <div class="actions-row" style="justify-content:space-between">
           <h2 style="font-size:15px;margin:0">ใบซื้อล่าสุด${drafts.length ? ` <span class="pill muted" title="ร่างใบสั่งซื้อที่ยังไม่ได้สั่ง">ร่าง ${drafts.length} ใบ</span>` : ''}${waiting.length ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting.length} ใบ</span>` : ''}</h2>
-          <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
+          <span class="actions-row">
+            ${cancelledCount ? `<button type="button" class="btn secondary sm" id="pc-show-cancelled" aria-pressed="${showCancelled}">${showCancelled ? 'ซ่อน' : 'แสดง'}รายการที่ยกเลิกแล้ว (${cancelledCount})</button>` : ''}
+            <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
+          </span>
         </div>
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr><th>เลขที่</th><th>วันที่ใบเสร็จ</th><th>ร้าน/ผู้ขาย</th><th class="num">รายการ</th><th class="num">ยอดสุทธิ</th><th class="num" title="ส่วนที่ซื้อมาใช้ในกิจการ (ต้นทุน)">ใช้ในกิจการ</th><th title="หลักฐานใบเสร็จ: รูปภาพ / ไฟล์ .md">หลักฐาน</th><th>บันทึกโดย</th><th></th></tr></thead>
             <tbody>
-              ${docs.map((d) => `
+              ${docs.filter((d) => showCancelled || !isCancelled(d)).map((d) => `
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
                   <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}
                     ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}
@@ -787,6 +793,11 @@ export async function render(container) {
             draw();
         };
         container.querySelector('#pc-reset')?.addEventListener('click', resetForm);
+        container.querySelector('#pc-show-cancelled')?.addEventListener('click', () => {
+            showCancelled = !showCancelled;
+            try { localStorage.setItem('purchase.showCancelled', showCancelled ? '1' : '0'); } catch (e) { /* private mode */ }
+            draw();
+        });
         container.querySelector('#pc-open').addEventListener('click', () => {
             formOpen = true;
             error = null;
