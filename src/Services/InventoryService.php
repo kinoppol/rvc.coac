@@ -235,6 +235,173 @@ class InventoryService
     }
 
     /**
+     * The document behind a stock movement, shaped for the drill-down dialog
+     * ({title, note, sections: [{title, columns, rows}]}). Null when it does not exist.
+     */
+    public function document(string $kind, string $docNo): ?array
+    {
+        $one = function (string $sql) use ($docNo) {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([$docNo]);
+            return $stmt->fetch() ?: null;
+        };
+        $all = function (string $sql, int $id) {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([$id]);
+            return $stmt->fetchAll();
+        };
+        $date = fn ($d) => $d ? date('d/m/', strtotime((string) $d)) . ((int) date('Y', strtotime((string) $d)) + 543) : '-';
+        $dateTime = fn ($d) => $d ? $date($d) . ' ' . date('H:i', strtotime((string) $d)) : '-';
+
+        switch ($kind) {
+            case 'purchase':
+                $d = $one("SELECT pd.*, u.full_name FROM purchase_documents pd LEFT JOIN users u ON u.id = pd.user_id WHERE pd.doc_no = ?");
+                if (!$d) {
+                    return null;
+                }
+                $items = $all(
+                    "SELECT COALESCE(p.name, pi.receipt_name) AS product, pi.receipt_name, IF(pi.item_type = 'supply', 'วัสดุใช้ในร้าน', 'สินค้า') AS type,
+                            pi.qty, pi.pack_size, pi.units, pi.piece_cost, pi.line_total, pi.sale_price
+                     FROM purchase_items pi LEFT JOIN products p ON p.id = pi.product_id WHERE pi.purchase_document_id = ? ORDER BY pi.id",
+                    (int) $d['id']
+                );
+                return [
+                    'title' => 'ใบซื้อสินค้าเข้าร้าน ' . $d['doc_no'],
+                    'link' => 'purchase',
+                    'note' => sprintf(
+                        'ผู้ขาย %s · ใบเสร็จเลขที่ %s ลงวันที่ %s · ยอดรวม ฿%s (ส่วนลด ฿%s, VAT ฿%s) · บันทึกโดย %s เมื่อ %s%s%s',
+                        $d['supplier_name'], $d['receipt_no'] ?: '-', $date($d['receipt_date']), number_format((float) $d['total'], 2),
+                        number_format((float) $d['discount'], 2), number_format((float) $d['vat'], 2), $d['full_name'] ?? '-', $dateTime($d['created_at']),
+                        ($d['status'] ?? 'active') === 'cancelled' ? ' · ยกเลิกแล้ว' : '', $d['note'] ? ' · หมายเหตุ: ' . $d['note'] : ''
+                    ),
+                    'sections' => [['title' => 'รายการในใบเสร็จ', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['receipt_name', 'ชื่อในใบเสร็จ', 'text'], ['type', 'ประเภท', 'text'], ['qty', 'จำนวน', 'qty'],
+                        ['pack_size', 'ชิ้น/แพ็ค', 'qty'], ['units', 'รวมชิ้น', 'qty'], ['piece_cost', 'ทุน/ชิ้น', 'money'], ['line_total', 'รวมเงิน', 'money'],
+                    ], 'rows' => $items]],
+                ];
+
+            case 'sale':
+            case 'pos':
+                $d = $one(
+                    "SELECT s.*, u.full_name, pim.source_label FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
+                     LEFT JOIN pos_imports pim ON pim.sale_id = s.id WHERE s.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                $items = $all(
+                    "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, si.qty, si.unit_price,
+                            ROUND(si.qty * si.unit_price, 2) AS amount, si.cost_amount
+                     FROM sale_items si JOIN products p ON p.id = si.product_id LEFT JOIN consignors c ON c.id = si.consignor_id
+                     WHERE si.sale_id = ? ORDER BY si.id",
+                    (int) $d['id']
+                );
+                $pay = $all('SELECT method, amount FROM sale_payments WHERE sale_id = ? ORDER BY id', (int) $d['id']);
+                $methods = ['cash' => 'เงินสด', 'transfer' => 'โอน', 'qr' => 'QR', 'card' => 'บัตร'];
+                return [
+                    'title' => ($d['source_label'] !== null || $kind === 'pos' ? 'ยอดขายนำเข้าจาก POS ' : 'บิลขาย ') . $d['doc_no'],
+                    'link' => $kind === 'pos' ? 'posimport' : null,
+                    'note' => sprintf(
+                        'วันที่ขาย %s · เวลาขาย %s · ยอดรวม ฿%s%s · บันทึกโดย %s เมื่อ %s%s%s',
+                        $date($d['business_date'] ?? $d['sale_datetime']), $dateTime($d['sale_datetime']), number_format((float) $d['total_value'], 2),
+                        $pay ? ' (' . implode(', ', array_map(fn ($p) => ($methods[$p['method']] ?? $p['method']) . ' ฿' . number_format((float) $p['amount'], 2), $pay)) . ')' : '',
+                        $d['full_name'] ?? '-', $dateTime($d['created_at']),
+                        !empty($d['after_hours']) ? ' · ขายหลังปิดร้าน' : '', $d['source_label'] ? ' · ไฟล์: ' . $d['source_label'] : ''
+                    ),
+                    'sections' => [['title' => 'รายการขาย', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['owner', 'เจ้าของ', 'text'], ['qty', 'จำนวน', 'qty'], ['unit_price', 'ราคา/ชิ้น', 'money'],
+                        ['amount', 'รวมเงิน', 'money'], ['cost_amount', 'ต้นทุนขาย', 'money'],
+                    ], 'rows' => $items]],
+                ];
+
+            case 'receive':
+                $d = $one(
+                    "SELECT rd.*, u.full_name, c.code, c.name AS consignor FROM receive_documents rd LEFT JOIN users u ON u.id = rd.user_id
+                     LEFT JOIN consignors c ON c.id = rd.consignor_id WHERE rd.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                return [
+                    'title' => 'ใบรับฝากสินค้า ' . $d['doc_no'],
+                    'link' => 'receive',
+                    'note' => sprintf(
+                        'ผู้ฝาก %s - %s · วันที่รับ %s · รวม %s ชิ้น มูลค่า ฿%s · ค่าทำข้อมูล ฿%s · บันทึกโดย %s',
+                        $d['code'], $d['consignor'], $dateTime($d['created_at']), number_format((int) $d['total_qty']),
+                        number_format((float) $d['total_value'], 2), number_format((float) $d['listing_fee_total'], 2), $d['full_name'] ?? '-'
+                    ),
+                    'sections' => [['title' => 'รายการรับฝาก', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['qty', 'จำนวน', 'qty'], ['cost', 'ผู้ฝากได้/ชิ้น', 'money'], ['sale_price', 'ราคาขาย', 'money'],
+                        ['fee_per_unit', 'ค่าฝากขาย/ชิ้น', 'money'], ['listing_fee_charged', 'ค่าทำข้อมูล', 'money'],
+                    ], 'rows' => $all(
+                        'SELECT p.name AS product, ri.qty, ri.cost_price AS cost, ri.sale_price, ri.fee_per_unit, ri.listing_fee_charged
+                         FROM receive_items ri JOIN products p ON p.id = ri.product_id WHERE ri.receive_document_id = ? ORDER BY ri.id',
+                        (int) $d['id']
+                    )]],
+                ];
+
+            case 'return':
+                $d = $one(
+                    "SELECT rd.*, u.full_name, c.code, c.name AS consignor FROM return_documents rd LEFT JOIN users u ON u.id = rd.user_id
+                     LEFT JOIN consignors c ON c.id = rd.consignor_id WHERE rd.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                return [
+                    'title' => 'ใบคืนสินค้าผู้ฝาก ' . $d['doc_no'],
+                    'link' => 'ret',
+                    'note' => sprintf(
+                        'ผู้ฝาก %s - %s · ผู้รับคืน %s · วันที่คืน %s · รวม %s ชิ้น · บันทึกโดย %s',
+                        $d['code'], $d['consignor'], $d['recipient_name'] ?: '-', $dateTime($d['created_at']),
+                        number_format((int) $d['total_qty']), $d['full_name'] ?? '-'
+                    ),
+                    'sections' => [['title' => 'รายการคืน', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['qty', 'จำนวน', 'qty'], ['sale_price', 'ราคาขาย', 'money'], ['amount', 'มูลค่า', 'money'],
+                    ], 'rows' => $all(
+                        'SELECT p.name AS product, ri.qty, ri.sale_price, ROUND(ri.qty * ri.sale_price, 2) AS amount
+                         FROM return_items ri JOIN products p ON p.id = ri.product_id WHERE ri.return_document_id = ? ORDER BY ri.id',
+                        (int) $d['id']
+                    )]],
+                ];
+
+            case 'count':
+                $d = $one(
+                    "SELECT sc.*, cu.full_name AS creator, au.full_name AS approver FROM stock_counts sc
+                     LEFT JOIN users cu ON cu.id = sc.created_by LEFT JOIN users au ON au.id = sc.approved_by WHERE sc.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                $items = $all(
+                    "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, sci.system_qty, sci.counted_qty, sci.diff_qty,
+                            ROUND(sci.diff_qty * p.cost_price, 2) AS diff_cost, sci.note
+                     FROM stock_count_items sci JOIN products p ON p.id = sci.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
+                     WHERE sci.stock_count_id = ? AND sci.counted_qty IS NOT NULL ORDER BY (sci.diff_qty <> 0) DESC, p.name",
+                    (int) $d['id']
+                );
+                $statuses = ['draft' => 'กำลังนับ', 'submitted' => 'ส่งรายงานแล้ว', 'approved' => 'อนุมัติแล้ว', 'cancelled' => 'ยกเลิก'];
+                return [
+                    'title' => 'รอบตรวจนับสต๊อก ' . $d['doc_no'],
+                    'note' => sprintf(
+                        'วันที่นับ %s · สถานะ %s · เปิดรอบโดย %s · อนุมัติโดย %s เมื่อ %s',
+                        $date($d['count_date']), $statuses[$d['status']] ?? $d['status'], $d['creator'] ?? '-', $d['approver'] ?? '-', $dateTime($d['approved_at'])
+                    ),
+                    'sections' => [
+                        ['title' => 'สินค้าที่นับไม่ตรงกับระบบ', 'columns' => [
+                            ['product', 'สินค้า', 'text'], ['owner', 'เจ้าของ', 'text'], ['system_qty', 'ในระบบ', 'qty'], ['counted_qty', 'นับได้', 'qty'],
+                            ['diff_qty', 'ผลต่าง', 'qty'], ['diff_cost', 'มูลค่าทุนผลต่าง', 'money'], ['note', 'หมายเหตุ', 'text'],
+                        ], 'rows' => array_values(array_filter($items, fn ($r) => (int) $r['diff_qty'] !== 0))],
+                        ['title' => 'สินค้าที่นับตรง', 'total' => false, 'columns' => [
+                            ['product', 'สินค้า', 'text'], ['owner', 'เจ้าของ', 'text'], ['counted_qty', 'นับได้', 'qty'],
+                        ], 'rows' => array_values(array_filter($items, fn ($r) => (int) $r['diff_qty'] === 0))],
+                    ],
+                ];
+        }
+        return null;
+    }
+
+    /**
      * Store sales booked with no cost (sold before the goods were ever bought in, so the
      * product had no cost yet), per product, priced at the piece cost of the product's
      * first purchase. Products never bought in are left out: there is no cost to use.

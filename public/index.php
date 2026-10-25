@@ -264,6 +264,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('reports.view'));
     $group->get('/inventory/{id:[0-9]+}/movements', [InventoryController::class, 'movements'])
         ->add(new RoleGuard('reports.view'));
+    $group->get('/inventory/document', [InventoryController::class, 'document'])
+        ->add(new RoleGuard('reports.view'));
     $group->get('/inventory/zero-cost', [InventoryController::class, 'zeroCost'])
         ->add(new RoleGuard('reports.view'));
     $group->post('/inventory/zero-cost', [InventoryController::class, 'fillZeroCost'])

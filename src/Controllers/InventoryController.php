@@ -40,6 +40,17 @@ class InventoryController
         return $this->json($response, ['data' => $data]);
     }
 
+    /** The document behind one stock movement (?kind=purchase|receive|sale|pos|return|count&doc_no=...). */
+    public function document(Request $request, Response $response): Response
+    {
+        $q = $request->getQueryParams();
+        $data = (new InventoryService(Db::connection()))->document((string) ($q['kind'] ?? ''), trim((string) ($q['doc_no'] ?? '')));
+        if ($data === null) {
+            return $this->error($response, 'ไม่พบเอกสาร', 404);
+        }
+        return $this->json($response, ['data' => $data]);
+    }
+
     /** Admin / manager: store sales with no cost that a first purchase can now cost (preview). */
     public function zeroCost(Request $request, Response $response): Response
     {

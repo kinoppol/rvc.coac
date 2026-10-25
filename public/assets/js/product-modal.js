@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime } from './util.js';
 import { alertDialog } from './dialog.js';
 import { skBlock } from './skeleton.js';
+import { openDetailModal } from './detail-modal.js';
 
 // Product card: basic details and every document that moved its stock (purchase, consignment
 // receipt, sale, return to the consignor, stock count) with the balance after each, up to now.
@@ -27,7 +28,7 @@ function info(label, value) {
     return `<div class="pm-info"><div class="muted">${escapeHtml(label)}</div><div>${value}</div></div>`;
 }
 
-export async function openProductModal(productId) {
+export async function openProductModal(productId, navigate) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:960px"><div class="modal-body">' + skBlock(6, 8) + '</div></div>';
@@ -65,7 +66,7 @@ export async function openProductModal(productId) {
                   ${r.late ? `<div class="pm-late" title="บันทึกเข้าระบบหลังวันที่ในเอกสาร">บันทึกล่าช้า ${escapeHtml(fmtDateTime(r.at))}</div>`
                       : r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : ''}</td>
                 <td><span class="pill ${tone}">${label}</span></td>
-                <td style="white-space:nowrap">${r.doc_no ? escapeHtml(r.doc_no) : '<span class="muted">-</span>'}
+                <td style="white-space:nowrap">${r.doc_no ? `<button type="button" class="prod-link" data-doc="${escapeHtml(r.kind)}|${escapeHtml(r.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(r.doc_no)}</button>` : '<span class="muted">-</span>'}
                   ${r.user_name ? `<div class="muted" style="font-size:11.5px">${escapeHtml(r.user_name)}</div>` : ''}</td>
                 <td style="font-size:12.5px">${detail || '<span class="muted">-</span>'}</td>
                 <td class="num pm-in">${r.qty_in ? count(r.qty_in) : ''}</td>
@@ -130,6 +131,13 @@ export async function openProductModal(productId) {
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         box.querySelectorAll('[data-group]').forEach((b) => b.addEventListener('click', () => { group = b.dataset.group; draw(); }));
+        box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => {
+            const [kind, docNo] = b.dataset.doc.split('|');
+            openDetailModal(
+                async () => (await api.get(`/inventory/document?kind=${encodeURIComponent(kind)}&doc_no=${encodeURIComponent(docNo)}`)).data,
+                navigate && ((page) => { close(); navigate(page); }),
+            );
+        }));
         box.querySelector('[data-order]').addEventListener('click', () => { newestFirst = !newestFirst; draw(); });
     }
     draw();

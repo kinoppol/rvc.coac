@@ -9,7 +9,7 @@ import { skBlock } from './skeleton.js';
 const LINK_LABEL = {
     drawer: 'ไปที่เงินในลิ้นชัก / ปิดยอด', passbook: 'ไปที่สมุดบัญชีผู้ฝาก', withdraw: 'ไปที่เบิก / จ่ายเงิน',
     ret: 'ไปที่คืนสินค้าผู้ฝาก', purchase: 'ไปที่ซื้อสินค้าเข้าร้าน', inventory: 'ไปที่สต๊อกสินค้าของร้าน',
-    receive: 'ไปที่รับฝากสินค้า', wages: 'ไปที่ค่าแรงพนักงาน', capital: 'ไปที่เงินลงทุน',
+    receive: 'ไปที่รับฝากสินค้า', wages: 'ไปที่ค่าแรงพนักงาน', capital: 'ไปที่เงินลงทุน', posimport: 'ไปที่นำเข้ายอดขายจาก POS',
 };
 
 function cell(type, v) {
