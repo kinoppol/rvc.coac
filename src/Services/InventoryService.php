@@ -89,7 +89,7 @@ class InventoryService
                 FROM purchase_items pi
                 JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
                 LEFT JOIN users u ON u.id = pd.user_id
-                WHERE pi.product_id IN (%1$s) AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
+                WHERE pi.product_id IN (%1\$s) AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
               UNION ALL
                 SELECT ri.product_id, rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty,
                        ri.cost_price, ROUND(ri.qty * ri.cost_price, 2), NULL, NULL, NULL, 1, ri.id
@@ -97,7 +97,7 @@ class InventoryService
                 JOIN receive_documents rd ON rd.id = ri.receive_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1$s)
+                WHERE ri.product_id IN (%1\$s)
               UNION ALL
                 SELECT si.product_id, s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
                        IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
@@ -106,7 +106,7 @@ class InventoryService
                 FROM sale_items si
                 JOIN sales s ON s.id = si.sale_id
                 LEFT JOIN users u ON u.id = s.cashier_id
-                WHERE si.product_id IN (%1$s)
+                WHERE si.product_id IN (%1\$s)
               UNION ALL
                 SELECT ri.product_id, rd.created_at, DATE(rd.created_at), 'return', rd.doc_no, COALESCE(NULLIF(rd.recipient_name, ''), c.name), u.full_name,
                        -ri.qty, NULL, NULL, NULL, NULL, NULL, 2, ri.id
@@ -114,14 +114,14 @@ class InventoryService
                 JOIN return_documents rd ON rd.id = ri.return_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1$s)
+                WHERE ri.product_id IN (%1\$s)
               UNION ALL
                 SELECT sci.product_id, sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
                        NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
                 FROM stock_count_items sci
                 JOIN stock_counts sc ON sc.id = sci.stock_count_id
                 LEFT JOIN users u ON u.id = sc.approved_by
-                WHERE sci.product_id IN (%1$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
+                WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
             $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?'
         ));
