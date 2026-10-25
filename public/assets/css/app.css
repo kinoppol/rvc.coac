@@ -748,3 +748,8 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-pack-pill { font-size: 10.5px; padding: 1px 7px; vertical-align: middle; }
 .pos-pack-adds { display: block; margin-top: 2px; font-size: 12px; }
 .pos-pack-adds .link-btn { font-size: 12px; padding: 0; }
+
+/* Assistant: is the attached .md a receipt or an order */
+.ai-doc-kind { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; width: 100%; font-size: 12.5px; color: var(--text); }
+.ai-doc-kind label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.ai-doc-kind small { color: var(--muted); }

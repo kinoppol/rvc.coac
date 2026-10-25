@@ -218,6 +218,84 @@ class PurchaseService
     }
 
     /**
+     * Goods ordered from a supplier who delivers later: saved with its lines as entered
+     * (order_items) and no stock or cost change until the delivery is confirmed.
+     */
+    public function createOrder(array $header, array $items, array $attachments, string $source, int $userId, ?string $ip): array
+    {
+        [$h, $lines] = $this->validate($header, $items);
+
+        $this->db->beginTransaction();
+        try {
+            $docNo = $this->docs->next('PO', 'purchase_documents', 'doc_no');
+            $this->db->prepare(
+                "INSERT INTO purchase_documents
+                    (doc_no, supplier_name, supplier_tax_id, receipt_no, receipt_date, subtotal, discount, vat, total, total_qty, note, source,
+                     status, order_items, ordered_at, ordered_by, user_id, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, NOW(), ?, ?, NOW())"
+            )->execute([
+                $docNo, $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'],
+                $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'],
+                $source === 'ai' ? 'ai' : 'manual', json_encode(array_values($items), JSON_UNESCAPED_UNICODE), $userId, $userId,
+            ]);
+            $docId = (int) $this->db->lastInsertId();
+            $this->saveFunding($docId, $h['funding']);
+            $this->attachments->linkToPurchase($attachments, $docId);
+            $this->audit->log('purchase_documents', $docId, 'create', null, [
+                'doc_no' => $docNo, 'status' => 'ordered', 'supplier_name' => $h['supplier_name'], 'total' => $h['total'], 'items' => count($lines),
+            ], $userId, $ip);
+            $this->db->commit();
+            return ['id' => $docId, 'doc_no' => $docNo, 'ordered' => true, 'total' => $h['total'], 'items' => count($lines), 'total_qty' => $h['total_qty']];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** Changes an order that has not been delivered yet (no stock is involved). */
+    private function updateOrder(array $doc, array $h, array $items, array $keepTokens, array $newAttachments, int $userId, ?string $ip): array
+    {
+        $this->db->prepare(
+            'UPDATE purchase_documents SET supplier_name = ?, supplier_tax_id = ?, receipt_no = ?, receipt_date = ?,
+                subtotal = ?, discount = ?, vat = ?, total = ?, total_qty = ?, note = ?, order_items = ? WHERE id = ?'
+        )->execute([
+            $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'], $h['subtotal'], $h['discount'],
+            $h['vat'], $h['total'], $h['total_qty'], $h['note'], json_encode(array_values($items), JSON_UNESCAPED_UNICODE), $doc['id'],
+        ]);
+        $this->saveFunding((int) $doc['id'], $h['funding']);
+        $this->relinkAttachments((int) $doc['id'], $keepTokens, $newAttachments);
+        $this->audit->log('purchase_documents', (int) $doc['id'], 'update',
+            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => (float) $doc['total']],
+            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => $h['total'], 'items' => count($items)], $userId, $ip);
+        return ['id' => (int) $doc['id'], 'doc_no' => $doc['doc_no'], 'ordered' => true, 'total' => $h['total'], 'items' => count($items), 'total_qty' => $h['total_qty']];
+    }
+
+    /**
+     * The ordered goods arrived: the lines (as checked against the delivery) go into stock
+     * like a new purchase, and the document becomes an ordinary purchase recorded now.
+     */
+    private function receiveOrder(array $doc, array $h, array $lines, array $keepTokens, array $newAttachments, int $userId, ?string $ip): array
+    {
+        $id = (int) $doc['id'];
+        $result = $this->applyLines($id, $lines, [], $userId, $ip);
+        $this->db->prepare(
+            "UPDATE purchase_documents SET supplier_name = ?, supplier_tax_id = ?, receipt_no = ?, receipt_date = ?,
+                subtotal = ?, discount = ?, vat = ?, total = ?, total_qty = ?, note = ?, status = 'active', user_id = ?, created_at = NOW()
+             WHERE id = ?"
+        )->execute([
+            $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'], $h['subtotal'], $h['discount'],
+            $h['vat'], $h['total'], $h['total_qty'], $h['note'], $userId, $id,
+        ]);
+        $this->saveFunding($id, $h['funding']);
+        $this->relinkAttachments($id, $keepTokens, $newAttachments);
+        $this->audit->log('purchase_documents', $id, 'update',
+            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => (float) $doc['total']],
+            ['doc_no' => $doc['doc_no'], 'status' => 'active', 'note' => 'ยืนยันรับสินค้าตามใบสั่งซื้อเข้าสต๊อก', 'total' => $h['total'], 'items' => count($lines)],
+            $userId, $ip);
+        return ['id' => $id, 'doc_no' => $doc['doc_no'], 'received' => true, 'subtotal' => $h['subtotal'], 'supply_total' => $this->supplyTotal($lines), 'total' => $h['total'], 'items' => $result];
+    }
+
+    /**
      * Edits a saved purchase in place (same doc no.): the old lines are taken
      * back out of stock (and out of the moving-average cost), then the edited
      * lines are applied as on create. Stock may end up negative when the goods
@@ -226,13 +304,20 @@ class PurchaseService
      * @param string[] $keepTokens photos already on this purchase to keep
      * @param array[] $newAttachments rows from AttachmentService::ownedBy() to add
      */
-    public function update(int $id, array $header, array $items, array $keepTokens, array $newAttachments, int $userId, ?string $ip): array
+    public function update(int $id, array $header, array $items, array $keepTokens, array $newAttachments, int $userId, ?string $ip, bool $receive = false): array
     {
         [$h, $lines] = $this->validate($header, $items);
 
         $this->db->beginTransaction();
         try {
             [$doc, $old] = $this->lockActive($id, 'แก้ไข');
+            if ($doc['status'] === 'ordered') {
+                $result = $receive
+                    ? $this->receiveOrder($doc, $h, $lines, $keepTokens, $newAttachments, $userId, $ip)
+                    : $this->updateOrder($doc, $h, $items, $keepTokens, $newAttachments, $userId, $ip);
+                $this->db->commit();
+                return $result;
+            }
 
             // 1) Undo the old lines, 2) apply the edited ones.
             $stockBefore = $this->stockOf(array_column($old['items'], 'product_id'));
@@ -295,14 +380,16 @@ class PurchaseService
         $this->db->beginTransaction();
         try {
             [$doc, $old] = $this->lockActive($id, 'ยกเลิก');
-            $stockBefore = $this->stockOf(array_column($old['items'], 'product_id'));
-            $createdHere = $this->reverseLines($old['items'], $userId, $ip);
+            // An order never delivered moved no stock: nothing to take back.
+            $ordered = $doc['status'] === 'ordered';
+            $stockBefore = $ordered ? [] : $this->stockOf(array_column($old['items'], 'product_id'));
+            $createdHere = $ordered ? [] : $this->reverseLines($old['items'], $userId, $ip);
             // Stock may go below zero; a product counted on or after the receipt date keeps the counted stock.
             $this->keepCountedStock($stockBefore, (string) ($doc['receipt_date'] ?: substr((string) $doc['created_at'], 0, 10)), $userId, $ip);
             $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
                 'product_id', 'product_name', 'item_type', 'receipt_name', 'barcode', 'qty', 'unit_cost', 'pack_size', 'units',
                 'piece_cost', 'line_total', 'sale_price', 'is_new_product',
-            ])), $old['items']);
+            ])), $old['items']); // an order not delivered: its ordered lines (find() shapes them the same way)
             $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
             $this->removeUnusedCreated($createdHere, [], $userId, $ip);
             $this->db->prepare(
@@ -312,7 +399,7 @@ class PurchaseService
                 ['doc_no' => $doc['doc_no'], 'total' => (float) $doc['total'], 'items' => count($old['items'])],
                 ['status' => 'cancelled', 'reason' => $reason], $userId, $ip);
             $this->db->commit();
-            return ['id' => $id, 'doc_no' => $doc['doc_no'], 'items' => count($old['items']), 'units' => array_sum(array_map(
+            return ['id' => $id, 'doc_no' => $doc['doc_no'], 'ordered' => $ordered, 'items' => count($old['items']), 'units' => $ordered ? 0 : array_sum(array_map(
                 fn ($it) => $it['item_type'] === 'stock' ? (int) $it['units'] : 0, $old['items']
             ))];
         } catch (\Throwable $e) {
@@ -627,14 +714,39 @@ class PurchaseService
         $stmt->execute();
         return array_map(function ($d) {
             // A cancelled purchase has no lines left; show the counts from its snapshot.
-            if (($d['status'] ?? 'active') === 'cancelled') {
-                $items = json_decode((string) $d['cancelled_items'], true) ?: [];
+            // An order not delivered yet has no lines either: count from what was ordered.
+            $snapshot = match ($d['status'] ?? 'active') {
+                'cancelled' => (string) $d['cancelled_items'],
+                'ordered' => (string) ($d['order_items'] ?? ''),
+                default => null,
+            };
+            if ($snapshot !== null) {
+                $items = json_decode($snapshot, true) ?: [];
                 $d['item_count'] = count($items);
-                $d['supply_total'] = round(array_sum(array_map(fn ($i) => $i['item_type'] === 'supply' ? (float) $i['line_total'] : 0, $items)), 2);
+                $d['supply_total'] = round(array_sum(array_map(fn ($i) => ($i['item_type'] ?? 'stock') === 'supply' ? (float) $i['line_total'] : 0, $items)), 2);
             }
-            unset($d['cancelled_items']);
+            unset($d['cancelled_items'], $d['order_items']);
             return $d;
         }, $stmt->fetchAll());
+    }
+
+    /** Ordered lines (as the form sent them) in the shape of purchase_items rows, for showing. */
+    private function orderLinesForView(array $lines): array
+    {
+        return array_map(function ($l) {
+            $qty = (int) ($l['qty'] ?? 0);
+            $size = max(1, (int) ($l['pack_size'] ?? 1));
+            $total = (float) ($l['line_total'] ?? 0);
+            $units = $qty * $size;
+            return [
+                'product_id' => $l['product_id'] ?? null, 'product_name' => $l['product_name'] ?? null,
+                'item_type' => ($l['item_type'] ?? 'stock') === 'supply' ? 'supply' : 'stock',
+                'receipt_name' => (string) ($l['name'] ?? ''), 'barcode' => $l['barcode'] ?? '', 'qty' => $qty,
+                'unit_cost' => (float) ($l['unit_cost'] ?? 0), 'pack_size' => $size, 'units' => $units,
+                'piece_cost' => $units > 0 ? round($total / $units, 2) : 0, 'line_total' => $total,
+                'sale_price' => $l['sale_price'] ?? null, 'is_new_product' => empty($l['product_id']) ? 1 : 0,
+            ];
+        }, $lines);
     }
 
     public function find(int $id): ?array
@@ -657,7 +769,15 @@ class PurchaseService
             $by->execute([(int) $doc['cancelled_by']]);
             $doc['cancelled_by_name'] = $by->fetchColumn() ?: null;
         }
-        unset($doc['cancelled_items']);
+        if (($doc['status'] ?? 'active') === 'ordered') {
+            // The lines as entered (the form reloads them) and as they will go into stock.
+            $doc['order_lines'] = json_decode((string) $doc['order_items'], true) ?: [];
+            $doc['items'] = $this->orderLinesForView($doc['order_lines']);
+            $by = $this->db->prepare('SELECT full_name FROM users WHERE id = ?');
+            $by->execute([(int) $doc['ordered_by']]);
+            $doc['ordered_by_name'] = $by->fetchColumn() ?: null;
+        }
+        unset($doc['cancelled_items'], $doc['order_items']);
         $doc['images'] = array_map([$this->attachments, 'publicInfo'], $this->attachments->forPurchase($id));
         return $doc;
     }

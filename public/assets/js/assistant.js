@@ -230,6 +230,11 @@ function render() {
           ${s.documents.map((d, i) => `
             <div class="ai-doc">📄 ${escapeHtml(d.name)} <span class="muted">${Math.max(1, Math.round(d.size / 1024))} KB</span>
               <button type="button" data-undoc="${i}" title="เอาไฟล์ออก">✕</button></div>`).join('')}
+          ${s.documents.length && s.canPurchase ? `
+            <div class="ai-doc-kind" role="radiogroup" aria-label="ไฟล์ที่แนบเป็นเอกสารแบบไหน">ไฟล์นี้เป็น
+              <label><input type="radio" name="ai-doc-kind" value="receipt" ${s.docKind !== 'order' ? 'checked' : ''}> ใบเสร็จ <small>(ได้รับของแล้ว เข้าสต๊อก)</small></label>
+              <label><input type="radio" name="ai-doc-kind" value="order" ${s.docKind === 'order' ? 'checked' : ''}> ใบสั่งของ <small>(รอร้านมาส่ง ยังไม่เข้าสต๊อก)</small></label>
+            </div>` : ''}
           ${s.photos.map((p, i) => `
             <div class="ai-photo"><img src="${escapeHtml(p.preview)}" alt="รูปที่ ${i + 1}"><span>${i + 1}</span>
               <button type="button" data-unphoto="${i}" title="เอารูปออก">✕</button></div>`).join('')}
@@ -301,6 +306,7 @@ function bind() {
     });
     const fileInput = el.querySelector('#ai-file');
     fileInput?.addEventListener('change', () => addFiles([...fileInput.files]));
+    el.querySelectorAll('input[name="ai-doc-kind"]').forEach((r) => r.addEventListener('change', () => { s.docKind = r.value; }));
     el.querySelectorAll('[data-undoc]').forEach((b) => b.addEventListener('click', () => {
         s.documents.splice(Number(b.dataset.undoc), 1);
         render();
@@ -438,8 +444,11 @@ async function send(text) {
     }
     if (s.documents.length) {
         msg.documents = s.documents.map(({ name, content }) => ({ name, content }));
-        if (!msg.content) msg.content = 'สรุป/นำเข้าข้อมูลจากไฟล์ที่แนบ';
+        // A receipt (goods in hand) or an order (the supplier delivers later; saved without stock).
+        msg.docKind = s.canPurchase && s.docKind === 'order' ? 'order' : 'receipt';
+        if (!msg.content) msg.content = msg.docKind === 'order' ? 'นำเข้าใบสั่งของจากไฟล์ที่แนบ (รอร้านมาส่ง)' : 'สรุป/นำเข้าข้อมูลจากไฟล์ที่แนบ';
         s.documents = [];
+        s.docKind = 'receipt';
     }
     s.messages.push(msg);
     if (msg.documents && s.canPurchase && await importReceipts(msg)) return;
@@ -512,8 +521,8 @@ async function importReceipts(msg) {
             doc.imported = true;
         }
 
-        step('กำลังจับคู่สินค้ากับสต๊อกและเตรียมร่างใบซื้อ...');
-        const res = await api.post('/ai/receipt/draft', { receipts, model_label: modelLabel() });
+        step(msg.docKind === 'order' ? 'กำลังจับคู่สินค้ากับสต๊อกและเตรียมร่างใบสั่งซื้อ...' : 'กำลังจับคู่สินค้ากับสต๊อกและเตรียมร่างใบซื้อ...');
+        const res = await api.post('/ai/receipt/draft', { receipts, model_label: modelLabel(), kind: msg.docKind || 'receipt' });
         if (ctx !== mine) return true;
         s.messages.push(res.message);
         s.pending = res.pending_actions || [];

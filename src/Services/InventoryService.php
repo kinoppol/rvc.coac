@@ -79,7 +79,8 @@ class InventoryService
      * Documents that moved stock: one product, or every store product when null.
      * Stock card in document order: the date printed on each document (a receipt keyed in a
      * week late still sits on its own day), then receipts before issues on the same day.
-     * qty is +in / -out; a count's qty is its adjustment (counted - system qty when counted).
+     * qty is +in / -out; an approved count sets the balance to what was counted (counted_qty):
+     * the counted figure is the stock on hand, whatever the documents before it add up to.
      */
     private function stockEvents(?int $productId): array
     {
@@ -124,7 +125,7 @@ class InventoryService
                 FROM stock_count_items sci
                 JOIN stock_counts sc ON sc.id = sci.stock_count_id
                 LEFT JOIN users u ON u.id = sc.approved_by
-                WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
+                WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
             $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?'
         ));
@@ -180,7 +181,8 @@ class InventoryService
             ]);
         }
         foreach ($events as $e) {
-            $qty = (int) $e['qty'];
+            // A count sets the balance; its movement is whatever it takes to get there.
+            $qty = $e['kind'] === 'count' ? (int) $e['counted_qty'] - $balance : (int) $e['qty'];
             $balance += $qty;
             $note = null;
             if ($e['kind'] === 'count') {
@@ -290,7 +292,7 @@ class InventoryService
             $minDoc = null;
             $balance = $opening;
             foreach ($events as $e) {
-                $balance += (int) $e['qty'];
+                $balance = $e['kind'] === 'count' ? (int) $e['counted_qty'] : $balance + (int) $e['qty'];
                 if ($balance < 0 && ($minDoc === null || $balance < $minDoc['balance'])) {
                     $minDoc = ['balance' => $balance, 'date' => $e['date'], 'doc_no' => $e['doc_no']];
                 }
@@ -301,7 +303,7 @@ class InventoryService
             $minRec = null;
             $balance = $opening;
             foreach ($byTime as $e) {
-                $balance += (int) $e['qty'];
+                $balance = $e['kind'] === 'count' ? (int) $e['counted_qty'] : $balance + (int) $e['qty'];
                 if ($balance < 0 && ($minRec === null || $balance < $minRec['balance'])) {
                     $minRec = ['balance' => $balance, 'at' => $e['at'], 'doc_no' => $e['doc_no']];
                 }

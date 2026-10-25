@@ -95,7 +95,8 @@ class PurchaseController
         $user = $request->getAttribute('user');
         $images = (new AttachmentService(Db::connection()))->ownedBy((array) ($body['attachments'] ?? []), (int) $user['id']);
         try {
-            $result = self::service()->create(
+            // order: goods ordered for delivery later, saved without touching stock.
+            $result = self::service()->{!empty($body['order']) ? 'createOrder' : 'create'}(
                 (array) ($body['header'] ?? []),
                 (array) ($body['items'] ?? []),
                 $images,
@@ -104,6 +105,9 @@ class PurchaseController
                 $request->getServerParams()['REMOTE_ADDR'] ?? null
             );
         } catch (\RuntimeException $e) {
+            if (!empty($body['order']) && $e instanceof \PDOException) {
+                return $this->error($response, 'ยังบันทึกใบสั่งซื้อไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041) ก่อน', 422);
+            }
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $result], 201);
@@ -125,7 +129,8 @@ class PurchaseController
                 array_values(array_intersect($tokens, $current)),
                 $attachments->ownedBy(array_diff($tokens, $current), (int) $user['id']),
                 (int) $user['id'],
-                $request->getServerParams()['REMOTE_ADDR'] ?? null
+                $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                !empty($body['receive']) // an order: confirm the delivery into stock
             );
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);

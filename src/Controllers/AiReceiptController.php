@@ -142,6 +142,8 @@ class AiReceiptController
         $calls = [];
         $pending = [];
         $lines = [];
+        // An order: the supplier delivers later, so it is saved without stock until received.
+        $order = ($body['kind'] ?? '') === 'order';
         foreach (array_slice((array) ($body['receipts'] ?? []), 0, 5) as $r) {
             if (!is_array($r) || empty($r['items']) || !is_array($r['items'])) {
                 continue;
@@ -161,8 +163,11 @@ class AiReceiptController
                 'discount' => (float) ($s['discount'] ?? 0),
                 'vat' => (float) ($s['vat'] ?? 0),
                 'total' => (float) ($s['total'] ?? 0),
-                'note' => 'นำเข้าจากไฟล์ ' . mb_substr((string) ($r['file_name'] ?? ''), 0, 120),
+                'note' => ($order ? 'ใบสั่งของ นำเข้าจากไฟล์ ' : 'นำเข้าจากไฟล์ ') . mb_substr((string) ($r['file_name'] ?? ''), 0, 120),
             ];
+            if ($order) {
+                $args['order'] = true;
+            }
             if (preg_match('/^[a-f0-9]{32}$/', (string) ($r['attachment'] ?? ''))) {
                 $args['receipt_file'] = $r['attachment'];
             }
@@ -185,7 +190,9 @@ class AiReceiptController
         }
         $message = [
             'role' => 'assistant',
-            'content' => implode("\n\n", $lines) . "\n\nตรวจรายการด้านล่าง แล้วกด **ยืนยัน** เพื่อบันทึกใบซื้อ หรือ **แก้ไขในฟอร์ม** ถ้าต้องการปรับก่อนบันทึก",
+            'content' => implode("\n\n", $lines) . ($order
+                ? "\n\nตรวจรายการด้านล่าง แล้วกด **ยืนยัน** เพื่อบันทึกเป็น**ใบสั่งซื้อ (รอส่งของ)** — สินค้ายังไม่เข้าสต๊อกจนกว่าจะกด ยืนยันรับสินค้า ที่หน้าซื้อสินค้าเข้าร้าน หรือ **แก้ไขในฟอร์ม** ถ้าต้องการปรับก่อนบันทึก"
+                : "\n\nตรวจรายการด้านล่าง แล้วกด **ยืนยัน** เพื่อบันทึกใบซื้อ หรือ **แก้ไขในฟอร์ม** ถ้าต้องการปรับก่อนบันทึก"),
             'tool_calls' => $calls,
             'model' => mb_substr((string) ($body['model_label'] ?? ''), 0, 100),
         ];

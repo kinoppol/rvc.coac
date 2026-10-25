@@ -126,7 +126,7 @@ export async function openProductModal(productId, navigate) {
               <button type="button" class="btn secondary sm" data-order>${newestFirst ? 'ล่าสุดก่อน ▼' : 'เก่าสุดก่อน ▲'}</button>
             </div>
             ${tableHtml()}
-            <div class="muted" style="font-size:12px;margin-top:8px">เรียงตามวันที่ในเอกสาร (วันเดียวกัน: รับก่อนจ่าย แล้วปรับปรุงตรวจนับท้ายวัน) · รายการที่บันทึกล่าช้ายังอยู่ในวันที่ของเอกสาร · ตรวจนับลงผลต่างระหว่างที่นับได้กับยอดในระบบตอนนับ · ใบซื้อ/การนำเข้าที่ถูกยกเลิกไม่แสดง</div>
+            <div class="muted" style="font-size:12px;margin-top:8px">เรียงตามวันที่ในเอกสาร (วันเดียวกัน: รับก่อนจ่าย แล้วปรับปรุงตรวจนับท้ายวัน) · รายการที่บันทึกล่าช้ายังอยู่ในวันที่ของเอกสาร · ตรวจนับ (อนุมัติแล้ว) ตั้งยอดคงเหลือเท่ากับจำนวนที่นับได้ · ใบซื้อ/การนำเข้าที่ถูกยกเลิกไม่แสดง</div>
           </div>
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));

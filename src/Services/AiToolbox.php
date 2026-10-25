@@ -285,6 +285,7 @@ class AiToolbox
             'total' => $args['total'] ?? 0,
         ]);
         $draft['note'] = (string) ($args['note'] ?? '');
+        $draft['order'] = !empty($args['order']); // an order for later delivery (no stock yet)
         $draft['attachments'] = $this->evidenceTokens($args);
         $service = new AttachmentService($this->db);
         $draft['files'] = array_map([$service, 'publicInfo'], $service->ownedBy($draft['attachments'], (int) $this->user['id']));
@@ -361,7 +362,7 @@ class AiToolbox
                 $items = array_filter((array) ($args['items'] ?? []), 'is_array');
                 $sum = array_sum(array_map(fn ($it) => (float) ($it['line_total'] ?? 0) ?: (float) ($it['unit_cost'] ?? 0) * (int) ($it['qty'] ?? 1), $items));
                 return sprintf(
-                    'บันทึกใบซื้อจาก %s%s %d รายการ ยอด ฿%s',
+                    !empty($args['order']) ? 'บันทึกใบสั่งซื้อ (รอส่งของ ยังไม่เข้าสต๊อก) จาก %s%s %d รายการ ยอด ฿%s' : 'บันทึกใบซื้อจาก %s%s %d รายการ ยอด ฿%s',
                     $args['supplier_name'] ?? '-',
                     !empty($args['receipt_no']) ? ' เลขที่ ' . $args['receipt_no'] : '',
                     count($items),
@@ -561,14 +562,16 @@ class AiToolbox
             (new AttachmentService($this->db))->ownedBy($this->evidenceTokens($args), (int) $this->user['id']),
             fn ($a) => $a['purchase_document_id'] === null
         ));
-        $result = $this->purchaseService()->create(
-            array_intersect_key($draft, array_flip(['supplier_name', 'supplier_tax_id', 'receipt_no', 'receipt_date', 'discount', 'vat', 'total', 'note'])),
-            $items,
-            $photos,
-            'ai',
-            (int) $this->user['id'],
-            $this->ip
-        );
+        $header = array_intersect_key($draft, array_flip(['supplier_name', 'supplier_tax_id', 'receipt_no', 'receipt_date', 'discount', 'vat', 'total', 'note']));
+        if ($draft['order']) {
+            $result = $this->purchaseService()->createOrder($header, $items, $photos, 'ai', (int) $this->user['id'], $this->ip);
+            return [
+                'ok' => true, 'ordered' => true, 'doc_no' => $result['doc_no'], 'total' => $result['total'], 'items' => $result['items'],
+                'note' => 'บันทึกเป็นใบสั่งซื้อ รอส่งของ — สินค้ายังไม่เข้าสต๊อก ยืนยันรับสินค้าได้ที่หน้าซื้อสินค้าเข้าร้านเมื่อของมาส่ง',
+                'photos_saved' => count($photos),
+            ];
+        }
+        $result = $this->purchaseService()->create($header, $items, $photos, 'ai', (int) $this->user['id'], $this->ip);
         $new = count(array_filter($result['items'], fn ($i) => $i['new']));
         $supplies = count(array_filter($result['items'], fn ($i) => $i['type'] === 'supply'));
         return [
