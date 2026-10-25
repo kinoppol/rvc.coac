@@ -220,8 +220,9 @@ class PurchaseService
     /**
      * Edits a saved purchase in place (same doc no.): the old lines are taken
      * back out of stock (and out of the moving-average cost), then the edited
-     * lines are applied as on create. Refused if goods already sold would
-     * leave a product with negative stock.
+     * lines are applied as on create. Stock may end up negative when the goods
+     * were already sold; a product counted on or after the receipt date keeps
+     * its counted stock (see keepCountedStock).
      * @param string[] $keepTokens photos already on this purchase to keep
      * @param array[] $newAttachments rows from AttachmentService::ownedBy() to add
      */
@@ -234,15 +235,22 @@ class PurchaseService
             [$doc, $old] = $this->lockActive($id, 'แก้ไข');
 
             // 1) Undo the old lines, 2) apply the edited ones.
+            $stockBefore = $this->stockOf(array_column($old['items'], 'product_id'));
             $createdHere = $this->reverseLines($old['items'], $userId, $ip);
             $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
             $result = $this->applyLines($id, $lines, $createdHere, $userId, $ip);
 
-            // 3) No product may end up below zero (its goods were already sold).
-            $this->assertNoNegativeStock(
-                array_merge(array_column($old['items'], 'product_id'), array_column($result, 'product_id')),
-                'แก้ไขไม่ได้: "%s" ขายหรือนำออกไปแล้ว สต๊อกจะติดลบ %d ชิ้น — ลดจำนวนได้ไม่เกินที่ยังเหลือในสต๊อก'
-            );
+            // 3) Stock may go below zero (the goods were already sold). A product counted on or
+            //    after the receipt date keeps the counted stock.
+            foreach ($result as $r) {
+                // A product only the edited lines bring in: its stock before is now minus what they added.
+                if ($r['type'] === 'stock' && $r['product_id'] && !isset($stockBefore[(int) $r['product_id']]) && !$r['new']) {
+                    $added = array_sum(array_map(fn ($x) => $x['product_id'] === $r['product_id'] ? (int) $x['units'] : 0, $result));
+                    $stockBefore[(int) $r['product_id']] = (int) $this->products->find((int) $r['product_id'])['qty_stock'] - $added;
+                }
+            }
+            $docDate = min((string) ($doc['receipt_date'] ?: substr((string) $doc['created_at'], 0, 10)), (string) ($h['receipt_date'] ?: date('Y-m-d')));
+            $this->keepCountedStock($stockBefore, $docDate, $userId, $ip);
 
             // 4) Products this purchase created that are no longer on it and never moved are removed.
             $this->removeUnusedCreated($createdHere, array_column($result, 'product_id'), $userId, $ip);
@@ -276,7 +284,7 @@ class PurchaseService
      * Cancels a purchase: its goods go back out of stock (and out of the
      * moving-average cost) and its lines stop counting in reports and totals.
      * The document stays, marked cancelled, with a snapshot of its lines.
-     * Refused if some of the goods were already sold.
+     * Stock may end up negative when some of the goods were already sold.
      */
     public function cancel(int $id, string $reason, int $userId, ?string $ip): array
     {
@@ -287,11 +295,10 @@ class PurchaseService
         $this->db->beginTransaction();
         try {
             [$doc, $old] = $this->lockActive($id, 'ยกเลิก');
+            $stockBefore = $this->stockOf(array_column($old['items'], 'product_id'));
             $createdHere = $this->reverseLines($old['items'], $userId, $ip);
-            $this->assertNoNegativeStock(
-                array_column($old['items'], 'product_id'),
-                'ยกเลิกไม่ได้: "%s" ขายหรือนำออกไปแล้ว คงเหลือไม่พอให้หักออก (ขาด %d ชิ้น) — ให้แก้ไขใบซื้อลดเฉพาะส่วนที่ยังเหลือแทน'
-            );
+            // Stock may go below zero; a product counted on or after the receipt date keeps the counted stock.
+            $this->keepCountedStock($stockBefore, (string) ($doc['receipt_date'] ?: substr((string) $doc['created_at'], 0, 10)), $userId, $ip);
             $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
                 'product_id', 'product_name', 'item_type', 'receipt_name', 'barcode', 'qty', 'unit_cost', 'pack_size', 'units',
                 'piece_cost', 'line_total', 'sale_price', 'is_new_product',
@@ -393,14 +400,50 @@ class PurchaseService
         return $createdHere;
     }
 
-    /** @param string $message sprintf format with the product name and the missing pieces */
-    private function assertNoNegativeStock(array $productIds, string $message): void
+    /** @return array<int,int> product id => qty_stock now */
+    private function stockOf(array $productIds): array
     {
+        $out = [];
         foreach (array_unique(array_map('intval', array_filter($productIds))) as $productId) {
             $p = $this->products->find($productId);
-            if ($p && (int) $p['qty_stock'] < 0) {
-                throw new \RuntimeException(sprintf($message, $p['name'], abs((int) $p['qty_stock'])));
+            if ($p) {
+                $out[$productId] = (int) $p['qty_stock'];
             }
+        }
+        return $out;
+    }
+
+    /**
+     * A product whose stock was counted (approved count dated on or after $docDate) already
+     * had its stock fixed to what was on the shelf, which included this purchase as it really
+     * was. Changing the purchase then must not move the stock: the change goes into that
+     * count's line instead (the system quantity it was compared with, and so its difference).
+     * @param array<int,int> $stockBefore product id => qty_stock before the purchase changed
+     */
+    private function keepCountedStock(array $stockBefore, string $docDate, int $userId, ?string $ip): void
+    {
+        $count = $this->db->prepare(
+            "SELECT sci.id FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sc.count_date >= ?
+             ORDER BY sc.count_date DESC, sc.approved_at DESC, sci.id DESC LIMIT 1"
+        );
+        foreach ($stockBefore as $productId => $before) {
+            $p = $this->products->find($productId);
+            $delta = $p ? (int) $p['qty_stock'] - $before : 0;
+            if ($delta === 0) {
+                continue;
+            }
+            $count->execute([$productId, $docDate]);
+            $itemId = $count->fetchColumn();
+            if ($itemId === false) {
+                continue;
+            }
+            $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$before, $productId]);
+            $this->db->prepare('UPDATE stock_count_items SET system_qty = system_qty + ?, diff_qty = diff_qty - ? WHERE id = ?')
+                ->execute([$delta, $delta, $itemId]);
+            $this->audit->log('products', $productId, 'update', $p, $this->products->find($productId) + [
+                'note' => 'แก้ไข/ยกเลิกใบซื้อที่ลงวันที่ก่อนการตรวจนับ: คงสต๊อกตามที่นับ ส่วนต่าง ' . $delta . ' ชิ้นไปอยู่ในผลต่างของรอบตรวจนับ',
+            ], $userId, $ip);
         }
     }
 
