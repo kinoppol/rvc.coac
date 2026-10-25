@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { escapeHtml } from '../util.js';
 import { fileToDataUrl, thumbDataUrl } from '../images.js';
+import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 
 // Fallback decoder for browsers without the BarcodeDetector API (iOS Safari, Firefox).
 const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm';
@@ -73,19 +74,10 @@ function loadPadSize() {
     try { const v = localStorage.getItem(PAD_KEY) || ''; return PAD_SIZES.some(([k]) => k === v) ? v : ''; } catch { return ''; }
 }
 
-let audioCtx = null;
-function beep(ok = true) {
-    try {
-        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.frequency.value = ok ? 1250 : 320;
-        gain.gain.value = 0.08;
-        osc.connect(gain).connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + (ok ? 0.09 : 0.25));
-    } catch { /* no audio */ }
-    navigator.vibrate?.(ok ? 40 : [60, 40, 60]);
+/** A sound for the event (see sound.js) and a short buzz on phones. */
+function beep(kind = 'scan') {
+    play(kind);
+    navigator.vibrate?.(kind === 'error' || kind === 'warn' ? [60, 40, 60] : 40);
 }
 
 /**
@@ -119,6 +111,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         <div class="mc-title"><b>${escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
         <button type="button" class="mc-scan" data-act="scan">📷 สแกน</button>
         ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
+        <button type="button" class="mc-icon snd-btn" data-act="sound" aria-label="ระดับเสียง" title="ระดับเสียง">${soundButtonLabel()}</button>
         <button type="button" class="mc-icon" data-act="padsize" aria-label="ขนาดปุ่มตัวเลข" title="ขนาดปุ่มตัวเลข">⌨</button>
         <button type="button" class="mc-icon" data-act="search" aria-label="ค้นหาสินค้า">🔍</button>
       </header>
@@ -291,7 +284,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         // Guard against misreads: a code that is not a valid EAN-13 needs the counter's OK first.
         const problem = ean13Problem(code);
         if (problem && !accepted && !acceptedCodes.has(code)) {
-            beep(false);
+            beep('warn');
             openOddCodeSheet(code, problem);
             return;
         }
@@ -302,10 +295,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
         busy = true;
         try {
             const res = await api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`);
-            beep(true);
+            beep(res.data.scanned_pack_size > 1 ? 'pack' : 'scan');
             selectProduct(res.data, res.data.scanned_pack_size || 1);
         } catch (e) {
-            beep(false);
+            beep('error');
             product = null;
             mode = 'code';
             input = '';
@@ -331,14 +324,14 @@ export function openMobileCount({ stockCount, items, onClose }) {
             if (!counted.has(Number(product.id))) total++;
             counted.set(Number(product.id), value);
             log.unshift({ name: product.name, qty: how + (addTo ? `${prev} + ${pieces} = ${value}` : value) });
-            beep(true);
+            beep('saved');
             product = res.data;
             mode = 'code';
             input = '';
             resetQty();
             message = { kind: 'ok', text: `บันทึก ${product.name} = ${value} ชิ้น` };
         } catch (e) {
-            beep(false);
+            beep('error');
             message = { kind: 'bad', text: e.message };
         } finally {
             busy = false;
@@ -355,13 +348,13 @@ export function openMobileCount({ stockCount, items, onClose }) {
         busy = true;
         try {
             const res = await api.post(`/stockcounts/${stockCount.id}/barcode`, { product_id: p.id, barcode: code, pack_size: size });
-            beep(true);
+            beep('saved');
             linkFor = null;
             closeSheet();
             selectProduct(res.data, size);
             message = { kind: 'ok', text: `ผูกบาร์โค้ด ${code} ${size > 1 ? `(แพ็ค ${size} ชิ้น) ` : ''}กับ ${p.name} แล้ว — กรอกจำนวนที่นับได้เลย` };
         } catch (e) {
-            beep(false);
+            beep('error');
             message = { kind: 'bad', text: e.message };
             closeSheet();
         } finally {
@@ -595,10 +588,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
             p.image_token = res.data.image_token;
             if (product && Number(product.id) === Number(p.id)) product.image_token = p.image_token;
             photoCache++;
-            beep(true);
+            beep('upload');
             message = { kind: 'ok', text: `บันทึกรูป ${p.name} แล้ว` };
         } catch (err) {
-            beep(false);
+            beep('error');
             message = { kind: 'bad', text: 'บันทึกรูปไม่สำเร็จ: ' + err.message };
         }
         draw();
@@ -662,6 +655,10 @@ export function openMobileCount({ stockCount, items, onClose }) {
         if (!act) return;
         if (act === 'close') close();
         else if (act === 'search') openSearch(null);
+        else if (act === 'sound') {
+            const b = root.querySelector('[data-act="sound"]');
+            openSoundPanel(b, () => { b.innerHTML = soundButtonLabel(); });
+        }
         else if (act === 'padsize') {
             if (padSize) root.classList.remove(`pad-${padSize}`);
             const i = PAD_SIZES.findIndex(([k]) => k === padSize);

@@ -765,3 +765,18 @@ div.pos-row.out { cursor: not-allowed; }
 .pc-filters select, .pc-filters input[type="date"] { height: 38px; }
 .pc-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 18px; border-top: 1px solid var(--border); font-size: 13px; }
 .pc-pager select { margin-left: 4px; }
+
+/* Sound level button and panel (POS, phone counting) */
+.snd-btn { display: inline-flex; align-items: center; gap: 3px; }
+.snd-btn-lv { font-size: 11px; font-weight: 700; }
+.snd-panel { position: fixed; z-index: 90; width: 280px; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 16px 40px rgba(16,24,40,.25); }
+.snd-row { display: flex; align-items: center; gap: 10px; }
+.snd-step { width: 44px; height: 44px; flex: none; border-radius: 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 22px; font-weight: 700; cursor: pointer; }
+.snd-step:disabled { opacity: .4; cursor: default; }
+.snd-level { flex: 1; text-align: center; font-size: 13.5px; }
+.snd-bars { display: flex; gap: 4px; justify-content: center; margin-top: 6px; }
+.snd-bars span { width: 18px; height: 6px; border-radius: 3px; background: var(--border); }
+.snd-bars span.on { background: var(--pri); }
+.snd-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+.snd-list button { padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.snd-list button:hover { background: var(--soft); }

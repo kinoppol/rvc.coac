@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDate } from '../util.js';
 import { confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
+import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -65,19 +66,7 @@ function saveJson(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* private mode */ }
 }
 
-let audio;
-function beep(ok) {
-    try {
-        audio ||= new AudioContext();
-        const o = audio.createOscillator();
-        const g = audio.createGain();
-        o.frequency.value = ok ? 1250 : 330;
-        g.gain.value = 0.08;
-        o.connect(g).connect(audio.destination);
-        o.start();
-        o.stop(audio.currentTime + (ok ? 0.08 : 0.25));
-    } catch (e) { /* no audio */ }
-}
+
 
 export async function render(container, { user } = {}) {
     // The open cart and held carts live in this browser per user, so they survive
@@ -127,6 +116,7 @@ export async function render(container, { user } = {}) {
                 ${DROPDOWNS[k].options.map(([v, l]) => `<button type="button" role="menuitemradio" data-dd-pick="${k}" data-value="${v}"><span class="pos-dd-ico">${DROPDOWNS[k].icon(v)}</span>${DROPDOWNS[k].prefix || ''}${l}</button>`).join('')}
               </div>
             </div>`).join('')}
+          <button type="button" class="pos-tool snd-btn" data-act="sound" aria-label="ระดับเสียง" title="ระดับเสียง">${soundButtonLabel()}</button>
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
         <div data-el="hours"></div>
@@ -544,7 +534,7 @@ export async function render(container, { user } = {}) {
         const line = cart.find((c) => c.id === p.id && lineSize(c) === size);
         const short = inCart(p.id) + size > p.qty_stock;
         if (short && !allowShort()) {
-            beep(false);
+            play('error');
             message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น${size > 1 ? ` (ยกแพ็คใช้ ${size} ชิ้น)` : ''}`, 'error');
             return;
         }
@@ -553,7 +543,7 @@ export async function render(container, { user } = {}) {
             const { pack: _old, ...base } = p;
             cart.push(pack ? { ...base, qty: 1, pack } : { ...base, qty: 1 });
         }
-        beep(true);
+        play(short ? 'warn' : size > 1 ? 'pack' : 'scan');
         message(short ? `${p.name}: คงเหลือในระบบ ${p.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ ควรตรวจนับ/บันทึกรับสินค้าภายหลัง` : '', 'warn');
         redraw();
         const idx = cart.findIndex((c) => c.id === p.id && lineSize(c) === size);
@@ -585,7 +575,7 @@ export async function render(container, { user } = {}) {
             if (p && !products.some((x) => x.id === p.id)) products.push(p);
         }
         if (!p) {
-            beep(false);
+            play('error');
             message(/^\d{4,}$/.test(code) ? `ไม่พบสินค้าบาร์โค้ด ${code} (หรือสินค้าหมด)` : `พบสินค้าหลายรายการ แตะเลือกสินค้าที่ต้องการ`, 'error');
             if (/^\d{4,}$/.test(code)) q.select();
             return;
@@ -761,6 +751,7 @@ export async function render(container, { user } = {}) {
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
                 done = res.data;
+                play('pay');
                 refreshDrawer();
             } catch (e) {
                 error = e.message;
@@ -934,6 +925,7 @@ export async function render(container, { user } = {}) {
                 redraw();
             } else if (t.dataset.remove) {
                 cart.splice(Number(t.dataset.remove), 1);
+                play('remove');
                 redraw();
             } else if (t.dataset.act === 'clear-q') {
                 q.value = '';
@@ -941,6 +933,7 @@ export async function render(container, { user } = {}) {
             } else if (t.dataset.act === 'hold') {
                 if (cart.length) {
                     const no = holdCart();
+                    play('remove');
                     message(`พักตะกร้าไว้เป็น #${no} แล้ว เริ่มรายการขายใหม่ได้`);
                     redraw();
                 }
@@ -961,6 +954,9 @@ export async function render(container, { user } = {}) {
                 });
             } else if (t.dataset.act === 'pay') {
                 openPayment();
+                return;
+            } else if (t.dataset.act === 'sound') {
+                openSoundPanel(t, () => { t.innerHTML = soundButtonLabel(); });
                 return;
             } else if (t.dataset.act === 'full') {
                 setFull(!root.classList.contains('pos-full'));
