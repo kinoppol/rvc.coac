@@ -7,7 +7,9 @@ export async function render(container, { permissions = [] } = {}) {
     const canBackdate = permissions.includes('receive.backdate');
     const options = (await api.get('/consignors/options')).data;
     let receiveDate = todayISO();
-    let consignorId = options[0]?.id ?? null;
+    // No consignor until one is chosen, so goods are never filed under someone by accident.
+    let consignorId = null;
+    let formOpen = false; // the receive form modal
     let cart = [];
     let quote = null;
     let error = null;
@@ -56,18 +58,37 @@ export async function render(container, { permissions = [] } = {}) {
 
         container.innerHTML = `
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
+        <div class="actions-row" style="justify-content:space-between">
+          <div class="hint" style="flex:1;margin:0"><div class="dot">i</div><div>กด <b>รับฝาก</b> เพื่อบันทึกสินค้าที่ผู้ฝากนำมา หรือกด <b>ตรวจรับ</b> ที่คำขอฝากจากผู้ฝากขาย</div></div>
+          <button type="button" class="btn" id="btn-open" style="font-size:15px;padding:12px 22px">+ รับฝาก${cart.length ? ` (ค้าง ${cart.length} รายการ)` : ''}</button>
+        </div>
+        ${requestsCard()}
+        ${formOpen ? formHtml(total) : ''}`;
+
+        wire();
+    }
+
+    /** The receive form, on a modal. */
+    function formHtml(total) {
+        return `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rc-title" style="width:1100px">
+            <div class="modal-head">
+              <h2 id="rc-title">${loaded ? `ตรวจรับคำขอฝาก ${escapeHtml(loaded.request_no)}` : 'รับฝากสินค้า'}</h2>
+              <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button>
+            </div>
+            <div class="modal-body">
         <div class="two-col">
           <div style="display:flex;flex-direction:column;gap:16px">
-            ${requestsCard()}
-            <div class="hint"><div class="dot">i</div><div>ทำ 3 ขั้น: <b>1)</b> เลือกผู้ฝากขาย (หรือกด «ตรวจรับ» คำขอฝากด้านบน) <b>2)</b> กรอกสินค้าทีละรายการแล้วกดเพิ่ม — แก้ราคา/จำนวนในตารางให้ตรงกับของจริงได้ <b>3)</b> ตรวจยอดด้านขวาแล้วกดบันทึก</div></div>
-
             <section class="card card-pad">
               <div class="step-title"><span class="step-num">1</span><h2>ผู้ฝากขาย</h2></div>
               ${loaded ? `<div class="pill warn" style="margin-bottom:10px;display:inline-flex;gap:8px;align-items:center">
                   ตรวจรับคำขอ ${escapeHtml(loaded.request_no)} — ตรวจนับของจริงแล้วแก้ราคา/จำนวนในตารางให้ตรง
                   <button type="button" class="btn sm secondary" id="btn-unload">เลิกตรวจรับ</button></div>` : ''}
-              <label class="field">เลือกผู้ฝากขาย
-                <select id="sel-consignor" ${loaded ? 'disabled' : ''}>${options.map((o) => `<option value="${o.id}" ${Number(o.id) === Number(consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
+              <label class="field">เลือกผู้ฝากขาย *
+                <select id="sel-consignor" ${loaded ? 'disabled' : ''} required>
+                  <option value="" ${consignorId == null ? 'selected' : ''} disabled>— เลือกผู้ฝากขาย —</option>
+                  ${options.map((o) => `<option value="${o.id}" ${Number(o.id) === Number(consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
               </label>
               ${canBackdate ? `
                 <label class="field" style="margin-top:12px;max-width:260px">วันที่รับฝาก
@@ -126,15 +147,51 @@ export async function render(container, { permissions = [] } = {}) {
               <div style="display:flex;justify-content:space-between"><span class="muted">จำนวนชิ้นรวม</span><span>${cart.reduce((s, i) => s + i.qty, 0)}</span></div>
               <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border);padding-top:8px"><span>มูลค่ารวม (ราคาขาย)</span><span>฿ ${money(total)}</span></div>
             </div>
-            <button type="button" class="btn" style="width:100%" id="btn-submit" ${cart.length ? '' : 'disabled'}>${loaded ? 'ยืนยันและบันทึกการรับฝาก' : 'บันทึกการรับฝาก'}</button>
+            <button type="button" class="btn" style="width:100%" id="btn-submit" ${cart.length && consignorId ? '' : 'disabled'}>${loaded ? 'ยืนยันและบันทึกการรับฝาก' : 'บันทึกการรับฝาก'}</button>
+            ${!consignorId ? '<div class="muted" style="font-size:12.5px;margin-top:8px">เลือกผู้ฝากขายก่อนบันทึก</div>' : ''}
           </section>
+        </div>
+            </div>
+          </div>
         </div>`;
-
-        wire();
     }
 
     function wire() {
-        container.querySelector('#sel-consignor').addEventListener('change', (e) => { consignorId = Number(e.target.value); });
+        container.querySelector('#btn-open').addEventListener('click', () => {
+            formOpen = true;
+            success = null;
+            draw();
+            container.querySelector(consignorId ? '#f-name' : '#sel-consignor')?.focus();
+        });
+        container.querySelectorAll('[data-load]').forEach((btn) => btn.addEventListener('click', () => loadRequest(Number(btn.dataset.load))));
+        container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', async () => {
+            const r = requests.find((x) => x.id === Number(btn.dataset.print));
+            btn.disabled = true;
+            try {
+                await printConsignSlip(r, async (cost) => (await api.post('/receive/quote', { cost_price: cost })).data.price);
+            } catch (e) {
+                alertDialog(e.message, { tone: 'error' });
+            }
+            btn.disabled = false;
+        }));
+        container.querySelectorAll('[data-reject]').forEach((btn) => btn.addEventListener('click', () => rejectRequest(Number(btn.dataset.reject))));
+        if (!formOpen) return;
+        // Closing keeps what was entered (the «รับฝาก» button shows it is waiting).
+        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => { formOpen = false; error = null; draw(); }));
+        container.querySelector('#sel-consignor').addEventListener('change', (e) => {
+            const next = Number(e.target.value) || null;
+            if (cart.length && next !== consignorId) {
+                // Lines typed for one consignor are not moved to another one silently.
+                confirmDialog('รายการที่เพิ่มไว้จะยังอยู่ในใบรับฝาก และจะบันทึกเป็นของผู้ฝากที่เลือกใหม่', { title: 'เปลี่ยนผู้ฝากขาย?', okText: 'เปลี่ยนผู้ฝาก' }).then((ok) => {
+                    if (ok) consignorId = next;
+                    draw();
+                });
+                return;
+            }
+            consignorId = next;
+            draw();
+            container.querySelector('#f-name')?.focus();
+        });
         container.querySelector('#f-receive-date')?.addEventListener('change', (e) => {
             const v = e.target.value;
             receiveDate = v && v <= todayISO() ? v : todayISO();
@@ -173,18 +230,6 @@ export async function render(container, { permissions = [] } = {}) {
             }
             draw();
         }));
-        container.querySelectorAll('[data-load]').forEach((btn) => btn.addEventListener('click', () => loadRequest(Number(btn.dataset.load))));
-        container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', async () => {
-            const r = requests.find((x) => x.id === Number(btn.dataset.print));
-            btn.disabled = true;
-            try {
-                await printConsignSlip(r, async (cost) => (await api.post('/receive/quote', { cost_price: cost })).data.price);
-            } catch (e) {
-                alertDialog(e.message, { tone: 'error' });
-            }
-            btn.disabled = false;
-        }));
-        container.querySelectorAll('[data-reject]').forEach((btn) => btn.addEventListener('click', () => rejectRequest(Number(btn.dataset.reject))));
         const submitBtn = container.querySelector('#btn-submit');
         if (submitBtn) submitBtn.addEventListener('click', submit);
     }
@@ -224,6 +269,11 @@ export async function render(container, { permissions = [] } = {}) {
         const search = async () => {
             const s = ++seq;
             const term = input.value.trim();
+            if (!consignorId) {
+                list.innerHTML = '<div class="ac-note">เลือกผู้ฝากขายก่อน เพื่อค้นหาจากรายการฝากเดิม</div>';
+                list.hidden = false;
+                return;
+            }
             const res = await api.get(`/receive/history?consignor_id=${encodeURIComponent(consignorId ?? '')}&q=${encodeURIComponent(term)}`).catch(() => ({ data: [] }));
             if (s !== seq || document.activeElement !== input) return;
             show(res.data);
@@ -285,6 +335,7 @@ export async function render(container, { permissions = [] } = {}) {
         const prices = await Promise.all(r.items.map((i) => api.post('/receive/quote', { cost_price: Number(i.cost_price) })));
         loaded = r;
         consignorId = Number(r.consignor_id);
+        formOpen = true;
         cart = r.items.map((i, k) => ({
             name: i.name, cost_price: Number(i.cost_price), qty: Number(i.qty), req_qty: Number(i.qty),
             barcode: i.barcode || null, mfg_date: i.mfg_date || todayISO(), expiry_date: i.expiry_date || null,
@@ -326,6 +377,12 @@ export async function render(container, { permissions = [] } = {}) {
 
     async function addItem() {
         error = null;
+        if (!consignorId) {
+            error = 'กรุณาเลือกผู้ฝากขายก่อน';
+            draw();
+            container.querySelector('#sel-consignor')?.focus();
+            return;
+        }
         const name = container.querySelector('#f-name').value.trim();
         const cost = Number(container.querySelector('#f-cost').value);
         const qty = Number(container.querySelector('#f-qty').value);
@@ -360,6 +417,8 @@ export async function render(container, { permissions = [] } = {}) {
             cart = [];
             loaded = null;
             error = null;
+            formOpen = false;
+            consignorId = null; // the next one starts with no consignor chosen
             await loadRequests();
             draw();
         } catch (e) {
