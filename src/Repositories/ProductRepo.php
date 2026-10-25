@@ -146,7 +146,14 @@ class ProductRepo
         $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode IS NULL')->execute([$productId]);
         $insNoCode = $this->db->prepare('INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, sale_price, created_at) VALUES (?, NULL, ?, ?, NOW())');
         foreach ($noCode as $size => $price) {
-            $insNoCode->execute([$productId, $size, $price]);
+            try {
+                $insNoCode->execute([$productId, $size, $price]);
+            } catch (\PDOException $e) {
+                if (($e->errorInfo[1] ?? null) === 1048) { // barcode still NOT NULL
+                    throw new \RuntimeException('ยังบันทึกแพ็คที่ไม่มีบาร์โค้ดไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0040) ก่อน');
+                }
+                throw $e;
+            }
         }
         $upsert = $this->db->prepare(
             'INSERT INTO product_pack_barcodes (product_id, barcode, pack_size, sale_price, created_at) VALUES (?, ?, ?, ?, NOW())
