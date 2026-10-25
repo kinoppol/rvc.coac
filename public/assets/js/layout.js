@@ -7,6 +7,8 @@ const svg = (inner) => `<svg width="17" height="17" viewBox="0 0 24 24" fill="no
 const ICONS = {
     dashboard: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect>'),
     sales: svg('<circle cx="9" cy="21" r="1"></circle><circle cx="20" cy="21" r="1"></circle><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"></path>'),
+    mysales: svg('<path d="M4 2v20l2-1.5L8 22l2-1.5L12 22l2-1.5L16 22l2-1.5L20 22V2l-2 1.5L16 2l-2 1.5L12 2l-2 1.5L8 2 6 3.5z"></path><path d="M8 8h7M8 12h7M8 16h4"></path>'),
+    saleedits: svg('<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path><path d="m15 5 3 3"></path>'),
     drawer: svg('<rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M2 10h20"></path><path d="M10 15h4"></path>'),
     wages: svg('<circle cx="9" cy="7" r="4"></circle><path d="M3 21v-2a4 4 0 0 1 4-4h4"></path><path d="M16 13h6M19 10v6"></path><path d="M15 19h7"></path>'),
     capital: svg('<path d="M3 21h18"></path><path d="M5 21V10l7-5 7 5v11"></path><path d="M12 11v6M10 13h4"></path>'),
@@ -34,6 +36,8 @@ const PAGES = [
     { group: 'งานประจำวัน', items: [
         { key: 'dashboard', label: 'แดชบอร์ด', perm: 'dashboard.view' },
         { key: 'sales', label: 'ขายสินค้า (POS)', perm: 'sales.create' },
+        { key: 'mysales', label: 'ประวัติการขายของฉัน', perm: 'sales.create' },
+        { key: 'saleedits', label: 'อนุมัติแก้ไขการขาย', perm: 'sales.edit.approve' },
         { key: 'drawer', label: 'เงินในลิ้นชัก / ปิดยอด', perm: 'sales.create' },
         { key: 'wages', label: 'ค่าแรงพนักงาน', perm: 'wages.manage' },
         { key: 'capital', label: 'งบลงทุน / เบิกกำไร', perm: 'capital.manage' },
@@ -67,6 +71,8 @@ const PAGES = [
 const PAGE_TITLES = {
     dashboard: ['หน้าแรก', 'แดชบอร์ดภาพรวม'],
     sales: ['งานประจำวัน', 'ขายสินค้า (POS)'],
+    mysales: ['งานประจำวัน', 'ประวัติการขายของฉัน และขอแก้ไขการขาย'],
+    saleedits: ['งานประจำวัน', 'อนุมัติคำขอแก้ไขการขาย'],
     drawer: ['งานประจำวัน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
     wages: ['งานประจำวัน', 'เบิกจ่ายค่าแรงพนักงานและผู้จัดการ'],
     capital: ['งานประจำวัน', 'งบลงทุน เบิกเงินออกจากกำไร และกำไรสุทธิรายเดือน'],

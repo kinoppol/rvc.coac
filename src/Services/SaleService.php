@@ -81,33 +81,11 @@ class SaleService
                     throw new \RuntimeException('จำนวนขายเกินสต๊อกคงเหลือของ ' . $product['name']);
                 }
 
-                $unitPrice = isset($line['unit_price']) ? round((float) $line['unit_price'], 2) : (float) $product['sale_price'];
-                // A whole pack: qty is still in pieces, each at the pack price per piece.
-                $packSize = (int) ($line['pack_size'] ?? 1);
-                if ($packSize > 1) {
-                    $pack = $this->db->prepare('SELECT sale_price FROM product_pack_barcodes WHERE product_id = ? AND pack_size = ? AND sale_price IS NOT NULL LIMIT 1');
-                    $pack->execute([$product['id'], $packSize]);
-                    $packPrice = $pack->fetchColumn();
-                    if ($packPrice === false || $qty % $packSize !== 0) {
-                        throw new \RuntimeException("{$product['name']} ไม่มีราคาขายยกแพ็ค {$packSize} ชิ้น");
-                    }
-                    $unitPrice = round((float) $packPrice / $packSize, 4);
-                }
+                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1));
+                $unitPrice = $fig['unit_price'];
+                $packSize = $fig['pack_size'];
+                $feeOutPerUnit = $fig['fee_per_unit'];
                 $isStoreOwned = $product['consignor_id'] === null;
-
-                if ($isStoreOwned) {
-                    // Store-owned goods (from purchase docs): no consignor to credit;
-                    // fee_amount records the store's gross margin instead.
-                    $feeOutPerUnit = $unitPrice - (float) $product['cost_price'];
-                    $costAmount = round((float) $product['cost_price'] * $qty, 2);
-                } else {
-                    $feePerUnit = (float) $product['fee_per_unit'];
-                    $roundPerUnit = (float) $product['round_per_unit'];
-                    $beneficiary = $product['rounding_beneficiary'];
-
-                    $feeOutPerUnit = $feePerUnit + ($beneficiary === 'store' ? $roundPerUnit : 0);
-                    $costAmount = round(($unitPrice - $feeOutPerUnit) * $qty, 2);
-                }
 
                 $row = [
                     $saleId,
@@ -115,8 +93,8 @@ class SaleService
                     $product['consignor_id'],
                     $qty,
                     $unitPrice,
-                    round($feeOutPerUnit * $qty, 2),
-                    $costAmount,
+                    $fig['fee_amount'],
+                    $fig['cost_amount'],
                 ];
                 if ($packSize > 1) {
                     $insPack ??= $this->db->prepare(
@@ -198,6 +176,43 @@ class SaleService
             }
             throw $e;
         }
+    }
+
+    /**
+     * Price, fee and cost of selling $qty pieces of $product. $unitPrice defaults to the
+     * product's sale price; $packSize > 1 sells whole packs at that pack's sale price.
+     * For a consignor's goods fee_per_unit is what the store keeps per piece; for the
+     * store's own goods it is the gross margin per piece.
+     * @return array{unit_price:float, pack_size:int, fee_per_unit:float, fee_amount:float, cost_amount:float}
+     */
+    public function lineFigures(array $product, int $qty, ?float $unitPrice, int $packSize = 1): array
+    {
+        $unitPrice = $unitPrice !== null ? round($unitPrice, 2) : (float) $product['sale_price'];
+        // A whole pack: qty is still in pieces, each at the pack price per piece.
+        if ($packSize > 1) {
+            $pack = $this->db->prepare('SELECT sale_price FROM product_pack_barcodes WHERE product_id = ? AND pack_size = ? AND sale_price IS NOT NULL LIMIT 1');
+            $pack->execute([$product['id'], $packSize]);
+            $packPrice = $pack->fetchColumn();
+            if ($packPrice === false || $qty % $packSize !== 0) {
+                throw new \RuntimeException("{$product['name']} ไม่มีราคาขายยกแพ็ค {$packSize} ชิ้น");
+            }
+            $unitPrice = round((float) $packPrice / $packSize, 4);
+        }
+
+        if ($product['consignor_id'] === null) {
+            // Store-owned goods (from purchase docs): no consignor to credit;
+            // fee_amount records the store's gross margin instead.
+            $feeOutPerUnit = $unitPrice - (float) $product['cost_price'];
+            $costAmount = round((float) $product['cost_price'] * $qty, 2);
+        } else {
+            $beneficiary = $product['rounding_beneficiary'];
+            $feeOutPerUnit = (float) $product['fee_per_unit'] + ($beneficiary === 'store' ? (float) $product['round_per_unit'] : 0);
+            $costAmount = round(($unitPrice - $feeOutPerUnit) * $qty, 2);
+        }
+        return [
+            'unit_price' => $unitPrice, 'pack_size' => max(1, $packSize), 'fee_per_unit' => $feeOutPerUnit,
+            'fee_amount' => round($feeOutPerUnit * $qty, 2), 'cost_amount' => $costAmount,
+        ];
     }
 
     /**

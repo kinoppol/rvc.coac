@@ -44,6 +44,16 @@ class SettingsController
         if (isset($body['qr_login'])) {
             $body['qr_login'] = in_array($body['qr_login'], ['1', 1, true], true) ? '1' : '0';
         }
+        if (isset($body['sale_edit_enabled'])) {
+            $body['sale_edit_enabled'] = in_array($body['sale_edit_enabled'], ['1', 1, true], true) ? '1' : '0';
+        }
+        if (isset($body['sale_edit_minutes'])) {
+            $minutes = (int) $body['sale_edit_minutes'];
+            if ($minutes < 1 || $minutes > 1440) {
+                return $this->error($response, 'ระยะเวลาที่แก้ไขการขายได้ต้องอยู่ระหว่าง 1–1440 นาที', 422);
+            }
+            $body['sale_edit_minutes'] = (string) $minutes;
+        }
         if (isset($body['timezone']) && $body['timezone'] !== '' && !Db::isTimezone((string) $body['timezone'])) {
             return $this->error($response, 'Time zone ไม่ถูกต้อง', 422);
         }

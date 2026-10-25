@@ -178,6 +178,15 @@ export async function render(page, { user, permissions, params = {} }) {
                     เมื่อผู้ใช้เปิดสวิตช์ สินค้าเหล่านี้จะค้นหาเจอ (สีจาง) และขายได้แม้สต๊อกจะติดลบ ควรตรวจนับหรือบันทึกรับสินค้าให้ตรงภายหลัง</p>
                   ${roleBoxes('short_roles', s.pos_short_stock_roles)}
                 </section>
+                <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">แก้ไขการขายย้อนหลังโดยพนักงานขาย</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">พนักงานดูการขายของตัวเองย้อนหลังได้ที่เมนู ประวัติการขายของฉัน
+                    เมื่อเปิดไว้ พนักงานขอแก้ไขการขาย (จำนวน นำสินค้าออก เพิ่มสินค้า วิธีชำระเงิน) ได้ภายในเวลาที่กำหนดหลังขายเสร็จ
+                    ระบบบันทึกคำขอไว้ และจะปรับรายการขาย สต๊อก และยอดเงินเมื่อผู้จัดการหรือผู้ดูแลระบบอนุมัติแล้วเท่านั้น</p>
+                  <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="sale_edit_enabled" value="1" ${s.sale_edit_enabled === '1' ? 'checked' : ''} style="width:20px;height:20px"> เปิดให้พนักงานขอแก้ไขการขายได้</label>
+                  <label class="field" style="margin-top:12px;max-width:260px">แก้ไขได้ภายใน (นาที หลังขายเสร็จ)
+                    <input type="number" name="sale_edit_minutes" min="1" max="1440" step="1" value="${escapeHtml(s.sale_edit_minutes || '5')}"></label>
+                </section>
                 ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
               </fieldset>
             </form>
@@ -196,6 +205,7 @@ export async function render(page, { user, permissions, params = {} }) {
             const fd = new FormData(e.target);
             try {
                 await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
+                    sale_edit_enabled: fd.get('sale_edit_enabled') === '1' ? '1' : '0', sale_edit_minutes: fd.get('sale_edit_minutes'),
                     store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),
                     store_closed_days: WEEKDAYS.map((d, i) => String(i)).filter((i) => !fd.getAll('open_day').includes(i)).join(','),
                     store_holidays: [...pane.querySelectorAll('[data-holiday]')]

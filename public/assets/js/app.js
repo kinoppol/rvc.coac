@@ -12,14 +12,14 @@ const ROUTE_PERMS = {
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
-    posimport: 'sales.import', drawer: 'sales.create', wages: 'wages.manage', capital: 'capital.manage',
+    posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
     dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', wages: 'report',
-    capital: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report',
+    capital: 'report', mysales: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report',
     settings: 'form', ai: 'form', receive: 'form', ret: 'form', purchase: 'form',
 };
 
@@ -86,6 +86,12 @@ async function refreshBadges() {
             if (wd.pending_count) badges.withdraw = { count: wd.pending_count, warn: true };
         }
     } catch (e) { /* ignore */ }
+    try {
+        if (state.permissions.includes('sales.edit.approve')) {
+            const se = await api.get('/sale-edits');
+            badges.saleedits = { count: se.pending_count, warn: true };
+        }
+    } catch (e) { /* ignore (e.g. migration not run yet) */ }
     try {
         if (state.permissions.includes('receive.create')) {
             const rq = await api.get('/receive/requests');

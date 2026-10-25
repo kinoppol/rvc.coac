@@ -214,7 +214,11 @@ class CashDrawerService
         $old->execute([$saleId]);
         $oldLines = $old->fetchAll();
 
-        $this->db->beginTransaction();
+        // A sale edit being approved keeps its own transaction.
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
         try {
             $this->db->prepare('DELETE FROM sale_payments WHERE sale_id = ?')->execute([$saleId]);
             $ins = $this->db->prepare('INSERT INTO sale_payments (sale_id, method, amount) VALUES (?, ?, ?)');
@@ -249,9 +253,13 @@ class CashDrawerService
                 mb_substr("{$sale['doc_no']}: " . ($label($oldLines) ?: 'ไม่มีข้อมูล') . ' → ' . $label($newLines), 0, 500),
                 (int) $sale['cashier_id']);
             $this->audit->log('sale_payments', $saleId, 'update', ['payments' => $oldLines], ['payments' => $newLines], $userId, $ip);
-            $this->db->commit();
+            if ($own) {
+                $this->db->commit();
+            }
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($own) {
+                $this->db->rollBack();
+            }
             throw $e;
         }
     }

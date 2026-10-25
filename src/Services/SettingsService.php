@@ -34,6 +34,10 @@ class SettingsService
         // stock is below 1 (miscounted stock, or goods never received in the system).
         'pos_mixed_roles' => 'admin,manager,advisor,cashier',
         'pos_short_stock_roles' => 'admin,manager',
+        // Cashiers may ask to correct a sale they made, within this many minutes of it;
+        // the correction takes effect once a manager or admin approves it.
+        'sale_edit_enabled' => '1',
+        'sale_edit_minutes' => '5',
         // Store hours, HH:MM; '' = no set hours (every sale counts on the day it is made).
         'store_open_time' => '',
         'store_close_time' => '',

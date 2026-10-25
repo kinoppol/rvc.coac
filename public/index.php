@@ -24,6 +24,7 @@ use App\Controllers\PurchaseController;
 use App\Controllers\ReceiveController;
 use App\Controllers\ReportsController;
 use App\Controllers\ReturnController;
+use App\Controllers\SaleEditController;
 use App\Controllers\SalesController;
 use App\Controllers\SettingsController;
 use App\Controllers\SsoController;
@@ -161,6 +162,19 @@ $app->group('/api', function ($group) {
     $group->get('/sales/options', [SalesController::class, 'options']);
     $group->post('/sales', [SalesController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
+    $group->get('/sales/mine', [SaleEditController::class, 'mine'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/sales/{id:[0-9]+}', [SaleEditController::class, 'show']);
+    $group->post('/sales/{id:[0-9]+}/edit-requests', [SaleEditController::class, 'store'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/sale-edits/{id:[0-9]+}/cancel', [SaleEditController::class, 'cancel'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/sale-edits', [SaleEditController::class, 'index'])
+        ->add(new RoleGuard('sales.edit.approve'));
+    $group->post('/sale-edits/{id:[0-9]+}/approve', [SaleEditController::class, 'approve'])
+        ->add(new RoleGuard('sales.edit.approve'));
+    $group->post('/sale-edits/{id:[0-9]+}/reject', [SaleEditController::class, 'reject'])
+        ->add(new RoleGuard('sales.edit.approve'));
     $group->put('/sales/{id:[0-9]+}/payments', [DrawerController::class, 'editPayments'])
         ->add(new RoleGuard('drawer.manage'));
 
