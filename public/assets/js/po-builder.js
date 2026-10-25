@@ -59,7 +59,7 @@ export async function openPoBuilder(ids, { navigate, onDone } = {}) {
     function lineHtml(l, i) {
         const p = l.p;
         const s = supplierOf(l);
-        const pending = p.pending.length ? `<div class="pill warn" style="margin-top:4px" title="ใบสั่งซื้อที่ยังรอส่งของ">มีในใบสั่ง ${p.pending.map((x) => `${escapeHtml(x.doc_no)} (${escapeHtml(x.supplier_name)})`).join(', ')} แล้ว</div>` : '';
+        const pending = p.pending.length ? `<div class="pill warn" style="margin-top:4px" title="ร่างใบสั่งซื้อ / ใบสั่งซื้อที่ยังรอส่งของ">มีใน${p.pending.map((x) => `${x.status === 'draft' ? 'ร่าง' : 'ใบสั่ง'} ${escapeHtml(x.doc_no)} (${escapeHtml(x.supplier_name)})`).join(', ')} แล้ว</div>` : '';
         if (!s) {
             return `<tr class="po-off"><td></td><td>${escapeHtml(p.name)}<div class="muted" style="font-size:12px">คงเหลือ ${count(p.qty_stock)}</div>${pending}</td>
               <td colspan="5" class="muted" style="font-size:12.5px">ยังไม่เคยซื้อจากร้านค้า (ไม่มีใบซื้อ) — สร้างใบสั่งเองที่หน้าซื้อสินค้าเข้าร้าน</td></tr>`;
@@ -88,7 +88,7 @@ export async function openPoBuilder(ids, { navigate, onDone } = {}) {
         const n = groups().length;
         const go = box.querySelector('[data-go]');
         go.disabled = busy || !n;
-        go.textContent = busy ? 'กำลังสร้าง...' : `สร้างใบสั่งซื้อ ${n} ใบ`;
+        go.textContent = busy ? 'กำลังบันทึก...' : `บันทึกเป็นร่างใบสั่งซื้อ (${n} ร้าน)`;
     }
 
     function draw() {
@@ -96,7 +96,7 @@ export async function openPoBuilder(ids, { navigate, onDone } = {}) {
           <div class="modal-head"><h2>สร้างใบรายการสั่งซื้อสินค้า</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
           <div class="modal-body" style="padding-top:12px">
             <div class="hint"><div class="dot">i</div><div>สินค้าแต่ละรายการสั่งจากร้านเดียว ระบบเลือกร้านที่ต้นทุนต่อชิ้นต่ำที่สุดไว้ให้ (เปลี่ยนได้) ·
-              จำนวนและราคาเริ่มจากใบซื้อล่าสุดของร้านนั้น · ได้ใบสั่งซื้อแยกตามร้าน สถานะ <b>รอส่งของ</b> (ยังไม่เข้าสต๊อก จนกว่าจะกด รับสินค้า ที่หน้าซื้อสินค้าเข้าร้าน)</div></div>
+              จำนวนและราคาเริ่มจากใบซื้อล่าสุดของร้านนั้น · ได้<b>ร่างใบสั่งซื้อ</b>แยกตามร้าน (ร้านที่มีร่างอยู่แล้วจะเพิ่มลงร่างเดิม) เพิ่มรายการได้อีก เมื่อสั่งกับร้านเรียบร้อยแล้วกด <b>ยืนยันสั่งซื้อแล้ว</b> ที่หน้าซื้อสินค้าเข้าร้าน</div></div>
             <div class="table-wrap" style="max-height:440px;border:1px solid var(--border);border-radius:10px;margin-top:12px"><table class="po-table">
               <thead><tr><th></th><th>สินค้า</th><th>ร้านค้า</th><th>หน่วยซื้อ</th><th class="num">จำนวน</th><th class="num">ทุน/หน่วยซื้อ</th><th class="num">รวม</th></tr></thead>
               <tbody>${lines.map(lineHtml).join('')}</tbody></table></div>
@@ -152,8 +152,8 @@ export async function openPoBuilder(ids, { navigate, onDone } = {}) {
             onDone?.();
             const made = res.data;
             const go = await confirmDialog(
-                `${made.map((d) => `${d.doc_no} ${d.supplier_name} ${d.items} รายการ ฿${money(d.total)}`).join('\n')}\n\nสถานะรอส่งของ ยังไม่เข้าสต๊อก — เมื่อร้านมาส่ง กด รับสินค้า ที่หน้าซื้อสินค้าเข้าร้าน`,
-                { title: `สร้างใบสั่งซื้อ ${made.length} ใบแล้ว`, okText: 'ไปที่หน้าซื้อสินค้าเข้าร้าน', cancelText: 'อยู่หน้านี้' }
+                `${made.map((d) => `${d.doc_no} ${d.supplier_name}${d.merged ? ' (เพิ่มลงร่างเดิม)' : ''} รวม ${d.items} รายการ ฿${money(d.total)}`).join('\n')}\n\nเป็นร่าง ยังไม่ได้สั่ง — เพิ่มรายการได้อีก เมื่อสั่งกับร้านแล้วกด ยืนยันสั่งซื้อแล้ว ที่หน้าซื้อสินค้าเข้าร้าน`,
+                { title: `บันทึกร่างใบสั่งซื้อ ${made.length} ใบแล้ว`, okText: 'ไปที่หน้าซื้อสินค้าเข้าร้าน', cancelText: 'อยู่หน้านี้' }
             );
             if (go && navigate) navigate('purchase');
         } catch (e) {

@@ -389,9 +389,9 @@ class InventoryService
             }
         }
 
-        // Orders not delivered yet (migration 0041) that already list the product.
+        // Draft orders and orders not delivered yet (migrations 0041/0042) that already list the product.
         try {
-            $orders = $this->db->query("SELECT doc_no, supplier_name, order_items FROM purchase_documents WHERE status = 'ordered'")->fetchAll();
+            $orders = $this->db->query("SELECT doc_no, supplier_name, status, order_items FROM purchase_documents WHERE status IN ('draft', 'ordered')")->fetchAll();
         } catch (\PDOException $e) {
             $orders = [];
         }
@@ -399,7 +399,7 @@ class InventoryService
             foreach ((array) (json_decode((string) $o['order_items'], true) ?: []) as $line) {
                 $pid = (int) ($line['product_id'] ?? 0);
                 if (isset($products[$pid])) {
-                    $products[$pid]['pending'][] = ['doc_no' => $o['doc_no'], 'supplier_name' => $o['supplier_name']];
+                    $products[$pid]['pending'][] = ['doc_no' => $o['doc_no'], 'supplier_name' => $o['supplier_name'], 'status' => $o['status']];
                 }
             }
         }

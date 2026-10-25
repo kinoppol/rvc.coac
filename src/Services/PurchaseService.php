@@ -220,9 +220,11 @@ class PurchaseService
     /**
      * Goods ordered from a supplier who delivers later: saved with its lines as entered
      * (order_items) and no stock or cost change until the delivery is confirmed.
+     * $draft: not placed with the supplier yet (items may still be added; placeOrder() later).
      */
-    public function createOrder(array $header, array $items, array $attachments, string $source, int $userId, ?string $ip): array
+    public function createOrder(array $header, array $items, array $attachments, string $source, int $userId, ?string $ip, bool $draft = false): array
     {
+        $status = $draft ? 'draft' : 'ordered';
         [$h, $lines] = $this->validate($header, $items);
 
         $this->db->beginTransaction();
@@ -232,20 +234,21 @@ class PurchaseService
                 "INSERT INTO purchase_documents
                     (doc_no, supplier_name, supplier_tax_id, receipt_no, receipt_date, subtotal, discount, vat, total, total_qty, note, source,
                      status, order_items, ordered_at, ordered_by, user_id, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ordered', ?, NOW(), ?, ?, NOW())"
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
             )->execute([
                 $docNo, $h['supplier_name'], $h['supplier_tax_id'], $h['receipt_no'], $h['receipt_date'],
                 $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'],
-                $source === 'ai' ? 'ai' : 'manual', json_encode(array_values($items), JSON_UNESCAPED_UNICODE), $userId, $userId,
+                $source === 'ai' ? 'ai' : 'manual', $status, json_encode(array_values($items), JSON_UNESCAPED_UNICODE),
+                $draft ? null : date('Y-m-d H:i:s'), $userId, $userId,
             ]);
             $docId = (int) $this->db->lastInsertId();
             $this->saveFunding($docId, $h['funding']);
             $this->attachments->linkToPurchase($attachments, $docId);
             $this->audit->log('purchase_documents', $docId, 'create', null, [
-                'doc_no' => $docNo, 'status' => 'ordered', 'supplier_name' => $h['supplier_name'], 'total' => $h['total'], 'items' => count($lines),
+                'doc_no' => $docNo, 'status' => $status, 'supplier_name' => $h['supplier_name'], 'total' => $h['total'], 'items' => count($lines),
             ], $userId, $ip);
             $this->db->commit();
-            return ['id' => $docId, 'doc_no' => $docNo, 'ordered' => true, 'total' => $h['total'], 'items' => count($lines), 'total_qty' => $h['total_qty']];
+            return ['id' => $docId, 'doc_no' => $docNo, 'ordered' => true, 'status' => $status, 'total' => $h['total'], 'items' => count($lines), 'total_qty' => $h['total_qty']];
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
@@ -265,9 +268,82 @@ class PurchaseService
         $this->saveFunding((int) $doc['id'], $h['funding']);
         $this->relinkAttachments((int) $doc['id'], $keepTokens, $newAttachments);
         $this->audit->log('purchase_documents', (int) $doc['id'], 'update',
-            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => (float) $doc['total']],
-            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => $h['total'], 'items' => count($items)], $userId, $ip);
-        return ['id' => (int) $doc['id'], 'doc_no' => $doc['doc_no'], 'ordered' => true, 'total' => $h['total'], 'items' => count($items), 'total_qty' => $h['total_qty']];
+            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => (float) $doc['total']],
+            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => $h['total'], 'items' => count($items)], $userId, $ip);
+        return ['id' => (int) $doc['id'], 'doc_no' => $doc['doc_no'], 'ordered' => true, 'status' => $doc['status'], 'total' => $h['total'], 'items' => count($items), 'total_qty' => $h['total_qty']];
+    }
+
+    /** The supplier's latest draft order, to add more items to instead of starting another. */
+    public function draftFor(string $supplierName): ?int
+    {
+        $stmt = $this->db->prepare("SELECT id FROM purchase_documents WHERE status = 'draft' AND supplier_name = ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute([trim($supplierName)]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (int) $id;
+    }
+
+    /**
+     * Adds lines to a draft order: a product already on it (same pack) gets the quantity
+     * added and the new cost; anything else is appended. Totals are worked out again.
+     */
+    public function appendToDraft(int $id, array $items, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            [$doc] = $this->lockActive($id, 'เพิ่มรายการ');
+            if ($doc['status'] !== 'draft') {
+                throw new \RuntimeException("ใบสั่งซื้อ {$doc['doc_no']} ไม่ใช่ร่างแล้ว เพิ่มรายการไม่ได้");
+            }
+            $stmt = $this->db->prepare('SELECT order_items FROM purchase_documents WHERE id = ?');
+            $stmt->execute([$id]);
+            $lines = json_decode((string) $stmt->fetchColumn(), true) ?: [];
+            foreach ($items as $it) {
+                $at = null;
+                foreach ($lines as $k => $l) {
+                    if (!empty($it['product_id']) && (int) ($l['product_id'] ?? 0) === (int) $it['product_id']
+                        && (int) ($l['pack_size'] ?? 1) === (int) ($it['pack_size'] ?? 1)) {
+                        $at = $k;
+                        break;
+                    }
+                }
+                if ($at === null) {
+                    $lines[] = $it;
+                    continue;
+                }
+                $lines[$at]['qty'] = (int) $lines[$at]['qty'] + (int) $it['qty'];
+                $lines[$at]['unit_cost'] = (float) $it['unit_cost'];
+                $lines[$at]['line_total'] = round($lines[$at]['qty'] * (float) $it['unit_cost'], 2);
+            }
+            $header = array_intersect_key($doc, array_flip(['supplier_name', 'supplier_tax_id', 'receipt_no', 'receipt_date', 'discount', 'vat', 'note', 'funding']));
+            [$h] = $this->validate(['total' => 0] + $header, $lines);
+            $keep = array_column($this->attachments->forPurchase($id), 'token');
+            $result = $this->updateOrder($doc, $h, $lines, $keep, [], $userId, $ip);
+            $this->db->commit();
+            return $result + ['merged' => true];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** A draft order was sent to the supplier: it now waits for delivery. */
+    public function placeOrder(int $id, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            [$doc] = $this->lockActive($id, 'ยืนยันสั่งซื้อ');
+            if ($doc['status'] !== 'draft') {
+                throw new \RuntimeException("ใบสั่งซื้อ {$doc['doc_no']} ไม่ใช่ร่าง");
+            }
+            $this->db->prepare("UPDATE purchase_documents SET status = 'ordered', ordered_at = NOW(), ordered_by = ? WHERE id = ?")->execute([$userId, $id]);
+            $this->audit->log('purchase_documents', $id, 'update', ['doc_no' => $doc['doc_no'], 'status' => 'draft'],
+                ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'note' => 'ยืนยันสั่งซื้อแล้ว รอรับของ'], $userId, $ip);
+            $this->db->commit();
+            return ['id' => $id, 'doc_no' => $doc['doc_no'], 'status' => 'ordered'];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
     }
 
     /**
@@ -311,7 +387,10 @@ class PurchaseService
         $this->db->beginTransaction();
         try {
             [$doc, $old] = $this->lockActive($id, 'แก้ไข');
-            if ($doc['status'] === 'ordered') {
+            if (in_array($doc['status'], ['draft', 'ordered'], true)) {
+                if ($receive && $doc['status'] === 'draft') {
+                    throw new \RuntimeException("ใบสั่งซื้อ {$doc['doc_no']} ยังเป็นร่าง กด ยืนยันสั่งซื้อแล้ว ก่อนรับสินค้า");
+                }
                 $result = $receive
                     ? $this->receiveOrder($doc, $h, $lines, $keepTokens, $newAttachments, $userId, $ip)
                     : $this->updateOrder($doc, $h, $items, $keepTokens, $newAttachments, $userId, $ip);
@@ -381,7 +460,7 @@ class PurchaseService
         try {
             [$doc, $old] = $this->lockActive($id, 'ยกเลิก');
             // An order never delivered moved no stock: nothing to take back.
-            $ordered = $doc['status'] === 'ordered';
+            $ordered = in_array($doc['status'], ['draft', 'ordered'], true);
             $stockBefore = $ordered ? [] : $this->stockOf(array_column($old['items'], 'product_id'));
             $createdHere = $ordered ? [] : $this->reverseLines($old['items'], $userId, $ip);
             // Stock may go below zero; a product counted on or after the receipt date keeps the counted stock.
@@ -717,7 +796,7 @@ class PurchaseService
             // An order not delivered yet has no lines either: count from what was ordered.
             $snapshot = match ($d['status'] ?? 'active') {
                 'cancelled' => (string) $d['cancelled_items'],
-                'ordered' => (string) ($d['order_items'] ?? ''),
+                'draft', 'ordered' => (string) ($d['order_items'] ?? ''),
                 default => null,
             };
             if ($snapshot !== null) {
@@ -769,7 +848,7 @@ class PurchaseService
             $by->execute([(int) $doc['cancelled_by']]);
             $doc['cancelled_by_name'] = $by->fetchColumn() ?: null;
         }
-        if (($doc['status'] ?? 'active') === 'ordered') {
+        if (in_array($doc['status'] ?? 'active', ['draft', 'ordered'], true)) {
             // The lines as entered (the form reloads them) and as they will go into stock.
             $doc['order_lines'] = json_decode((string) $doc['order_items'], true) ?: [];
             $doc['items'] = $this->orderLinesForView($doc['order_lines']);

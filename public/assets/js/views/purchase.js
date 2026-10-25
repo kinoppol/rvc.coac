@@ -124,8 +124,8 @@ export async function render(container) {
 
     /** Loads a saved purchase into the form; saving then updates it in place. */
     function startEdit(d, { receive = false } = {}) {
-        const ordered = d.status === 'ordered';
-        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, receive: ordered && receive };
+        const ordered = d.status === 'ordered' || d.status === 'draft';
+        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, draft: d.status === 'draft', receive: d.status === 'ordered' && receive };
         header = {
             ...emptyHeader(),
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
@@ -184,21 +184,24 @@ export async function render(container) {
           <div class="modal pc-modal" role="dialog" aria-modal="true" aria-labelledby="pc-form-title">
             <div class="modal-head">
               <h2 id="pc-form-title">${editing?.receive ? `รับสินค้าตามใบสั่งซื้อ ${escapeHtml(editing.doc_no)}`
+                  : editing?.draft ? `ร่างใบสั่งซื้อ ${escapeHtml(editing.doc_no)}`
                   : editing?.ordered ? `แก้ไขใบสั่งซื้อ ${escapeHtml(editing.doc_no)}`
                   : editing ? `แก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}` : orderDraft ? 'บันทึกใบสั่งซื้อ (รอร้านมาส่ง)' : 'ซื้อสินค้าเข้าร้าน'}</h2>
               <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body pc-modal-body">
         ${editing?.ordered ? `<div class="pc-warn" style="margin:0">
-          <div><b>${editing.receive ? 'ตรวจสินค้าที่มาส่งกับใบสั่งซื้อ' : 'ใบสั่งซื้อ รอร้านมาส่ง'} ${escapeHtml(editing.doc_no)}</b><br>
+          <div><b>${editing.receive ? 'ตรวจสินค้าที่มาส่งกับใบสั่งซื้อ' : editing.draft ? 'ร่างใบสั่งซื้อ ยังไม่ได้สั่ง' : 'ใบสั่งซื้อ รอร้านมาส่ง'} ${escapeHtml(editing.doc_no)}</b><br>
             <span style="font-size:12.5px">${editing.receive
                 ? 'แก้จำนวน/ราคาให้ตรงกับของที่ได้รับจริงและใบเสร็จ/ใบส่งของ แล้วกด <b>ยืนยันรับสินค้าเข้าสต๊อก</b> — สินค้าจะเข้าสต๊อกและบันทึกเป็นใบซื้อ (เลขที่เดิม)'
-                : 'ใบสั่งซื้อยังไม่เข้าสต๊อก แก้ไขรายการได้จนกว่าจะยืนยันรับสินค้า'}</span></div>
+                : editing.draft
+                    ? 'เพิ่ม/แก้รายการได้ (หรือเลือกสินค้าเพิ่มจากหน้าสต๊อกสินค้า) เมื่อสั่งซื้อกับร้านเรียบร้อยแล้ว กด <b>ยืนยันสั่งซื้อแล้ว</b> สถานะจะเป็นรอรับของ'
+                    : 'ใบสั่งซื้อยังไม่เข้าสต๊อก แก้ไขรายการได้จนกว่าจะยืนยันรับสินค้า'}</span></div>
         </div>` : editing ? `<div class="pc-warn" style="margin:0">
           <div><b>กำลังแก้ไขใบซื้อ ${escapeHtml(editing.doc_no)}</b><br>
             <span style="font-size:12.5px">เมื่อบันทึก ระบบจะหักสต๊อกตามใบเดิมออกแล้วรับเข้าตามรายการใหม่ (เลขที่ใบซื้อเดิม) — สินค้าที่ขายไปแล้วอาจทำให้สต๊อกติดลบ · สินค้าที่ตรวจนับหลังวันที่ในใบเสร็จคงยอดตามที่นับ</span></div>
         </div>` : orderDraft ? `<div class="pc-warn" style="margin:0">
-          <div><b>ใบสั่งของ</b><br><span style="font-size:12.5px">บันทึกเป็นใบสั่งซื้อไว้ก่อน สินค้ายังไม่เข้าสต๊อก เมื่อร้านมาส่งของ กด <b>รับสินค้า</b> ที่ใบสั่งซื้อในรายการเพื่อยืนยันเข้าสต๊อก</span></div>
+          <div><b>ใบสั่งของ</b><br><span style="font-size:12.5px">บันทึกเป็นใบสั่งซื้อ (สั่งแล้ว รอรับของ) สินค้ายังไม่เข้าสต๊อก เมื่อร้านมาส่งของ กด <b>รับสินค้า</b> ที่ใบสั่งซื้อในรายการเพื่อยืนยันเข้าสต๊อก</span></div>
         </div>` : ''}
 
         <section class="card card-pad">
@@ -304,19 +307,26 @@ export async function render(container) {
     function saveButtonsHtml() {
         const wait = busy ? 'disabled' : '';
         const label = (mode, text) => (busy === mode ? 'กำลังบันทึก...' : text);
+        if (editing?.draft) {
+            return `<span class="actions-row">
+              <button type="button" class="btn secondary" data-save="order" ${wait}>${label('order', 'บันทึกร่าง')}</button>
+              <button type="button" class="btn" data-save="place" ${wait} title="สั่งซื้อกับร้านแล้ว: สถานะเป็นรอรับของ">${label('place', '✓ บันทึกและยืนยันสั่งซื้อแล้ว')}</button></span>`;
+        }
         if (editing?.ordered) {
             const order = `<button type="button" class="btn ${editing.receive ? 'secondary' : ''}" data-save="order" ${wait}>${label('order', `บันทึกใบสั่งซื้อ ${escapeHtml(editing.doc_no)}`)}</button>`;
             const receive = `<button type="button" class="btn ${editing.receive ? '' : 'secondary'}" data-save="receive" ${wait} title="ของมาส่งแล้ว: เข้าสต๊อกตามรายการนี้">${label('receive', '✓ ยืนยันรับสินค้าเข้าสต๊อก')}</button>`;
             return `<span class="actions-row">${order}${receive}</span>`;
         }
         if (editing) return `<button type="button" class="btn" data-save="purchase" ${wait}>${label('purchase', `บันทึกการแก้ไข ${escapeHtml(editing.doc_no)}`)}</button>`;
-        const order = `<button type="button" class="btn ${orderDraft ? '' : 'secondary'}" data-save="order" ${wait} title="สั่งของไว้ก่อน ร้านจะมาส่งภายหลัง: ยังไม่เข้าสต๊อก">${label('order', 'บันทึกเป็นใบสั่งซื้อ (รอส่งของ)')}</button>`;
+        // A supplier's order document is an order already placed; one typed here starts as a draft.
+        const order = `<button type="button" class="btn ${orderDraft ? '' : 'secondary'}" data-save="order" ${wait} title="ยังไม่เข้าสต๊อก${orderDraft ? '' : ' — เพิ่มรายการได้อีก แล้วกด ยืนยันสั่งซื้อแล้ว เมื่อสั่งกับร้านเรียบร้อย'}">${label('order', orderDraft ? 'บันทึกใบสั่งซื้อ (สั่งแล้ว รอรับของ)' : 'บันทึกเป็นร่างใบสั่งซื้อ')}</button>`;
         const purchase = `<button type="button" class="btn ${orderDraft ? 'secondary' : ''}" data-save="purchase" ${wait}>${label('purchase', 'บันทึกใบซื้อ (ได้รับของแล้ว)')}</button>`;
         return `<span class="actions-row">${orderDraft ? purchase + order : order + purchase}</span>`;
     }
 
     function draw() {
         const waiting = docs.filter(isOrdered);
+        const drafts = docs.filter(isDraft);
         container.innerHTML = `
         ${success ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(success)}</div>` : ''}
         <div class="hint"><div class="dot">i</div><div>
@@ -325,7 +335,7 @@ export async function render(container) {
           ระบบตั้งราคาขายเริ่มต้นเป็นทุน + ${escapeHtml(markup)}% แก้ได้ทุกรายการ
         </div></div>
         <div class="actions-row" style="justify-content:space-between">
-          <h2 style="font-size:15px;margin:0">ใบซื้อล่าสุด${waiting.length ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting.length} ใบ</span>` : ''}</h2>
+          <h2 style="font-size:15px;margin:0">ใบซื้อล่าสุด${drafts.length ? ` <span class="pill muted" title="ร่างใบสั่งซื้อที่ยังไม่ได้สั่ง">ร่าง ${drafts.length} ใบ</span>` : ''}${waiting.length ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting.length} ใบ</span>` : ''}</h2>
           <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
         </div>
         <section class="card">
@@ -336,7 +346,8 @@ export async function render(container) {
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
                   <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}
                     ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}
-                    ${isOrdered(d) ? '<span class="pill warn" title="ใบสั่งซื้อ ร้านยังไม่มาส่ง สินค้ายังไม่เข้าสต๊อก">รอส่งของ</span>' : ''}</td>
+                    ${isOrdered(d) ? '<span class="pill warn" title="ใบสั่งซื้อ ร้านยังไม่มาส่ง สินค้ายังไม่เข้าสต๊อก">รอส่งของ</span>' : ''}
+                    ${isDraft(d) ? '<span class="pill muted" title="ยังไม่ได้สั่งกับร้าน เพิ่มรายการได้อีก">ร่างใบสั่งซื้อ</span>' : ''}</td>
                   <td>${d.receipt_date ? fmtDate(d.receipt_date) : '-'}</td>
                   <td>${escapeHtml(d.supplier_name)}${d.receipt_no ? `<div class="muted" style="font-size:12px">${escapeHtml(d.receipt_no)}</div>` : ''}</td>
                   <td class="num">${d.item_count}</td>
@@ -346,6 +357,7 @@ export async function render(container) {
                   <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div></td>
                   <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
                     ${isOrdered(d) ? `<button type="button" class="btn sm" data-receive="${d.id}" title="ของมาส่งแล้ว: ตรวจรายการแล้วยืนยันเข้าสต๊อก">รับสินค้า</button>` : ''}
+                    ${isDraft(d) ? `<button type="button" class="btn sm" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}" title="สั่งซื้อกับร้านเรียบร้อยแล้ว: เปลี่ยนเป็นรอรับของ">ยืนยันสั่งซื้อแล้ว</button>` : ''}
                     ${isCancelled(d) ? '' : `<button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button>
                     <button type="button" class="btn secondary sm pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิก</button>`}</td>
                 </tr>`).join('') || '<tr><td colspan="9" class="empty">ยังไม่มีใบซื้อ</td></tr>'}
@@ -362,6 +374,9 @@ export async function render(container) {
     }
     function isOrdered(d) {
         return d.status === 'ordered';
+    }
+    function isDraft(d) {
+        return d.status === 'draft';
     }
 
     function unitsOf(it) {
@@ -626,6 +641,8 @@ export async function render(container) {
                 <div style="font-size:12.5px">สินค้าตามรายการด้านล่างถูกหักออกจากสต๊อกแล้ว และไม่นับรวมในรายงาน</div></div>` : ''}
               ${isOrdered(d) ? `<div class="pc-warn" style="margin:0 0 12px"><div><b>ใบสั่งซื้อ รอร้านมาส่ง</b> — สั่งเมื่อ ${fmtDateTime(d.ordered_at)}${d.ordered_by_name ? ` โดย ${escapeHtml(d.ordered_by_name)}` : ''}
                 <div style="font-size:12.5px">สินค้ายังไม่เข้าสต๊อก เมื่อของมาส่ง กด <b>รับสินค้า</b> เพื่อตรวจรายการและยืนยันเข้าสต๊อก</div></div></div>` : ''}
+              ${isDraft(d) ? `<div class="pc-warn" style="margin:0 0 12px"><div><b>ร่างใบสั่งซื้อ ยังไม่ได้สั่ง</b>
+                <div style="font-size:12.5px">เพิ่ม/แก้รายการได้ เมื่อสั่งซื้อกับร้านเรียบร้อยแล้ว กด <b>ยืนยันสั่งซื้อแล้ว</b></div></div></div>` : ''}
               <div class="stat-row" style="margin-bottom:14px;font-size:13.5px">
                 <div><div class="muted">ร้าน/ผู้ขาย</div><b>${escapeHtml(d.supplier_name)}</b>${d.supplier_tax_id ? `<div class="muted">${escapeHtml(d.supplier_tax_id)}</div>` : ''}</div>
                 <div><div class="muted">เลขที่ / วันที่ใบเสร็จ</div><b>${escapeHtml(d.receipt_no || '-')}</b><div>${d.receipt_date ? fmtDate(d.receipt_date) : '-'}</div></div>
@@ -638,15 +655,16 @@ export async function render(container) {
                       <td class="num">${it.qty}${Number(it.pack_size) > 1 ? ` × ${it.pack_size}` : ''}</td><td class="num">${money(it.unit_cost)}</td><td class="num">${money(it.line_total)}</td>
                       <td class="num">${it.item_type === 'supply' ? '—' : it.units}</td><td class="num">${money(it.piece_cost)}</td>
                       <td class="num">${it.item_type === 'supply' ? '—' : money(it.sale_price)}</td>
-                      <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : isOrdered(d) ? '<span class="pill warn">รอส่งของ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
+                      <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : isDraft(d) ? '<span class="pill muted">ร่าง</span>' : isOrdered(d) ? '<span class="pill warn">รอส่งของ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
                 </tbody></table></div>
               ${evidenceHtml(d)}
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
             <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">
               <button type="button" class="btn secondary" data-print-view>🖨 พิมพ์</button>
-              ${isCancelled(d) ? '' : `<button type="button" class="btn ${isOrdered(d) ? 'secondary' : ''}" data-edit="${d.id}">${isOrdered(d) ? 'แก้ไขใบสั่งซื้อ' : 'แก้ไขใบซื้อนี้'}</button>`}
+              ${isCancelled(d) ? '' : `<button type="button" class="btn ${isOrdered(d) || isDraft(d) ? 'secondary' : ''}" data-edit="${d.id}">${isDraft(d) ? 'แก้ไขร่าง' : isOrdered(d) ? 'แก้ไขใบสั่งซื้อ' : 'แก้ไขใบซื้อนี้'}</button>`}
               ${isOrdered(d) ? `<button type="button" class="btn" data-receive="${d.id}">รับสินค้าเข้าสต๊อก</button>` : ''}
+              ${isDraft(d) ? `<button type="button" class="btn" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยืนยันสั่งซื้อแล้ว</button>` : ''}
               <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
         </div>`;
@@ -794,6 +812,7 @@ export async function render(container) {
             } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         }));
         container.querySelectorAll('[data-save]').forEach((b) => b.addEventListener('click', () => save(b.dataset.save)));
+        container.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('click', () => placeDoc(Number(b.dataset.place), b.dataset.doc)));
         container.querySelectorAll('[data-receive]').forEach((b) => b.addEventListener('click', async () => {
             const formUsed = !editing && items.some((i) => i.name.trim());
             if ((formUsed || editing) && !(await confirmDialog('ข้อมูลที่กรอกค้างไว้ในฟอร์มจะถูกแทนที่ด้วยใบสั่งซื้อที่เลือก', { title: 'แทนที่ข้อมูลในฟอร์ม?', okText: 'ดำเนินการต่อ' }))) return;
@@ -996,6 +1015,24 @@ export async function render(container) {
         return it.product_id && it.item_type === 'stock' && it.name.trim() === it.origName ? it.product_id : null;
     }
 
+    /** A draft order was sent to the supplier: it waits for delivery from now on. */
+    async function placeDoc(id, docNo, ask = true) {
+        if (ask && !(await confirmDialog('สั่งซื้อกับร้านเรียบร้อยแล้ว ใบนี้จะเปลี่ยนเป็น รอรับของ (แก้ไขรายการได้จนกว่าจะรับสินค้า)',
+            { title: `ยืนยันสั่งซื้อ ${docNo} แล้ว?`, okText: 'ยืนยันสั่งซื้อแล้ว' }))) return false;
+        try {
+            await api.post(`/purchases/${id}/place`);
+            success = `ยืนยันสั่งซื้อ ${docNo} แล้ว — รอรับของ`;
+            error = null;
+            viewing = null;
+            await loadDocs();
+            draw();
+            return true;
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+            return false;
+        }
+    }
+
     async function cancelDoc(id, docNo) {
         const reason = await promptDialog('สินค้าตามใบนี้จะถูกหักออกจากสต๊อก และไม่นับรวมในรายงาน (ยกเลิกแล้วกู้คืนไม่ได้)\nกรุณาระบุเหตุผลที่ยกเลิก:',
             { title: `ยกเลิกใบซื้อ ${docNo}?`, okText: 'ยกเลิกใบซื้อ', cancelText: 'ไม่ยกเลิก', placeholder: 'เหตุผลที่ยกเลิก', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true });
@@ -1048,17 +1085,24 @@ export async function render(container) {
                 })),
                 attachments: photos.map((p) => p.token),
                 source,
-                ...(mode === 'order' && !editing ? { order: true } : {}),
+                ...(mode === 'order' && !editing ? { order: true, draft: !orderDraft } : {}),
                 ...(mode === 'receive' ? { receive: true } : {}),
             };
             const res = editing ? await api.put(`/purchases/${editing.id}`, payload) : await api.post('/purchases', payload);
             const d = res.data;
             if (d.ordered) {
-                success = `บันทึกใบสั่งซื้อ ${d.doc_no} แล้ว: ${d.items} รายการ ยอด ฿${money(d.total)} — รอร้านมาส่ง (ยังไม่เข้าสต๊อก)`;
+                const placeAfter = mode === 'place' ? { id: d.id, doc_no: d.doc_no } : null;
+                success = d.status === 'draft'
+                    ? `บันทึกร่างใบสั่งซื้อ ${d.doc_no} แล้ว: ${d.items} รายการ ยอด ฿${money(d.total)} — ยังไม่ได้สั่ง`
+                    : `บันทึกใบสั่งซื้อ ${d.doc_no} แล้ว: ${d.items} รายการ ยอด ฿${money(d.total)} — รอร้านมาส่ง (ยังไม่เข้าสต๊อก)`;
                 clearForm();
                 formOpen = false;
-                await loadDocs();
                 busy = null;
+                if (placeAfter) {
+                    await placeDoc(placeAfter.id, placeAfter.doc_no, false);
+                    return;
+                }
+                await loadDocs();
                 draw();
                 return;
             }

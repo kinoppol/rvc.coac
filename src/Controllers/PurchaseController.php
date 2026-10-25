@@ -96,7 +96,15 @@ class PurchaseController
         $images = (new AttachmentService(Db::connection()))->ownedBy((array) ($body['attachments'] ?? []), (int) $user['id']);
         try {
             // order: goods ordered for delivery later, saved without touching stock.
-            $result = self::service()->{!empty($body['order']) ? 'createOrder' : 'create'}(
+            $result = !empty($body['order']) ? self::service()->createOrder(
+                (array) ($body['header'] ?? []),
+                (array) ($body['items'] ?? []),
+                $images,
+                ($body['source'] ?? '') === 'ai' ? 'ai' : 'manual',
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                !empty($body['draft']) // a draft: not sent to the supplier yet
+            ) : self::service()->create(
                 (array) ($body['header'] ?? []),
                 (array) ($body['items'] ?? []),
                 $images,
@@ -106,7 +114,7 @@ class PurchaseController
             );
         } catch (\RuntimeException $e) {
             if (!empty($body['order']) && $e instanceof \PDOException) {
-                return $this->error($response, 'ยังบันทึกใบสั่งซื้อไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041) ก่อน', 422);
+                return $this->error($response, 'ยังบันทึกใบสั่งซื้อไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041 และ 0042) ก่อน', 422);
             }
             return $this->error($response, $e->getMessage(), 422);
         }
@@ -132,6 +140,17 @@ class PurchaseController
                 $request->getServerParams()['REMOTE_ADDR'] ?? null,
                 !empty($body['receive']) // an order: confirm the delivery into stock
             );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    /** A draft order was sent to the supplier: it now waits for delivery. */
+    public function place(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $result = self::service()->placeOrder((int) $args['id'], (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

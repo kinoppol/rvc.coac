@@ -88,13 +88,19 @@ class InventoryController
                 continue;
             }
             try {
+                // Items go onto the supplier's draft order when there is one (more may still be added).
+                $draftId = $service->draftFor((string) ($o['supplier_name'] ?? ''));
+                if ($draftId !== null) {
+                    $made[] = $service->appendToDraft($draftId, $items, (int) $user['id'], $ip) + ['supplier_name' => (string) $o['supplier_name']];
+                    continue;
+                }
                 $made[] = $service->createOrder([
                     'supplier_name' => (string) ($o['supplier_name'] ?? ''), 'supplier_tax_id' => (string) ($o['supplier_tax_id'] ?? ''),
                     'receipt_date' => date('Y-m-d'), 'funding' => $o['funding'] ?? 'capital',
                     'note' => 'สร้างจากหน้าสต๊อกสินค้าของร้าน',
-                ], $items, [], 'manual', (int) $user['id'], $ip) + ['supplier_name' => (string) ($o['supplier_name'] ?? '')];
+                ], $items, [], 'manual', (int) $user['id'], $ip, true) + ['supplier_name' => (string) ($o['supplier_name'] ?? '')];
             } catch (\RuntimeException $e) {
-                $msg = $e instanceof \PDOException ? 'ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041) ก่อน' : $e->getMessage();
+                $msg = $e instanceof \PDOException ? 'ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041 และ 0042) ก่อน' : $e->getMessage();
                 return $this->error($response, ($made ? 'สร้างแล้ว ' . implode(', ', array_column($made, 'doc_no')) . ' แต่' : '')
                     . 'สร้างใบสั่งซื้อของ ' . ($o['supplier_name'] ?? '') . ' ไม่ได้: ' . $msg, 422);
             }
