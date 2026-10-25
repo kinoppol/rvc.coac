@@ -15,6 +15,7 @@ export async function render(container) {
     let busy = false;
     let error = null;
     const form = { entry_date: todayISO(), type: 'withdraw', investor: '', amount: '', method: 'transfer', note: '' };
+    let formOpen = false; // the entry form, on a modal
 
     async function load() {
         data = (await api.get(`/capital?from=${from}&to=${to}`)).data;
@@ -28,6 +29,9 @@ export async function render(container) {
           <b>งบลงทุน</b> = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นใบซื้อที่ระบุว่า "ซื้อด้วยเงินกำไรของกิจการ") + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ·
           ใบซื้อนับเข้างบลงทุนให้อัตโนมัติ หน้านี้ใช้บันทึก<b>การเบิกเงินออกจากกำไร</b> และเงินลงทุนอื่นที่ไม่ใช่การซื้อของ
         </div></div>
+        <div class="actions-row" style="justify-content:flex-end">
+          <button type="button" class="btn" id="c-open" style="font-size:15px;padding:12px 22px">+ เบิกเงินออกจากกำไร / ลงทุนเพิ่ม</button>
+        </div>
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">งบลงทุนยกมา</div><div class="val">฿ ${money(d.opening)}</div><div class="sub">ก่อน ${escapeHtml(fmtDate(d.from))}</div></div>
           <div class="kpi"><div class="lbl">ซื้อของด้วยเงินลงทุน (ช่วงนี้)</div><div class="val">฿ ${money(d.capital_purchases)}</div>
@@ -55,8 +59,12 @@ export async function render(container) {
             กำไรสะสมคงเหลือ = กำไรสุทธิสะสม − เงินที่เบิกออกจากกำไร · กดตัวเลขสีน้ำเงินเพื่อดูรายการที่มา</div>
         </section>
 
-        <section class="card card-pad">
-          <h2 style="margin-bottom:12px">บันทึกการเบิกเงินออกจากกำไร / ลงทุนเพิ่ม</h2>
+        ${formOpen ? `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="c-title" style="width:760px">
+            <div class="modal-head"><h2 id="c-title">บันทึกการเบิกเงินออกจากกำไร / ลงทุนเพิ่ม</h2>
+              <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button></div>
+            <div class="modal-body">
           <div class="form-grid">
             <label class="field">ประเภท
               <select id="c-type">${Object.entries(d.types).map(([k, v]) => `<option value="${k}" ${k === form.type ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -71,8 +79,13 @@ export async function render(container) {
           </div>
           ${error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(error)}</div>` : ''}
           <div class="muted" style="font-size:12.5px;margin-top:10px">เบิกเงินออกจากกำไร: งบลงทุนคงเหลือลดลงตามจำนวนนี้ · ลงทุนเพิ่ม: ใช้กับเงินลงทุนที่ไม่ได้ผ่านใบซื้อ (ใบซื้อนับให้อัตโนมัติแล้ว ไม่ต้องบันทึกซ้ำ)</div>
-          <button type="button" class="btn" id="c-save" style="margin-top:12px;min-width:220px" ${busy ? 'disabled' : ''}>${busy ? 'กำลังบันทึก...' : 'บันทึก'}</button>
-        </section>
+            </div>
+            <div class="modal-foot">
+              <button type="button" class="btn secondary" data-close-form>ยกเลิก</button>
+              <button type="button" class="btn" id="c-save" ${busy ? 'disabled' : ''}>${busy ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+            </div>
+          </div>
+        </div>` : ''}
 
         <section class="card">
           <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
@@ -111,13 +124,16 @@ export async function render(container) {
     function wire() {
         const $ = (s) => container.querySelector(s);
         [['#c-type', 'type'], ['#c-date', 'entry_date'], ['#c-investor', 'investor'], ['#c-amount', 'amount'], ['#c-method', 'method'], ['#c-note', 'note']]
-            .forEach(([sel, key]) => $(sel).addEventListener('input', (e) => { form[key] = e.target.value; }));
-        $('#c-type').addEventListener('change', draw); // labels follow the type
+            .forEach(([sel, key]) => $(sel)?.addEventListener('input', (e) => { form[key] = e.target.value; }));
+        $('#c-type')?.addEventListener('change', draw); // labels follow the type
+        $('#c-open').addEventListener('click', () => { formOpen = true; error = null; draw(); $('#c-type')?.focus(); });
+        // Closing keeps what was typed for next time.
+        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => { formOpen = false; error = null; draw(); }));
         container.querySelectorAll('[data-drill]').forEach((b) => b.addEventListener('click', () => {
             const m = data.months[Number(b.dataset.month)];
             openDetailModal(async () => (await api.get(`/reports/capital/source?column=${b.dataset.drill}&from=${m._from}&to=${m._to}`)).data);
         }));
-        $('#c-save').addEventListener('click', save);
+        $('#c-save')?.addEventListener('click', save);
         $('#f-from').addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; load(); } });
         $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; load(); } });
         container.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => cancel(b.dataset.cancel)));
@@ -136,6 +152,7 @@ export async function render(container) {
             await api.post('/capital', { ...form, amount });
             Object.assign(form, { amount: '', note: '' });
             busy = false;
+            formOpen = false;
             await load();
         } catch (e) {
             busy = false;

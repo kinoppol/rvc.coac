@@ -88,7 +88,7 @@ export async function render(container, { navigate, permissions }) {
         const pickable = rows.filter((r) => !r.consignor_code);
         const allPicked = pickable.length > 0 && pickable.every((r) => imp.selected.has(Number(r.oa_user_id)));
         return `
-        <section class="card" style="border-color:var(--priBorder)">
+        <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" style="width:900px;overflow:auto">
           <div class="card-pad" style="background:var(--soft);border-bottom:1px solid var(--priBorder)">
             <h2>ดึงรายชื่อบุคลากร / นักเรียน มาเป็นผู้ฝากขาย</h2>
             <p class="muted" style="margin:3px 0 0;font-size:12.5px">รายชื่อมาจาก RVC-ONE ผู้ที่ถูกเลือกจะได้รหัสผู้ฝากขาย และเข้าสู่ระบบผ่าน RVC-ONE เพื่อดูสมุดบัญชีและแจ้งฝากสินค้าได้เอง</p>
@@ -130,7 +130,7 @@ export async function render(container, { navigate, permissions }) {
               <button type="button" class="btn" id="do-import" ${imp.selected.size && !imp.busy ? '' : 'disabled'}>${imp.busy ? 'กำลังเพิ่ม…' : `เพิ่มเป็นผู้ฝากขาย (${count(imp.selected.size)} คน)`}</button>
             </div>
           </div>
-        </section>`;
+        </div></div>`;
     }
 
     async function searchDirectory() {
@@ -195,7 +195,7 @@ export async function render(container, { navigate, permissions }) {
 
     function formHtml() {
         return `
-        <section class="card" style="border-color:var(--priBorder)">
+        <div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" style="width:900px;overflow:auto">
           <div class="card-pad" style="background:var(--soft);border-bottom:1px solid var(--priBorder)">
             <h2>ใบสมัครเป็นผู้ฝากขาย</h2>
             <p class="muted" style="margin:3px 0 0;font-size:12.5px">กรอกช่องที่มีเครื่องหมาย <span style="color:var(--bad)">*</span> ให้ครบ ระบบจะออกรหัสผู้ฝากขายให้อัตโนมัติ</p>
@@ -226,7 +226,7 @@ export async function render(container, { navigate, permissions }) {
               <button type="submit" class="btn">บันทึกและออกรหัสผู้ฝาก</button>
             </div>
           </form>
-        </section>`;
+        </div></div>`;
     }
 
     function wireForm() {

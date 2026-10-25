@@ -27,6 +27,7 @@ export async function render(container) {
     let error = null;
     const form = { user_id: '', pay_date: todayISO(), period_from: '', period_to: '', wage_type: 'day', units: '', rate: '', amount: '', method: 'cash', from_drawer: false, note: '' };
     let amountTouched = false;
+    let formOpen = false; // the pay form, on a modal
 
     async function load() {
         const q = new URLSearchParams({ from, to });
@@ -46,9 +47,15 @@ export async function render(container) {
         const d = data;
         const fixed = form.wage_type === 'fixed';
         container.innerHTML = `
-        <div class="two-col">
-          <section class="card card-pad">
-            <h2 style="margin-bottom:12px">จ่ายค่าแรง</h2>
+        <div class="actions-row" style="justify-content:flex-end">
+          <button type="button" class="btn" id="w-open" style="font-size:15px;padding:12px 22px">+ เบิกจ่ายค่าแรงพนักงาน</button>
+        </div>
+        ${formOpen ? `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="w-title" style="width:760px">
+            <div class="modal-head"><h2 id="w-title">จ่ายค่าแรง</h2>
+              <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button></div>
+            <div class="modal-body">
             <div class="form-grid">
               <label class="field" style="grid-column:span 2">พนักงาน *
                 <select id="w-user"><option value="">— เลือกพนักงาน —</option>
@@ -75,8 +82,13 @@ export async function render(container) {
               </label>` : ''}
             ${error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(error)}</div>` : ''}
             <div class="muted" style="font-size:12.5px;margin-top:10px">ค่าแรงบันทึกเป็นต้นทุนของกิจการ หักจากกำไรของร้าน</div>
-            <button type="button" class="btn" id="w-save" style="width:100%;margin-top:12px" ${busy ? 'disabled' : ''}>${busy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายค่าแรง'}</button>
-          </section>
+            </div>
+            <div class="modal-foot">
+              <button type="button" class="btn secondary" data-close-form>ยกเลิก</button>
+              <button type="button" class="btn" id="w-save" ${busy ? 'disabled' : ''}>${busy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายค่าแรง'}</button>
+            </div>
+          </div>
+        </div>` : ''}
 
           <section class="card card-pad">
             <h2 style="margin-bottom:4px">สรุปค่าแรง</h2>
@@ -88,7 +100,6 @@ export async function render(container) {
                 || '<tr><td colspan="3" class="empty">ยังไม่มีการจ่ายค่าแรงในช่วงนี้</td></tr>'}</tbody>
             </table></div>
           </section>
-        </div>
 
         <section class="card card-pad">
           <div class="actions-row">
@@ -139,7 +150,10 @@ export async function render(container) {
         bind('#w-to', 'period_to');
         bind('#w-method', 'method', true);
         bind('#w-note', 'note');
-        $('#w-type').addEventListener('change', (e) => {
+        $('#w-open').addEventListener('click', () => { formOpen = true; error = null; draw(); $('#w-user')?.focus(); });
+        // Closing keeps what was typed for next time.
+        container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => { formOpen = false; error = null; draw(); }));
+        $('#w-type')?.addEventListener('change', (e) => {
             form.wage_type = e.target.value;
             if (!amountTouched) form.amount = autoAmount();
             draw();
@@ -148,12 +162,12 @@ export async function render(container) {
             form[sel === '#w-units' ? 'units' : 'rate'] = e.target.value;
             if (!amountTouched) $('#w-amount').value = form.amount = autoAmount();
         }));
-        $('#w-amount').addEventListener('input', (e) => {
+        $('#w-amount')?.addEventListener('input', (e) => {
             form.amount = e.target.value;
             amountTouched = e.target.value !== '';
         });
         $('#w-drawer')?.addEventListener('change', (e) => { form.from_drawer = e.target.checked; });
-        $('#w-save').addEventListener('click', save);
+        $('#w-save')?.addEventListener('click', save);
 
         container.querySelectorAll('[data-month]').forEach((b) => b.addEventListener('click', () => {
             [from, to] = monthRange(Number(b.dataset.month));
@@ -187,6 +201,7 @@ export async function render(container) {
             Object.assign(form, { units: '', amount: '', period_from: '', period_to: '', note: '', from_drawer: false });
             amountTouched = false;
             busy = false;
+            formOpen = false;
             await load();
             if (await confirmDialog(`บันทึก ${w.doc_no} แล้ว ต้องการพิมพ์ใบสำคัญจ่ายให้พนักงานลงชื่อรับเงินหรือไม่?`, { title: 'บันทึกการจ่ายค่าแรงแล้ว', okText: 'พิมพ์', cancelText: 'ไม่พิมพ์' })) {
                 printWageSlip(w, data.types, data.methods);
