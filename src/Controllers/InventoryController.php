@@ -40,6 +40,15 @@ class InventoryController
         return $this->json($response, ['data' => $data]);
     }
 
+    /** Admin only: store products whose stock may be off from documents keyed in late or out of order. */
+    public function orderCheck(Request $request, Response $response): Response
+    {
+        if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        return $this->json($response, ['data' => (new InventoryService(Db::connection()))->orderCheck()]);
+    }
+
     /** The document behind one stock movement (?kind=purchase|receive|sale|pos|return|count&doc_no=...). */
     public function document(Request $request, Response $response): Response
     {

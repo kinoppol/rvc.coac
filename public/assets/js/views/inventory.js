@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
-import { openProductModal } from '../product-modal.js';
+import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -108,7 +108,10 @@ export async function render(container, { navigate, permissions, user }) {
         <section class="card card-pad">
           <div class="actions-row" style="justify-content:space-between">
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
-            ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
+            <div class="actions-row">
+              ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
+              ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
+            </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
             ${FILTERS.map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}">${l} (${count(res.data.filter(fn).length)})</button>`).join('')}
@@ -139,6 +142,7 @@ export async function render(container, { navigate, permissions, user }) {
             try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
             draw();
         }));
+        container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
         container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.claim);

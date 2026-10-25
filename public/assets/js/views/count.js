@@ -72,14 +72,15 @@ export async function render(container, { permissions }) {
                   return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}">
                     <td>${escapeHtml(it.name)}</td><td class="muted">${escapeHtml(it.consignor_name)}</td>
                     <td class="num">${it.system_qty}</td>
-                    <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}></td>
+                    <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}>
+                      ${current.status === 'draft' ? `<button type="button" class="btn secondary sm" data-zero="${i}" title="ขายหมดแล้ว ไม่มีของให้นับ: บันทึกว่านับได้ 0" ${counted(it) === 0 ? 'hidden' : ''}>หมด (0)</button>` : ''}</td>
                     <td data-diff>${diffHtml(diff)}</td>
                   </tr>`;
               }).join('')}
             </tbody>
           </table></div>
         </section>
-        <p class="muted" style="font-size:12px">กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
+        <p class="muted" style="font-size:12px">กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
         <div class="actions-row">
           ${current.status === 'draft' ? `
             <button type="button" class="btn secondary" id="btn-save">บันทึกร่างไว้ก่อน</button>
@@ -104,8 +105,16 @@ export async function render(container, { permissions }) {
             k.textContent = t.diffCount;
             k.style.color = t.diffCount ? 'var(--bad)' : 'inherit';
             container.querySelector('[data-k="value"]').textContent = `฿ ${money(t.diffValue)}`;
+            const zb = tr.querySelector('[data-zero]');
+            if (zb) zb.hidden = counted(items[i]) === 0;
             const sb = container.querySelector('#btn-submit');
             if (sb) sb.disabled = !t.diffCount;
+        }));
+        // Sold out: nothing on the shelf to scan, so record a count of 0 in one click.
+        container.querySelectorAll('[data-zero]').forEach((b) => b.addEventListener('click', () => {
+            const inp = container.querySelector(`[data-idx="${b.dataset.zero}"]`);
+            inp.value = '0';
+            inp.dispatchEvent(new Event('input'));
         }));
         const mobileBtn = container.querySelector('#btn-mobile');
         if (mobileBtn) mobileBtn.addEventListener('click', () => openMobileCount({

@@ -142,3 +142,60 @@ export async function openProductModal(productId, navigate) {
     }
     draw();
 }
+
+const ISSUE = {
+    duplicate: ['รับเข้าซ้ำ', 'bad'],
+    negative: ['ขายเกินรับเข้า', 'bad'],
+    reordered: ['บันทึกสลับลำดับ', 'warn'],
+    gap: ['ยอดไม่ตรงเอกสาร', 'warn'],
+};
+
+/** Admin: products whose stock may be off from documents keyed in late or out of order. */
+export async function openOrderCheckModal(navigate) {
+    const box = document.createElement('div');
+    box.className = 'modal-backdrop';
+    box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:960px"><div class="modal-body">' + skBlock(4, 8) + '</div></div>';
+    document.body.appendChild(box);
+    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-backdrop')].pop() === box) close(); };
+    document.addEventListener('keydown', onKey);
+
+    let rows;
+    try {
+        rows = (await api.get('/inventory/order-check')).data;
+    } catch (e) {
+        close();
+        alertDialog(e.message, { tone: 'error' });
+        return;
+    }
+    let only = 'all';
+
+    function draw() {
+        const shown = only === 'all' ? rows : rows.filter((r) => r.issues.some((i) => i.code === only));
+        box.querySelector('.modal').innerHTML = `
+          <div class="modal-head"><h2>ตรวจสอบข้อมูลที่บันทึกล่าช้า / สลับลำดับ</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
+          <div class="modal-body" style="padding-top:12px">
+            <div class="hint"><div class="dot">i</div><div>ไล่ยอดคงเหลือของสินค้าของร้านทุกตัวตามวันที่ในเอกสาร เทียบกับลำดับที่บันทึกเข้าระบบ
+              กดชื่อสินค้าเพื่อดูบัญชีคุมสินค้าและเปิดเอกสารที่เกี่ยวข้อง · แก้ยอดให้ตรงของจริงด้วยการตรวจนับสต๊อก (สินค้าที่ขายหมดแล้ว กดปุ่ม หมด (0) ในหน้าตรวจนับ)</div></div>
+            <div class="tabs" role="group" aria-label="กรองปัญหา" style="margin:12px 0 8px">
+              <button type="button" class="tab-btn ${only === 'all' ? 'active' : ''}" data-only="all">ทั้งหมด (${count(rows.length)})</button>
+              ${Object.entries(ISSUE).map(([k, [l]]) => `<button type="button" class="tab-btn ${only === k ? 'active' : ''}" data-only="${k}">${l} (${count(rows.filter((r) => r.issues.some((i) => i.code === k)).length)})</button>`).join('')}
+            </div>
+            ${shown.length ? `<div class="table-wrap" style="max-height:480px;border:1px solid var(--border);border-radius:10px"><table>
+              <thead><tr><th>สินค้า</th><th class="num">คงเหลือในระบบ</th><th class="num">ตามเอกสาร</th><th class="num">บันทึกล่าช้า</th><th>สิ่งที่พบ</th></tr></thead>
+              <tbody>${shown.map((r) => `<tr>
+                <td><button type="button" class="prod-link" data-product="${r.id}">${escapeHtml(r.name)}</button></td>
+                <td class="num">${count(r.qty_stock)}</td>
+                <td class="num">${count(r.doc_balance)}</td>
+                <td class="num">${r.late_count ? count(r.late_count) : '<span class="muted">-</span>'}</td>
+                <td style="font-size:12.5px">${r.issues.map((i) => `<div style="margin:2px 0"><span class="pill ${ISSUE[i.code][1]}">${ISSUE[i.code][0]}</span> ${escapeHtml(i.text)}</div>`).join('')}</td>
+              </tr>`).join('')}</tbody></table></div>`
+            : `<div class="empty" style="padding:14px">${rows.length ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่พบสินค้าที่ข้อมูลสลับลำดับหรือไม่ตรงเอกสาร'}</div>`}
+          </div>
+          <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
+        box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
+        box.querySelectorAll('[data-only]').forEach((b) => b.addEventListener('click', () => { only = b.dataset.only; draw(); }));
+        box.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate && ((page) => { close(); navigate(page); }))));
+    }
+    draw();
+}

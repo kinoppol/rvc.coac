@@ -73,9 +73,66 @@ class InventoryService
     }
 
     /**
+     * Documents that moved stock: one product, or every store product when null.
+     * Stock card in document order: the date printed on each document (a receipt keyed in a
+     * week late still sits on its own day), then receipts before issues on the same day.
+     * qty is +in / -out; a count's qty is its adjustment (counted - system qty when counted).
+     */
+    private function stockEvents(?int $productId): array
+    {
+        $stmt = $this->db->prepare(sprintf(
+            "SELECT * FROM (
+                SELECT pi.product_id, pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
+                       pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty,
+                       pi.piece_cost AS unit_cost, ROUND(pi.units * pi.piece_cost, 2) AS value, NULL AS sale_price,
+                       NULL AS counted_qty, NULL AS system_qty, 1 AS ord, pi.id AS rid
+                FROM purchase_items pi
+                JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                LEFT JOIN users u ON u.id = pd.user_id
+                WHERE pi.product_id IN (%1$s) AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
+              UNION ALL
+                SELECT ri.product_id, rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty,
+                       ri.cost_price, ROUND(ri.qty * ri.cost_price, 2), NULL, NULL, NULL, 1, ri.id
+                FROM receive_items ri
+                JOIN receive_documents rd ON rd.id = ri.receive_document_id
+                LEFT JOIN consignors c ON c.id = rd.consignor_id
+                LEFT JOIN users u ON u.id = rd.user_id
+                WHERE ri.product_id IN (%1$s)
+              UNION ALL
+                SELECT si.product_id, s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
+                       IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
+                       s.doc_no, NULL, u.full_name, -si.qty,
+                       IF(si.qty <> 0, ROUND(si.cost_amount / si.qty, 2), NULL), -si.cost_amount, si.unit_price, NULL, NULL, 2, si.id
+                FROM sale_items si
+                JOIN sales s ON s.id = si.sale_id
+                LEFT JOIN users u ON u.id = s.cashier_id
+                WHERE si.product_id IN (%1$s)
+              UNION ALL
+                SELECT ri.product_id, rd.created_at, DATE(rd.created_at), 'return', rd.doc_no, COALESCE(NULLIF(rd.recipient_name, ''), c.name), u.full_name,
+                       -ri.qty, NULL, NULL, NULL, NULL, NULL, 2, ri.id
+                FROM return_items ri
+                JOIN return_documents rd ON rd.id = ri.return_document_id
+                LEFT JOIN consignors c ON c.id = rd.consignor_id
+                LEFT JOIN users u ON u.id = rd.user_id
+                WHERE ri.product_id IN (%1$s)
+              UNION ALL
+                SELECT sci.product_id, sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
+                       NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
+                FROM stock_count_items sci
+                JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                LEFT JOIN users u ON u.id = sc.approved_by
+                WHERE sci.product_id IN (%1$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
+             ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
+            $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?'
+        ));
+        $stmt->execute($productId === null ? [] : array_fill(0, 5, $productId));
+        return $stmt->fetchAll();
+    }
+
+    /**
      * One product with every document that moved its stock, oldest first, and the balance
      * after each: purchases and consignment receipts in, sales and returns to the consignor
-     * out, approved stock counts set the balance to what was counted. Stock that came in
+     * out, approved stock counts adjust it by what they found short or over. Stock that came in
      * with no document (a product created by a POS import) opens the list; anything else
      * the documents do not explain closes it, so the last balance is always qty_stock.
      */
@@ -95,55 +152,7 @@ class InventoryService
         $stmt->execute([$productId]);
         $packs = $stmt->fetchAll();
 
-        // Stock card in document order: the date printed on each document (a receipt keyed in a
-        // week late still sits on its own day), then receipts before issues on the same day.
-        // qty is +in / -out; a count's qty is its adjustment (counted - system qty when counted).
-        $stmt = $this->db->prepare(
-            "SELECT * FROM (
-                SELECT pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
-                       pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty,
-                       pi.piece_cost AS unit_cost, ROUND(pi.units * pi.piece_cost, 2) AS value, NULL AS sale_price,
-                       NULL AS counted_qty, NULL AS system_qty, 1 AS ord, pi.id AS rid
-                FROM purchase_items pi
-                JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
-                LEFT JOIN users u ON u.id = pd.user_id
-                WHERE pi.product_id = ? AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
-              UNION ALL
-                SELECT rd.created_at, DATE(rd.created_at), 'receive', rd.doc_no, c.name, u.full_name, ri.qty,
-                       ri.cost_price, ROUND(ri.qty * ri.cost_price, 2), NULL, NULL, NULL, 1, ri.id
-                FROM receive_items ri
-                JOIN receive_documents rd ON rd.id = ri.receive_document_id
-                LEFT JOIN consignors c ON c.id = rd.consignor_id
-                LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id = ?
-              UNION ALL
-                SELECT s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
-                       IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
-                       s.doc_no, NULL, u.full_name, -si.qty,
-                       IF(si.qty <> 0, ROUND(si.cost_amount / si.qty, 2), NULL), -si.cost_amount, si.unit_price, NULL, NULL, 2, si.id
-                FROM sale_items si
-                JOIN sales s ON s.id = si.sale_id
-                LEFT JOIN users u ON u.id = s.cashier_id
-                WHERE si.product_id = ?
-              UNION ALL
-                SELECT rd.created_at, DATE(rd.created_at), 'return', rd.doc_no, COALESCE(NULLIF(rd.recipient_name, ''), c.name), u.full_name,
-                       -ri.qty, NULL, NULL, NULL, NULL, NULL, 2, ri.id
-                FROM return_items ri
-                JOIN return_documents rd ON rd.id = ri.return_document_id
-                LEFT JOIN consignors c ON c.id = rd.consignor_id
-                LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id = ?
-              UNION ALL
-                SELECT sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
-                       NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
-                FROM stock_count_items sci
-                JOIN stock_counts sc ON sc.id = sci.stock_count_id
-                LEFT JOIN users u ON u.id = sc.approved_by
-                WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0
-             ) m ORDER BY date ASC, ord ASC, at ASC, rid ASC"
-        );
-        $stmt->execute([$productId, $productId, $productId, $productId, $productId]);
-        $events = $stmt->fetchAll();
+        $events = $this->stockEvents($productId);
 
         $cost = (float) $p['cost_price'];
         $row = fn (array $r) => $r + [
@@ -232,6 +241,105 @@ class InventoryService
             'totals' => $totals,
             'movements' => $rows,
         ];
+    }
+
+    /**
+     * Store products whose stock figures may be off because documents were keyed in late
+     * or out of order. Per product, the balance is run twice: by the date on each document
+     * and by the moment it was recorded. Flags:
+     *  - duplicate: a POS import created the product with stock (no receiving document) for
+     *    goods a purchase dated on or before that day had already brought in;
+     *  - negative: sold more than had come in by that document date (a purchase missing or
+     *    dated wrong);
+     *  - reordered: recorded in that order the stock went below 0, by document date it did not
+     *    (late entries swapped the order);
+     *  - gap: the documents do not add up to the stock in the system.
+     */
+    public function orderCheck(): array
+    {
+        $products = $this->db->query(
+            'SELECT id, name, qty_received, qty_stock, created_at FROM products WHERE consignor_id IS NULL ORDER BY name'
+        )->fetchAll();
+        $byProduct = [];
+        foreach ($this->stockEvents(null) as $e) {
+            $byProduct[(int) $e['product_id']][] = $e;
+        }
+
+        $out = [];
+        foreach ($products as $p) {
+            $events = $byProduct[(int) $p['id']] ?? [];
+            $created = substr((string) $p['created_at'], 0, 10);
+            $docIn = 0;
+            $inByCreation = 0;
+            $late = 0;
+            foreach ($events as $e) {
+                if ($e['kind'] === 'purchase' || $e['kind'] === 'receive') {
+                    $docIn += (int) $e['qty'];
+                    if ((string) $e['date'] <= $created) {
+                        $inByCreation += (int) $e['qty'];
+                    }
+                }
+                if ($e['at'] !== null && substr((string) $e['at'], 0, 10) > (string) $e['date']) {
+                    $late++;
+                }
+            }
+            $opening = (int) $p['qty_received'] - $docIn;
+
+            // Document order (as stockEvents returns it), then recording order.
+            $minDoc = null;
+            $balance = $opening;
+            foreach ($events as $e) {
+                $balance += (int) $e['qty'];
+                if ($balance < 0 && ($minDoc === null || $balance < $minDoc['balance'])) {
+                    $minDoc = ['balance' => $balance, 'date' => $e['date'], 'doc_no' => $e['doc_no']];
+                }
+            }
+            $docEnd = $balance;
+            $byTime = $events;
+            usort($byTime, fn ($a, $b) => [(string) $a['at'], $a['ord'], $a['rid']] <=> [(string) $b['at'], $b['ord'], $b['rid']]);
+            $minRec = null;
+            $balance = $opening;
+            foreach ($byTime as $e) {
+                $balance += (int) $e['qty'];
+                if ($balance < 0 && ($minRec === null || $balance < $minRec['balance'])) {
+                    $minRec = ['balance' => $balance, 'at' => $e['at'], 'doc_no' => $e['doc_no']];
+                }
+            }
+
+            $issues = [];
+            $dup = $opening > 0 ? min($opening, $inByCreation) : 0;
+            if ($dup > 0) {
+                $issues[] = ['code' => 'duplicate', 'qty' => $dup, 'text' => sprintf(
+                    'รับเข้าซ้ำได้ %d ชิ้น: สินค้าถูกสร้างจากการนำเข้า POS พร้อมสต๊อก %d ชิ้น แต่มีใบซื้อ/รับเข้าลงวันที่ก่อนหรือวันเดียวกันที่บันทึกภายหลัง',
+                    $dup, $opening
+                )];
+            }
+            if ($minDoc !== null) {
+                $issues[] = ['code' => 'negative', 'qty' => $minDoc['balance'], 'date' => $minDoc['date'], 'doc_no' => $minDoc['doc_no'], 'text' => sprintf(
+                    'ตามวันที่เอกสาร ขายเกินกว่าที่รับเข้า (คงเหลือติดลบ %d ที่ %s) อาจขาดใบซื้อหรือลงวันที่ใบซื้อผิด',
+                    $minDoc['balance'], $minDoc['doc_no']
+                )];
+            } elseif ($minRec !== null) {
+                $issues[] = ['code' => 'reordered', 'qty' => $minRec['balance'], 'doc_no' => $minRec['doc_no'], 'text' => sprintf(
+                    'บันทึกสลับลำดับ: ตามลำดับที่บันทึกสต๊อกเคยติดลบ %d (ที่ %s) แต่ตามวันที่เอกสารไม่ติดลบ — มีเอกสารรับเข้าที่บันทึกล่าช้า',
+                    $minRec['balance'], $minRec['doc_no']
+                )];
+            }
+            $gap = (int) $p['qty_stock'] - $docEnd;
+            if ($gap !== 0) {
+                $issues[] = ['code' => 'gap', 'qty' => $gap, 'text' => sprintf(
+                    'ยอดคงเหลือในระบบ %d ไม่ตรงกับยอดตามเอกสาร %d (ต่าง %+d) โดยไม่มีเอกสารอ้างอิง',
+                    (int) $p['qty_stock'], $docEnd, $gap
+                )];
+            }
+            if ($issues) {
+                $out[] = [
+                    'id' => (int) $p['id'], 'name' => $p['name'], 'qty_stock' => (int) $p['qty_stock'], 'doc_balance' => $docEnd,
+                    'late_count' => $late, 'issues' => $issues,
+                ];
+            }
+        }
+        return $out;
     }
 
     /**
