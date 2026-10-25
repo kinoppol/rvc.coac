@@ -30,7 +30,8 @@ function emptyItem() {
     // product_id/origName: set when editing a saved purchase, so an unrenamed line stays on the same product
     // pickedId: an existing product the user paired the line with by hand (it restocks that product)
     // forceNew: the user said the line is not the matched product, so saving creates a new one (notMatch = the product it is not)
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
+    // presetPrice: a sale price that came with an AI draft or an order, used only if the line turns out to be a new product
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, presetPrice: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -65,7 +66,8 @@ export async function render(container) {
         const packFilled = p.pack_size > 1 && Number(it.pack_size) <= 1;
         if (packFilled) it.pack_size = p.pack_size;
         it.suggested = p.match ? p.match.sale_price : p.suggested_price;
-        if (!it.priceTouched) it.sale_price = it.suggested || 0;
+        // Restocking an existing product keeps its current sale price; only a new product gets a preset or suggested one.
+        if (!it.priceTouched) it.sale_price = (p.match ? it.suggested : it.presetPrice || it.suggested) || 0;
         return hintBefore !== it.prevSupply || packFilled;
     }
 
@@ -111,7 +113,7 @@ export async function render(container) {
             ...emptyItem(), name: it.product_name || it.name, receipt_name: it.name, pack_size: it.pack_size || 1,
             item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: !!it.item_type,
             barcode: it.barcode || '', qty: it.qty, unit_cost: it.unit_cost,
-            line_total: it.line_total, sale_price: it.sale_price || 0, priceTouched: !!it.sale_price,
+            line_total: it.line_total, sale_price: it.sale_price || 0, presetPrice: Number(it.sale_price) || 0,
         }));
         if (!items.length) items = [emptyItem()];
         warnings = d.warnings || [];
@@ -136,7 +138,7 @@ export async function render(container) {
                 ...emptyItem(), name: it.product_name || it.name, receipt_name: it.name || '',
                 item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: true,
                 pack_size: Number(it.pack_size) || 1, barcode: it.barcode || '', qty: Number(it.qty), unit_cost: Number(it.unit_cost),
-                line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, priceTouched: !!Number(it.sale_price),
+                line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, presetPrice: Number(it.sale_price) || 0,
                 pickedId: it.product_id ? Number(it.product_id) : null, forceNew: !!it.new_product,
             }));
             // Receiving: the delivery date, unless the order already carries the receipt's own date.

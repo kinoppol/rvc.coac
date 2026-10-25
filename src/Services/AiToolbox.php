@@ -321,7 +321,8 @@ class AiToolbox
                 'unit_cost' => $it['unit_cost'],
                 'piece_cost' => $preview[$i]['piece_cost'] ?? $it['unit_cost'],
                 'line_total' => $it['line_total'],
-                'sale_price' => $isSupply ? null : ($it['sale_price'] ?? ($match['sale_price'] ?? $preview[$i]['suggested_price'] ?? 0)),
+                // Restocking keeps the product's current sale price; a new product takes the given or suggested one.
+                'sale_price' => $isSupply ? null : ($match ? $match['sale_price'] : ($it['sale_price'] ?? $preview[$i]['suggested_price'] ?? 0)),
                 'status' => $isSupply ? 'ใช้ในกิจการ' : ($match ? 'เติมสต๊อก' : 'สินค้าใหม่'),
             ];
         }
@@ -557,6 +558,12 @@ class AiToolbox
     {
         $draft = $this->formDraft('create_purchase', $args);
         $items = array_map(fn ($it) => array_intersect_key($it, array_flip(['name', 'product_name', 'item_type', 'barcode', 'qty', 'pack_size', 'unit_cost', 'line_total', 'sale_price'])), $draft['items']);
+        // A line restocking an existing product keeps that product's sale price (no price from the draft).
+        foreach ($this->purchaseService()->preview($draft['items']) as $i => $pv) {
+            if (!empty($pv['match'])) {
+                $items[$i]['sale_price'] = null;
+            }
+        }
         // Photos already filed with an earlier purchase stay with that purchase.
         $photos = array_values(array_filter(
             (new AttachmentService($this->db))->ownedBy($this->evidenceTokens($args), (int) $this->user['id']),
