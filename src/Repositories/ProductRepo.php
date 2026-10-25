@@ -73,6 +73,24 @@ class ProductRepo
      * Name (null = keep), piece barcode and pack barcodes of a store product.
      * With $allowConsigned a consignment product may be edited too, piece barcode only.
      */
+    /** Sets the piece sale price of a store product (admin / manager, from the inventory editor). */
+    public function setSalePrice(int $productId, float $price, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old || $old['consignor_id'] !== null) {
+            throw new \RuntimeException('กำหนดราคาขายได้เฉพาะสินค้าของร้าน');
+        }
+        $price = round($price, 2);
+        if ($price <= 0 || $price > 1000000) {
+            throw new \RuntimeException('ราคาขายไม่ถูกต้อง');
+        }
+        if (abs((float) $old['sale_price'] - $price) < 0.005) {
+            return;
+        }
+        $this->db->prepare('UPDATE products SET sale_price = ?, updated_at = NOW() WHERE id = ?')->execute([$price, $productId]);
+        $this->audit->log('products', $productId, 'update', ['sale_price' => (float) $old['sale_price']], ['sale_price' => $price], $userId, $ip);
+    }
+
     public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null, bool $allowConsigned = false): void
     {
         $old = $this->find($productId);

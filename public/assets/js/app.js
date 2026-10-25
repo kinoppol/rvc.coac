@@ -243,7 +243,7 @@ function onAuthenticated(data) {
     try {
         const pendingQr = sessionStorage.getItem('qr-approve');
         sessionStorage.removeItem('qr-approve');
-        if (pendingQr && !location.hash.startsWith('#/qr-approve')) location.hash = pendingQr;
+        if (pendingQr && !location.hash.startsWith(pendingQr.split('?')[0])) location.hash = pendingQr;
     } catch (e) { /* private mode */ }
     state.user = data.user;
     state.permissions = data.permissions || [];
@@ -294,8 +294,8 @@ window.addEventListener('app:unauthorized', () => { unmountAssistant(); renderLo
         const data = await api.get('/auth/me');
         onAuthenticated(data);
     } catch (e) {
-        // Scanned a sign-in QR-Code while signed out here: remember it across the sign-in (also via RVC-ONE).
-        if (location.hash.startsWith('#/qr-approve')) {
+        // Scanned a sign-in (or phone-scanner) QR-Code while signed out here: remember it across the sign-in (also via RVC-ONE).
+        if (location.hash.startsWith('#/qr-approve') || location.hash.startsWith('#/scanlink')) {
             try { sessionStorage.setItem('qr-approve', location.hash); } catch (err) { /* private mode */ }
         }
         showLogin();

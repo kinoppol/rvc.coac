@@ -25,6 +25,7 @@ use App\Controllers\ReceiveController;
 use App\Controllers\ReportsController;
 use App\Controllers\ReturnController;
 use App\Controllers\SaleEditController;
+use App\Controllers\ScanLinkController;
 use App\Controllers\SalesController;
 use App\Controllers\SettingsController;
 use App\Controllers\SsoController;
@@ -278,6 +279,24 @@ $app->group('/api', function ($group) {
 
     $group->get('/inventory', [InventoryController::class, 'index'])
         ->add(new RoleGuard('reports.view'));
+    $group->get('/inventory/lookup', [InventoryController::class, 'lookup'])
+        ->add(new RoleGuard('reports.view'));
+    $group->get('/inventory/search', [InventoryController::class, 'search'])
+        ->add(new RoleGuard('reports.view'));
+    $group->post('/inventory/{id:[0-9]+}/assign-barcode', [InventoryController::class, 'assignBarcode'])
+        ->add(new RoleGuard('purchase.create'));
+
+    // A phone as a barcode scanner for a computer: the computer side needs the inventory
+    // page; any signed-in phone holding the link's code may send barcodes to it.
+    $group->post('/scan-links', [ScanLinkController::class, 'open'])
+        ->add(new RoleGuard('reports.view'));
+    $group->get('/scan-links/{code:[a-f0-9]{32}}/codes', [ScanLinkController::class, 'codes'])
+        ->add(new RoleGuard('reports.view'));
+    $group->post('/scan-links/{code:[a-f0-9]{32}}/close', [ScanLinkController::class, 'close'])
+        ->add(new RoleGuard('reports.view'));
+    $group->get('/scan-links/{code:[a-f0-9]{32}}', [ScanLinkController::class, 'join']);
+    $group->post('/scan-links/{code:[a-f0-9]{32}}/codes', [ScanLinkController::class, 'send']);
+
     $group->get('/inventory/{id:[0-9]+}/movements', [InventoryController::class, 'movements'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/inventory/supplier-options', [InventoryController::class, 'supplierOptions'])

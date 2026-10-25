@@ -10,6 +10,7 @@ use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
 use App\Services\InventoryService;
+use App\Services\StockCountService;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -28,6 +29,72 @@ class InventoryController
             'summary' => $service->summary(),
             'data' => $service->products($search, !empty($params['consigned'])),
         ]);
+    }
+
+    /**
+     * GET /inventory/lookup?code= — a product by its piece or pack barcode, for the phone
+     * data mode (scanned_pack_size says which pack a pack barcode belongs to).
+     */
+    public function lookup(Request $request, Response $response): Response
+    {
+        $code = trim((string) ($request->getQueryParams()['code'] ?? ''));
+        $found = $this->stockCounts()->lookup(0, $code);
+        if (!$found) {
+            return $this->error($response, "ไม่พบสินค้าที่มีบาร์โค้ด {$code}", 404);
+        }
+        unset($found['item']);
+        return $this->json($response, ['data' => $found]);
+    }
+
+    /** GET /inventory/search?q= — products by name or barcode, for linking a new barcode on the phone. */
+    public function search(Request $request, Response $response): Response
+    {
+        $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        if ($q === '') {
+            return $this->json($response, ['data' => []]);
+        }
+        return $this->json($response, ['data' => array_map(function ($p) {
+            unset($p['item']);
+            return $p;
+        }, $this->stockCounts()->search(0, $q))]);
+    }
+
+    /**
+     * POST /inventory/{id}/assign-barcode {barcode, pack_size} — gives a product a barcode
+     * scanned on the phone: the piece barcode (replacing the old one), or a pack barcode.
+     * A consignor's goods: admin only, as in the barcode editor.
+     */
+    public function assignBarcode(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        $db = Db::connection();
+        $repo = new ProductRepo($db, new AuditLogger($db));
+        $id = (int) $args['id'];
+        if (($repo->find($id)['consignor_id'] ?? null) !== null && ($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้บาร์โค้ดสินค้าฝากขายได้', 403);
+        }
+        $db->beginTransaction();
+        try {
+            $repo->assignBarcode($id, (string) ($body['barcode'] ?? ''), max(1, (int) ($body['pack_size'] ?? 1)),
+                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            if ($e instanceof \RuntimeException) {
+                return $this->error($response, $e->getMessage(), 422);
+            }
+            throw $e;
+        }
+        $p = $this->stockCounts()->productInfo(0, $id);
+        unset($p['item']);
+        return $this->json($response, ['data' => $p]);
+    }
+
+    private function stockCounts(): StockCountService
+    {
+        $db = Db::connection();
+        return new StockCountService($db, new DocumentNumberService($db), new AuditLogger($db));
     }
 
     /** One product's details and every stock movement up to its current balance. */
@@ -163,6 +230,13 @@ class InventoryController
                 $id, $body['barcode'] ?? null, $consigned ? [] : (array) ($body['pack_barcodes'] ?? []), (int) $user['id'],
                 $request->getServerParams()['REMOTE_ADDR'] ?? null, !$consigned && isset($body['name']) ? (string) $body['name'] : null, $consigned
             );
+            // The piece sale price: admins and managers only, store goods only.
+            if (isset($body['sale_price']) && $body['sale_price'] !== '' && !$consigned) {
+                if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+                    throw new \RuntimeException('เฉพาะผู้ดูแลระบบและผู้จัดการเท่านั้นที่กำหนดราคาขายได้');
+                }
+                $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            }
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
@@ -172,7 +246,7 @@ class InventoryController
             throw $e;
         }
         $p = $repo->find($id);
-        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
+        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'sale_price' => (float) $p['sale_price'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
     }
 
     /**

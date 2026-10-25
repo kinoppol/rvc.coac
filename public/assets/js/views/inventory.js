@@ -4,6 +4,9 @@ import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 import { openPoBuilder } from '../po-builder.js';
+import { openInventoryMobile } from '../inventory-mobile.js';
+
+const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
@@ -41,6 +44,8 @@ export async function render(container, { navigate, permissions, user }) {
     const canConsign = canEdit && user?.role === 'admin';
     // Admin / manager: sales booked with no cost (sold before the first purchase) that can now be costed.
     const canFixCost = ['admin', 'manager'].includes(user?.role);
+    // Admin / manager: set the piece sale price of the store's goods in the editor.
+    const canSetPrice = canEdit && ['admin', 'manager'].includes(user?.role);
     let zeroCost = [];
     let consignors = null; // loaded the first time an admin opens the editor
     const picked = new Set(); // store products ticked for a purchase order
@@ -49,6 +54,8 @@ export async function render(container, { navigate, permissions, user }) {
         const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
         if (saved && COLUMNS.some(([k]) => k === saved.key) && ['asc', 'desc'].includes(saved.dir)) sort = saved;
     } catch (e) { /* private mode / bad value */ }
+    // A phone used as this computer's barcode scanner: { code, after, phone, shown, qr, codes, timer }.
+    let link = null;
     let filter = 'all';
     try {
         const saved = localStorage.getItem(FILTER_KEY);
@@ -97,6 +104,7 @@ export async function render(container, { navigate, permissions, user }) {
         const shown = sorted(res.data.filter(FILTERS.find(([k]) => k === filter)[2]));
         const canBuy = permissions.includes('purchase.create');
         container.innerHTML = `
+        <div id="inv-page" hidden></div>
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">มูลค่าสต๊อก (ต้นทุน)</div><div class="val">฿ ${money(s.stock_cost_value)}</div>
             <div class="sub">${count(s.stock_units)} ชิ้น · ${count(s.items)} รายการ${s.out_of_stock ? ` · หมด ${count(s.out_of_stock)}` : ''}</div></div>
@@ -112,6 +120,8 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="actions-row" style="justify-content:space-between">
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
+              <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด และถ่ายรูปสินค้า">📱 เก็บข้อมูลด้วยมือถือ</button>
+              <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${picked.size ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ">สร้างใบรายการสั่งซื้อ (${picked.size})</button>` : ''}
               ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
@@ -129,7 +139,8 @@ export async function render(container, { navigate, permissions, user }) {
                 || `<tr><td colspan="${canEdit ? 13 : 12}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
           </table></div>
         </section>
-        ${editing ? editHtml() : ''}`;
+        ${editing ? editHtml() : ''}
+        ${link ? linkHtml() : ''}`;
 
         const input = container.querySelector('#q');
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { search = input.value.trim(); load(); } });
@@ -147,6 +158,13 @@ export async function render(container, { navigate, permissions, user }) {
             draw();
         }));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
+        container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
+            canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
+        }));
+        container.querySelector('#phone-link').addEventListener('click', () => {
+            if (link) { link.shown = true; draw(); } else openLink();
+        });
+        bindLink();
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
         container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.claim);
@@ -210,6 +228,7 @@ export async function render(container, { navigate, permissions, user }) {
             editing = {
                 id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })), consigned, consignorName: p.consignor_name,
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
+                priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price),
                 pastQty: Number(p.store_sold_qty), claimPast: true,
                 error: null, busy: false,
             };
@@ -228,6 +247,138 @@ export async function render(container, { navigate, permissions, user }) {
             }
         }));
         if (editing) bindEdit();
+    }
+
+    // ---- phone as this computer's barcode scanner ----
+    async function openLink() {
+        try {
+            const res = await api.post('/scan-links');
+            const url = `${location.origin}${location.pathname}#/scanlink?c=${res.code}`;
+            let qrSvg;
+            try {
+                const { default: qrcode } = await import(QR_LIB);
+                const qr = qrcode(0, 'M');
+                qr.addData(url);
+                qr.make();
+                qrSvg = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
+            } catch (e) {
+                qrSvg = '<div class="muted" style="font-size:12px">โหลดตัวสร้าง QR-Code ไม่ได้ (ต้องต่ออินเทอร์เน็ต)</div>';
+            }
+            link = { code: res.code, after: 0, phone: null, shown: true, qr: qrSvg, codes: [] };
+            link.timer = setInterval(pollLink, 1500);
+            draw();
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+    }
+
+    function closeLink() {
+        if (!link) return;
+        clearInterval(link.timer);
+        api.post(`/scan-links/${link.code}/close`).catch(() => {});
+        link = null;
+    }
+
+    let polling = false;
+    async function pollLink() {
+        // Left the inventory page: stop listening.
+        if (!document.getElementById('inv-page')) { closeLink(); return; }
+        if (polling || !link) return;
+        polling = true;
+        const l = link;
+        try {
+            const res = await api.get(`/scan-links/${l.code}/codes?after=${l.after}`);
+            if (link !== l) return;
+            const was = JSON.stringify(l.phone);
+            l.phone = res.phone;
+            for (const c of res.codes) {
+                l.after = Math.max(l.after, Number(c.id));
+                l.codes.unshift(c.barcode);
+                applyCode(c.barcode);
+            }
+            l.codes.length = Math.min(l.codes.length, 8);
+            if (!res.active) {
+                clearInterval(l.timer);
+                link = null;
+                draw();
+            } else if (res.codes.length || JSON.stringify(l.phone) !== was) {
+                updateLinkUi();
+            }
+        } catch (e) { /* network hiccup: try again */ } finally { polling = false; }
+    }
+
+    /**
+     * A barcode from the phone: into the barcode editor when it is open (the focused
+     * barcode box, else the piece barcode if empty, else a pack row), otherwise it searches the list.
+     */
+    function applyCode(code) {
+        if (editing) {
+            const e = editing;
+            const focused = document.activeElement;
+            if (focused && container.contains(focused) && (focused.id === 'bc-piece' || focused.dataset?.pf === 'barcode')) {
+                focused.value = code;
+                focused.dispatchEvent(new Event('input', { bubbles: true }));
+                return;
+            }
+            if (!e.barcode.trim() || e.consigned) {
+                e.barcode = code;
+            } else if (e.barcode.trim() !== code && !e.packs.some((p) => String(p.barcode ?? '').trim() === code)) {
+                const empty = e.packs.find((p) => !String(p.barcode ?? '').trim());
+                if (empty) empty.barcode = code; else e.packs.push({ barcode: code, pack_size: '' });
+            }
+            draw();
+            return;
+        }
+        search = code;
+        load();
+    }
+
+    function linkStatus() {
+        const p = link.phone;
+        if (!p) return '<span class="pill muted">รอมือถือสแกน QR-Code</span>';
+        return p.online ? `<span class="pill ok">มือถือเชื่อมต่อแล้ว</span> ${escapeHtml(p.user_name)}` : '<span class="pill warn">มือถือไม่ได้เปิดหน้าสแกนอยู่</span>';
+    }
+
+    function linkHtml() {
+        if (!link.shown) {
+            return `<div class="card card-pad" style="position:fixed;right:16px;bottom:16px;z-index:45;display:flex;gap:10px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 32px);box-shadow:0 10px 30px rgba(10,18,36,.2)">
+              <span>📲</span><span data-link-status>${linkStatus()}</span>
+              <span class="muted" style="font-size:12.5px" data-link-last>${link.codes[0] ? `ล่าสุด ${escapeHtml(link.codes[0])}` : ''}</span>
+              <button type="button" class="btn secondary sm" data-link-show>แสดง QR-Code</button>
+              <button type="button" class="btn secondary sm" data-link-stop>หยุด</button></div>`;
+        }
+        return `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" style="width:520px">
+            <div class="modal-head"><h2>📲 ใช้มือถือสแกนบาร์โค้ดให้คอมพิวเตอร์</h2>
+              <button type="button" class="modal-close" data-link-hide title="ซ่อน" aria-label="ซ่อน">✕</button></div>
+            <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center">
+              <div class="qr-login-img" style="width:220px">${link.qr}</div>
+              <div style="font-size:13.5px">ใช้มือถือที่ลงชื่อเข้าใช้ระบบนี้ไว้ สแกน QR-Code นี้ แล้วกด "เปิดกล้องสแกน" บนมือถือ</div>
+              <div data-link-status>${linkStatus()}</div>
+              <div class="muted" style="font-size:12.5px;text-align:left;background:var(--surface2);border-radius:10px;padding:10px 12px;line-height:1.7">
+                บาร์โค้ดที่มือถือสแกน: ถ้าเปิดหน้าต่าง "แก้ไขสินค้า" อยู่ จะใส่ลงช่องบาร์โค้ดที่คลิกเลือกไว้ (หรือช่องบาร์โค้ดชิ้นถ้ายังว่าง ไม่เช่นนั้นเป็นบาร์โค้ดแพ็ค)
+                ถ้าไม่ได้เปิด จะค้นหาสินค้าในตารางให้ · ซ่อนหน้าต่างนี้แล้วใช้งานต่อได้ การเชื่อมต่อใช้ได้ 4 ชั่วโมง</div>
+              <div data-link-codes class="muted" style="font-size:12.5px">${link.codes.length ? `ได้รับแล้ว: ${link.codes.map(escapeHtml).join(', ')}` : ''}</div>
+            </div>
+            <div class="modal-foot"><button type="button" class="btn secondary" data-link-stop>หยุดเชื่อมต่อ</button>
+              <button type="button" class="btn" data-link-hide>ซ่อน (ใช้งานต่อ)</button></div>
+          </div>
+        </div>`;
+    }
+
+    /** Status and received codes change in place, so typing on the page is not disturbed. */
+    function updateLinkUi() {
+        if (!link) return;
+        container.querySelectorAll('[data-link-status]').forEach((el) => { el.innerHTML = linkStatus(); });
+        const last = container.querySelector('[data-link-last]');
+        if (last) last.textContent = link.codes[0] ? `ล่าสุด ${link.codes[0]}` : '';
+        const codes = container.querySelector('[data-link-codes]');
+        if (codes) codes.textContent = link.codes.length ? `ได้รับแล้ว: ${link.codes.join(', ')}` : '';
+    }
+
+    function bindLink() {
+        container.querySelectorAll('[data-link-hide]').forEach((b) => b.addEventListener('click', () => { link.shown = false; draw(); }));
+        container.querySelectorAll('[data-link-show]').forEach((b) => b.addEventListener('click', () => { link.shown = true; draw(); }));
+        container.querySelectorAll('[data-link-stop]').forEach((b) => b.addEventListener('click', () => { closeLink(); draw(); }));
     }
 
     function zeroCostHtml() {
@@ -302,6 +453,10 @@ export async function render(container, { navigate, permissions, user }) {
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
                 <input id="bc-piece" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
+              ${canSetPrice && !e.consigned ? `<label class="field" style="display:block;margin-bottom:16px">ราคาขาย/ชิ้น (บาท)
+                <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
+                <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
+              </label>` : ''}
               ${e.consigned ? '' : packsHtml(e)}
               ${canConsign && !e.consigned ? consignHtml(e) : ''}
               ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
@@ -346,6 +501,14 @@ export async function render(container, { navigate, permissions, user }) {
               </tbody></table>
               <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
               <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายยกแพ็ค: สแกนบาร์โค้ดแพ็คที่หน้าขายจะขายทั้งแพ็คในราคานี้ (หรือกด "+ ยกแพ็ค" ในตะกร้า) · เว้นว่างถ้าขายแยกชิ้นเท่านั้น</div>`;
+    }
+
+    /** Cost and margin next to the piece price being set. */
+    function priceHint(e) {
+        const price = Number(e.priceInput);
+        if (!(price > 0)) return `ทุน/ชิ้น ฿${money(e.costPrice)}`;
+        const margin = price - e.costPrice;
+        return `ทุน/ชิ้น ฿${money(e.costPrice)} · กำไร ฿${money(margin)}${e.costPrice > 0 ? ` (${(margin / e.costPrice * 100).toFixed(1)}% ของทุน)` : ''}${margin < 0 ? ' ⚠️ ต่ำกว่าทุน' : ''}`;
     }
 
     /** Pack price per piece next to the piece price, so the discount is visible. */
@@ -415,6 +578,14 @@ export async function render(container, { navigate, permissions, user }) {
             container.querySelector('#bc-name')?.focus();
         }));
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
+        container.querySelector('#bc-price')?.addEventListener('input', (ev) => {
+            e.priceInput = ev.target.value;
+            if (Number(ev.target.value) > 0) e.salePrice = Number(ev.target.value);
+            container.querySelector('#bc-price-hint').textContent = priceHint(e);
+            container.querySelectorAll('tr[data-pack]').forEach((tr) => {
+                tr.querySelector('[data-pack-hint]').innerHTML = packHint(e.packs[Number(tr.dataset.pack)]);
+            });
+        });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];
             tr.querySelectorAll('[data-pf]').forEach((inp) => inp.addEventListener('input', () => {
@@ -435,6 +606,12 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelectorAll('[data-close-edit]').forEach((b) => b.addEventListener('click', () => { editing = null; draw(); }));
         container.querySelector('#bc-save').addEventListener('click', async () => {
             if (!e.name.trim()) { e.error = 'กรุณากรอกชื่อสินค้า'; draw(); return; }
+            const setPrice = canSetPrice && !e.consigned;
+            if (setPrice && !(Number(e.priceInput) > 0)) { e.error = 'กรุณาระบุราคาขาย/ชิ้นให้มากกว่า 0'; draw(); return; }
+            const p0 = res.data.find((x) => x.id === e.id);
+            const priceChanged = setPrice && Math.abs(Number(e.priceInput) - Number(p0.sale_price)) >= 0.005;
+            if (priceChanged && Number(e.priceInput) < e.costPrice
+                && !await confirmDialog(`ราคาขาย ฿${money(e.priceInput)} ต่ำกว่าต้นทุน ฿${money(e.costPrice)} ต่อชิ้น ต้องการบันทึกหรือไม่?`, { title: 'ราคาขายต่ำกว่าทุน', okText: 'บันทึก' })) return;
             let consignor = null;
             if (e.consign) {
                 consignor = (consignors || []).find((o) => String(o.id) === String(e.consignorId));
@@ -456,6 +633,7 @@ export async function render(container, { navigate, permissions, user }) {
                 const out = await api.put(`/inventory/${e.id}/barcodes`, {
                     name: e.name.trim(),
                     barcode: e.barcode.trim(),
+                    ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
                     // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
                     pack_barcodes: e.packs
                         .map((p) => ({
@@ -477,6 +655,10 @@ export async function render(container, { navigate, permissions, user }) {
                     return;
                 }
                 editing = null;
+                if (priceChanged) {
+                    await load(); // margin, stock value and totals follow the new price
+                    return;
+                }
             } catch (err) {
                 e.busy = false;
                 e.error = err.message;
