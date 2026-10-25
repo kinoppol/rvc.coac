@@ -202,6 +202,7 @@ class PurchaseService
             ]);
             $docId = (int) $this->db->lastInsertId();
             $this->saveFunding($docId, $h['funding']);
+            $this->saveBuyer($docId, $h['buyer_id']);
             $result = $this->applyLines($docId, $lines, [], $userId, $ip);
 
             $this->attachments->linkToPurchase($attachments, $docId);
@@ -243,6 +244,7 @@ class PurchaseService
             ]);
             $docId = (int) $this->db->lastInsertId();
             $this->saveFunding($docId, $h['funding']);
+            $this->saveBuyer($docId, $h['buyer_id']);
             $this->attachments->linkToPurchase($attachments, $docId);
             $this->audit->log('purchase_documents', $docId, 'create', null, [
                 'doc_no' => $docNo, 'status' => $status, 'supplier_name' => $h['supplier_name'], 'total' => $h['total'], 'items' => count($lines),
@@ -266,6 +268,7 @@ class PurchaseService
             $h['vat'], $h['total'], $h['total_qty'], $h['note'], json_encode(array_values($items), JSON_UNESCAPED_UNICODE), $doc['id'],
         ]);
         $this->saveFunding((int) $doc['id'], $h['funding']);
+        $this->saveBuyer((int) $doc['id'], $h['buyer_id']);
         $this->relinkAttachments((int) $doc['id'], $keepTokens, $newAttachments);
         $this->audit->log('purchase_documents', (int) $doc['id'], 'update',
             ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => (float) $doc['total']],
@@ -314,7 +317,7 @@ class PurchaseService
                 $lines[$at]['unit_cost'] = (float) $it['unit_cost'];
                 $lines[$at]['line_total'] = round($lines[$at]['qty'] * (float) $it['unit_cost'], 2);
             }
-            $header = array_intersect_key($doc, array_flip(['supplier_name', 'supplier_tax_id', 'receipt_no', 'receipt_date', 'discount', 'vat', 'note', 'funding']));
+            $header = array_intersect_key($doc, array_flip(['supplier_name', 'supplier_tax_id', 'receipt_no', 'receipt_date', 'discount', 'vat', 'note', 'funding', 'buyer_id']));
             [$h] = $this->validate(['total' => 0] + $header, $lines);
             $keep = array_column($this->attachments->forPurchase($id), 'token');
             $result = $this->updateOrder($doc, $h, $lines, $keep, [], $userId, $ip);
@@ -363,6 +366,7 @@ class PurchaseService
             $h['vat'], $h['total'], $h['total_qty'], $h['note'], $userId, $id,
         ]);
         $this->saveFunding($id, $h['funding']);
+        $this->saveBuyer($id, $h['buyer_id']);
         $this->relinkAttachments($id, $keepTokens, $newAttachments);
         $this->audit->log('purchase_documents', $id, 'update',
             ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => (float) $doc['total']],
@@ -428,6 +432,7 @@ class PurchaseService
                 $h['subtotal'], $h['discount'], $h['vat'], $h['total'], $h['total_qty'], $h['note'], $id,
             ]);
             $this->saveFunding($id, $h['funding']);
+            $this->saveBuyer($id, $h['buyer_id']);
             $this->relinkAttachments($id, $keepTokens, $newAttachments);
 
             $summary = fn ($d, $n) => [
@@ -669,10 +674,58 @@ class PurchaseService
             'total_qty' => array_sum(array_map(fn ($l) => $l['item_type'] === 'stock' ? $l['units'] : 0, $lines)),
             'note' => trim((string) ($header['note'] ?? '')) ?: null,
             'funding' => ($header['funding'] ?? 'capital') === 'profit' ? 'profit' : 'capital',
+            'buyer_id' => $this->buyerId($header['buyer_id'] ?? null),
         ], $lines];
     }
 
     /** Bought with invested money (counts toward งบลงทุน) or with the business's profit. */
+    /** Staff who may be named as the buyer: cashiers, managers and admins still active. */
+    public function buyers(): array
+    {
+        return $this->db->query(
+            "SELECT id, full_name, role FROM users WHERE active = 1 AND role IN ('cashier', 'manager', 'admin') ORDER BY full_name"
+        )->fetchAll();
+    }
+
+    /** The buyer chosen on the form, checked against buyers(); null when none was chosen. */
+    private function buyerId(mixed $value): ?int
+    {
+        $id = (int) $value;
+        if ($id <= 0) {
+            return null;
+        }
+        $stmt = $this->db->prepare("SELECT 1 FROM users WHERE id = ? AND active = 1 AND role IN ('cashier', 'manager', 'admin')");
+        $stmt->execute([$id]);
+        if (!$stmt->fetchColumn()) {
+            throw new \RuntimeException('ผู้ซื้อต้องเป็นผู้ใช้ในระบบที่เป็นพนักงาน ผู้จัดการ หรือผู้ดูแลระบบ');
+        }
+        return $id;
+    }
+
+    private function saveBuyer(int $id, ?int $buyerId): void
+    {
+        try {
+            $this->db->prepare('UPDATE purchase_documents SET buyer_id = ? WHERE id = ?')->execute([$buyerId, $id]);
+        } catch (\PDOException $e) {
+            if ($buyerId !== null) {
+                throw new \RuntimeException('ยังบันทึกผู้ซื้อไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0045) ก่อน');
+            }
+        }
+    }
+
+    /** Adds buyer_name to purchase rows (a lookup, so lists still load before migration 0045). */
+    private function withBuyerNames(array $rows): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map(fn ($d) => (int) ($d['buyer_id'] ?? 0), $rows))));
+        $names = [];
+        if ($ids) {
+            $stmt = $this->db->prepare('SELECT id, full_name FROM users WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+            $stmt->execute($ids);
+            $names = array_column($stmt->fetchAll(), 'full_name', 'id');
+        }
+        return array_map(fn ($d) => $d + ['buyer_name' => $names[(int) ($d['buyer_id'] ?? 0)] ?? null], $rows);
+    }
+
     private function saveFunding(int $id, string $funding): void
     {
         try {
@@ -852,7 +905,7 @@ class PurchaseService
             }
             unset($d['cancelled_items'], $d['order_items']);
             return $d;
-        }, $stmt->fetchAll());
+        }, $this->withBuyerNames($stmt->fetchAll()));
     }
 
     /** Ordered lines (as the form sent them) in the shape of purchase_items rows, for showing. */
@@ -903,6 +956,7 @@ class PurchaseService
             $doc['ordered_by_name'] = $by->fetchColumn() ?: null;
         }
         unset($doc['cancelled_items'], $doc['order_items']);
+        $doc = $this->withBuyerNames([$doc])[0];
         $doc['images'] = array_map([$this->attachments, 'publicInfo'], $this->attachments->forPurchase($id));
         return $doc;
     }

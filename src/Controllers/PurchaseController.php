@@ -48,7 +48,7 @@ class PurchaseController
             'q' => (string) ($q['q'] ?? ''), 'status' => (string) ($q['status'] ?? ''), 'from' => $from, 'to' => $to,
             'page' => (int) ($q['page'] ?? 1), 'per' => (int) ($q['per'] ?? 10),
         ]);
-        return $this->json($response, $list + ['from' => $from, 'to' => $to, 'markup_percent' => $service->markupPercent()]);
+        return $this->json($response, $list + ['from' => $from, 'to' => $to, 'markup_percent' => $service->markupPercent(), 'buyers' => $service->buyers()]);
     }
 
     public function show(Request $request, Response $response, array $args): Response

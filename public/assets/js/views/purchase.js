@@ -22,7 +22,8 @@ const evidence = (a) => ({ token: a.token, mime: a.mime, name: a.name, preview: 
 
 function emptyHeader() {
     // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit')
-    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital' };
+    // buyer_id: the staff member who bought the goods ('' = not given)
+    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital', buyer_id: '' };
 }
 function emptyItem() {
     // name = per-piece product name; qty/unit_cost/line_total = as printed (packs); sale_price = per piece
@@ -35,6 +36,7 @@ function emptyItem() {
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const PER_PAGE = [10, 20, 50, 100];
+const BUYER_ROLE = { cashier: 'พนักงาน', manager: 'ผู้จัดการ', admin: 'ผู้ดูแลระบบ' };
 const RANGES = [
     ['all', 'ทุกช่วงเวลา'], ['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['year', 'ปีนี้'],
     ['7d', '7 วันล่าสุด'], ['last_month', 'เดือนที่แล้ว'], ['custom', 'กำหนดเอง'],
@@ -54,6 +56,7 @@ export async function render(container) {
     let success = null;
     let docs = [];
     let markup = 20;
+    let buyers = []; // staff who may be named as the buyer (cashier / manager / admin)
     let viewing = null; // purchase doc shown in the modal
     let mdOpen = null; // { token, name, html } — a .md file opened in the detail modal
     let evidenceBusy = false;
@@ -145,6 +148,7 @@ export async function render(container) {
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
             receipt_date: d.receipt_date || '', discount: Number(d.discount) || 0, vat: Number(d.vat) || 0, total: Number(d.total) || 0, note: d.note || '',
             funding: d.funding === 'profit' ? 'profit' : 'capital',
+            buyer_id: d.buyer_id ? String(d.buyer_id) : '',
         };
         // An order keeps its lines as entered: a line paired with a product stays paired.
         if (ordered) {
@@ -190,6 +194,7 @@ export async function render(container) {
         list.total = res.total ?? docs.length;
         list.counts = res.counts || {};
         markup = res.markup_percent;
+        buyers = res.buyers || buyers;
         // A page past the end (e.g. after cancelling the last one on it): go back to the last page.
         const last = Math.max(1, Math.ceil(list.total / list.per));
         if (list.page > last) {
@@ -319,6 +324,12 @@ export async function render(container) {
                 <option value="profit" ${header.funding === 'profit' ? 'selected' : ''}>เงินกำไรของกิจการ</option>
               </select>
               <span class="muted" style="font-size:11.5px;font-weight:400">ซื้อด้วยเงินกำไรของร้าน ไม่นับเพิ่มในงบลงทุน</span></label>
+            <label class="field">ผู้ซื้อ
+              <select data-h="buyer_id">
+                <option value="">— ไม่ระบุ —</option>
+                ${buyers.map((u) => `<option value="${u.id}" ${String(u.id) === String(header.buyer_id) ? 'selected' : ''}>${escapeHtml(u.full_name)} (${BUYER_ROLE[u.role] || escapeHtml(u.role)})</option>`).join('')}
+              </select>
+              <span class="muted" style="font-size:11.5px;font-weight:400">พนักงาน ผู้จัดการ หรือผู้ดูแลระบบที่ไปซื้อของ</span></label>
           </div>
         </section>
 
@@ -423,7 +434,7 @@ export async function render(container) {
                   <td class="num"><span class="pc-total">${money(d.total)}</span></td>
                   <td class="num muted">${Number(d.supply_total) ? money(d.supply_total) : '-'}</td>
                   <td class="pc-ev-cell">${Number(d.image_count) || Number(d.file_count) ? `<button type="button" data-view="${d.id}" title="ดูหลักฐานใบเสร็จ">${[Number(d.image_count) ? `🖼 ${d.image_count}` : '', Number(d.file_count) ? `📄 ${d.file_count}` : ''].filter(Boolean).join(' ')}</button>` : ''}</td>
-                  <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div></td>
+                  <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div>${d.buyer_name ? `<div>ผู้ซื้อ: <b style="color:var(--text)">${escapeHtml(d.buyer_name)}</b></div>` : ''}</td>
                   <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
                     ${isOrdered(d) ? `<button type="button" class="btn sm" data-receive="${d.id}" title="ของมาส่งแล้ว: ตรวจรายการแล้วยืนยันเข้าสต๊อก">รับสินค้า</button>` : ''}
                     ${isDraft(d) ? `<button type="button" class="btn sm" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}" title="สั่งซื้อกับร้านเรียบร้อยแล้ว: เปลี่ยนเป็นรอรับของ">ยืนยันสั่งซื้อแล้ว</button>` : ''}
@@ -728,7 +739,7 @@ export async function render(container) {
                       <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : isDraft(d) ? '<span class="pill muted">ร่าง</span>' : isOrdered(d) ? '<span class="pill warn">รอส่งของ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
                 </tbody></table></div>
               ${evidenceHtml(d)}
-              <p class="muted" style="font-size:12.5px;margin:12px 0 0">บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
+              <p class="muted" style="font-size:12.5px;margin:12px 0 0">${d.buyer_name ? `ผู้ซื้อ <b>${escapeHtml(d.buyer_name)}</b> · ` : ''}บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
             <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">
               <button type="button" class="btn secondary" data-print-view>🖨 พิมพ์</button>
