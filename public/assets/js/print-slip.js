@@ -406,8 +406,10 @@ export function printClosingReport(r, { weekday, status, send }) {
     const dr = f.drawer;
     const c = r.closing;
     const n = (v) => money(v);
-    const signed = (v) => (Math.abs(v) < 0.005 ? '0.00' : `${v < 0 ? '(' : ''}${money(Math.abs(v))}${v < 0 ? ')' : ''}`);
     const row = (label, v, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${v}</td></tr>`;
+    // A difference said in words: "เงินขาด 143.00" / "เงินเกิน 20.00" / "ตรงกัน".
+    const shortOver = (what, diff) => (Math.abs(diff) < 0.005 ? row(`${what}ตรงกัน`, '0.00')
+        : row(`${what}${diff < 0 ? 'ขาด' : 'เกิน'}`, money(Math.abs(diff))));
     const none = (text) => `<tr><td colspan="2" class="muted">${text}</td></tr>`;
     const section = (title, rows) => `<table class="led"><thead><tr><th colspan="2">${title}</th></tr></thead><tbody>${rows}</tbody></table>`;
 
@@ -421,7 +423,7 @@ export function printClosingReport(r, { weekday, status, send }) {
         ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
         ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
         ${dr.counted_cash !== null ? `${row('เงินที่นับได้จริงตอนปิดยอด', n(dr.counted_cash))}
-          ${row('เงินขาด (เกิน)', signed(dr.counted_cash - dr.should_have))}` : row('เงินที่นับได้จริงตอนปิดยอด', 'ยังไม่ได้นับ')}
+          ${shortOver('เงิน', dr.counted_cash - dr.should_have)}` : row('เงินที่นับได้จริงตอนปิดยอด', 'ยังไม่ได้นับ')}
         ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 4)', n(f.cash_out))}
         ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 5)', n(f.payout_out || 0))}
         ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 6)', n(f.purchase_out))}
@@ -432,7 +434,7 @@ export function printClosingReport(r, { weekday, status, send }) {
     const accounts = section('3. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต', r.accounts.length ? r.accounts.map((a) => {
         const got = send.actual?.[a.method];
         const has = got !== undefined && got !== null && got !== '';
-        return row(`${escapeHtml(a.label)} <span class="muted">ควรได้ ${n(a.expected)}${has && Math.abs(Number(got) - a.expected) >= 0.005 ? ` · ต่าง ${signed(Number(got) - a.expected)}` : ''}</span>`,
+        return row(`${escapeHtml(a.label)} <span class="muted">ควรได้ ${n(a.expected)}${has && Math.abs(Number(got) - a.expected) >= 0.005 ? ` · ${Number(got) < a.expected ? 'ขาด' : 'เกิน'} ${n(Math.abs(Number(got) - a.expected))}` : ''}</span>`,
             has ? n(got) : 'ยังไม่ได้ตรวจ');
     }).join('') : none('ไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตร'));
 
@@ -452,7 +454,7 @@ export function printClosingReport(r, { weekday, status, send }) {
     const handover = section('7. ส่งเงินสดให้วิทยาลัย', `
         ${row('ยอดที่ควรส่ง', n(send.expected_send))}
         ${row('เงินสดที่ส่ง', sent ? n(send.cash_sent) : '..........................', 'total')}
-        ${sent && Math.abs(Number(send.cash_sent) - send.expected_send) >= 0.005 ? row('ส่งขาด (เกิน)', signed(send.expected_send - Number(send.cash_sent))) : ''}
+        ${sent && Math.abs(Number(send.cash_sent) - send.expected_send) >= 0.005 ? shortOver('ส่ง', Number(send.cash_sent) - send.expected_send) : ''}
         ${row('ส่งให้', escapeHtml(send.sent_to || '-'))}
         ${row('เลขที่ใบเสร็จ / ใบรับเงิน', escapeHtml(send.receipt_no || '..........................'))}
         ${send.note ? `<tr><td colspan="2">หมายเหตุ: ${escapeHtml(send.note)}</td></tr>` : ''}`);
