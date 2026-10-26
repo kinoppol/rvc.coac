@@ -18,7 +18,10 @@ class SaleEditController
 {
     use JsonResponse;
 
-    /** The signed-in cashier's own POS sales, by accounting day. */
+    /**
+     * The signed-in cashier's own POS sales, by accounting day. Admins and managers may
+     * look at another cashier's (?cashier_id=<id>) or everyone's (?cashier_id=all).
+     */
     public function mine(Request $request, Response $response): Response
     {
         $params = $request->getQueryParams();
@@ -28,9 +31,14 @@ class SaleEditController
         $db = Db::connection();
         $service = $this->service($db);
         $settings = new SettingsService($db);
-        $rows = $service->mine((int) $user['id'], $from, $to);
+        $oversee = in_array($user['role'] ?? '', ['admin', 'manager'], true);
+        $pick = (string) ($params['cashier_id'] ?? '');
+        $cashier = $oversee && $pick === 'all' ? null : ($oversee && (int) $pick > 0 ? (int) $pick : (int) $user['id']);
+        $rows = $service->mine($cashier, $from, $to);
         return $this->json($response, [
             'from' => $from, 'to' => $to, 'data' => $rows,
+            'cashier_id' => $cashier ?? 'all',
+            'cashiers' => $oversee ? $service->cashiers($from, $to) : null,
             'total_value' => round(array_sum(array_column($rows, 'total_value')), 2),
             'edit_enabled' => $service->enabled(),
             'edit_minutes' => $service->minutes(),

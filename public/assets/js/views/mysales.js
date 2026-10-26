@@ -17,6 +17,8 @@ const daysAgo = (n) => {
 export async function render(container, { user }) {
     let from = todayISO();
     let to = from;
+    // Admins and managers may look at other cashiers' sales: '' = mine, 'all', or a user id.
+    let cashier = '';
     let data = null;
     let skew = 0; // server clock minus this browser's, for the countdowns
     let detail = null; // the sale open on the detail modal
@@ -28,7 +30,7 @@ export async function render(container, { user }) {
     const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
     async function load() {
-        const res = await api.get(`/sales/mine?from=${from}&to=${to}`);
+        const res = await api.get(`/sales/mine?from=${from}&to=${to}${cashier ? `&cashier_id=${encodeURIComponent(cashier)}` : ''}`);
         data = res;
         skew = serverTime(res.now) - Date.now();
         draw();
@@ -48,9 +50,14 @@ export async function render(container, { user }) {
         }, 1000);
     }
 
+    const ownSale = (s) => String(s.cashier_id) === String(user.id);
+
     function draw() {
         const d = data;
         const rows = d.data;
+        const self = String(d.cashier_id) === String(user.id);
+        const picked = d.cashiers?.find((c) => String(c.id) === String(d.cashier_id));
+        const heading = self ? 'การขายของฉัน' : d.cashier_id === 'all' ? 'การขายของพนักงานทุกคน' : `การขายของ ${picked?.full_name || 'พนักงาน'}`;
         container.innerHTML = `
         <section class="card card-pad">
           <div class="actions-row">
@@ -60,6 +67,12 @@ export async function render(container, { user }) {
             <button type="button" class="tab-btn ${from === daysAgo(29) && to === todayISO() ? 'active' : ''}" data-range="30">30 วันล่าสุด</button>
             <label class="field" style="flex-direction:row;align-items:center;gap:6px">ตั้งแต่ <input type="date" id="f-from" value="${escapeHtml(from)}" max="${todayISO()}"></label>
             <label class="field" style="flex-direction:row;align-items:center;gap:6px">ถึง <input type="date" id="f-to" value="${escapeHtml(to)}" max="${todayISO()}"></label>
+            ${d.cashiers ? `<label class="field" style="flex-direction:row;align-items:center;gap:6px">พนักงาน
+              <select id="f-cashier">
+                <option value="" ${self ? 'selected' : ''}>การขายของฉัน</option>
+                <option value="all" ${d.cashier_id === 'all' ? 'selected' : ''}>พนักงานทุกคน</option>
+                ${d.cashiers.filter((c) => String(c.id) !== String(user.id)).map((c) => `<option value="${c.id}" ${String(c.id) === String(d.cashier_id) ? 'selected' : ''}>${escapeHtml(c.full_name)}${Number(c.sales) ? ` (${count(c.sales)} บิล)` : ''}</option>`).join('')}
+              </select></label>` : ''}
           </div>
           <div class="muted" style="font-size:12.5px;margin-top:10px">
             ${d.edit_enabled
@@ -69,14 +82,15 @@ export async function render(container, { user }) {
         </section>
 
         <section class="card">
-          <div class="card-head"><h2>การขายของฉัน ${escapeHtml(fmtDate(d.from))}${d.to !== d.from ? ` – ${escapeHtml(fmtDate(d.to))}` : ''}</h2>
+          <div class="card-head"><h2>${escapeHtml(heading)} ${escapeHtml(fmtDate(d.from))}${d.to !== d.from ? ` – ${escapeHtml(fmtDate(d.to))}` : ''}</h2>
             <div style="font-weight:700">${count(rows.length)} บิล · ฿ ${money(d.total_value)}</div></div>
           <div class="table-wrap" style="max-height:620px"><table>
-            <thead><tr><th>เลขที่</th><th>เวลาขาย</th><th class="num">รายการ</th><th class="num">ชิ้น</th><th class="num">ยอดขาย</th><th>ชำระโดย</th><th>สถานะ</th><th></th></tr></thead>
+            <thead><tr><th>เลขที่</th><th>เวลาขาย</th>${self ? '' : '<th>พนักงาน</th>'}<th class="num">รายการ</th><th class="num">ชิ้น</th><th class="num">ยอดขาย</th><th>ชำระโดย</th><th>สถานะ</th><th></th></tr></thead>
             <tbody>${rows.map((s) => `
               <tr>
                 <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(s.doc_no)}</td>
                 <td style="font-size:12.5px">${escapeHtml(fmtDateTime(s.sale_datetime))}${Number(s.after_hours) ? ' <span class="pill muted">นอกเวลา</span>' : ''}</td>
+                ${self ? '' : `<td style="font-size:12.5px">${escapeHtml(s.cashier_name || '-')}</td>`}
                 <td class="num">${count(s.line_count)}</td>
                 <td class="num">${count(s.total_qty)}</td>
                 <td class="num" style="font-weight:600">${money(s.total_value)}</td>
@@ -84,9 +98,9 @@ export async function render(container, { user }) {
                 <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}</td>
                 <td style="white-space:nowrap;text-align:right">
                   <button type="button" class="btn secondary sm" data-view="${s.id}">ดูรายละเอียด</button>
-                  ${s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn sm" data-edit="${s.id}">แก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
+                  ${ownSale(s) && s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn sm" data-edit="${s.id}">แก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
                 </td>
-              </tr>`).join('') || '<tr><td colspan="8" class="empty">ไม่มีการขายในช่วงนี้</td></tr>'}</tbody>
+              </tr>`).join('') || `<tr><td colspan="${self ? 8 : 9}" class="empty">ไม่มีการขายในช่วงนี้</td></tr>`}</tbody>
           </table></div>
         </section>
         ${detail ? detailModal() : ''}
@@ -118,7 +132,7 @@ export async function render(container, { user }) {
             <div class="modal-foot">
               ${mine ? `<button type="button" class="btn secondary" data-cancel-req="${mine.id}">ยกเลิกคำขอแก้ไข</button>` : '<span></span>'}
               <div style="display:flex;gap:8px">
-                ${s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn" data-edit="${s.id}">ขอแก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
+                ${ownSale(s) && s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn" data-edit="${s.id}">ขอแก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
                 <button type="button" class="btn secondary" data-close>ปิด</button>
               </div>
             </div>
@@ -262,6 +276,7 @@ export async function render(container, { user }) {
             if (n === 0) { from = to = todayISO(); } else if (n === 1) { from = to = daysAgo(1); } else { from = daysAgo(n - 1); to = todayISO(); }
             load();
         }));
+        $('#f-cashier')?.addEventListener('change', (e) => { cashier = e.target.value; load(); });
         $('#f-from').addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; if (to < from) to = from; load(); } });
         $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; if (from > to) from = to; load(); } });
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openDetail(b.dataset.view)));

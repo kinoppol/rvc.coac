@@ -43,21 +43,23 @@ class SaleEditService
     }
 
     /** POS sales a cashier made, by accounting day; POS imports are not theirs to correct. */
-    public function mine(int $userId, string $from, string $to): array
+    /** POS sales of one cashier ($userId), or of every cashier (null), by accounting day. */
+    public function mine(?int $userId, string $from, string $to): array
     {
         $stmt = $this->db->prepare(
             "SELECT s.id, s.doc_no, s.sale_datetime, s.business_date, s.after_hours, s.total_qty, s.total_value,
+                    s.cashier_id, (SELECT u.full_name FROM users u WHERE u.id = s.cashier_id) AS cashier_name,
                     s.cash_received, s.change_amount,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS line_count,
                     (SELECT GROUP_CONCAT(DISTINCT sp.method ORDER BY sp.id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
                     (SELECT r.status FROM sale_edit_requests r WHERE r.sale_id = s.id ORDER BY r.id DESC LIMIT 1) AS edit_status,
                     (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved') AS edits_approved
              FROM sales s
-             WHERE s.cashier_id = ? AND s.business_date BETWEEN ? AND ?
+             WHERE (? IS NULL OR s.cashier_id = ?) AND s.business_date BETWEEN ? AND ?
                AND NOT EXISTS (SELECT 1 FROM pos_imports pi WHERE pi.sale_id = s.id)
              ORDER BY s.sale_datetime DESC, s.id DESC LIMIT 1000"
         );
-        $stmt->execute([$userId, $from, $to]);
+        $stmt->execute([$userId, $userId, $from, $to]);
         $rows = $stmt->fetchAll();
         foreach ($rows as &$r) {
             $r['methods'] = $r['methods'] ? explode(',', $r['methods']) : [];
@@ -65,6 +67,22 @@ class SaleEditService
         }
         unset($r);
         return $rows;
+    }
+
+    /** Staff who can sell (for the cashier picker), plus anyone with POS sales in the range. */
+    public function cashiers(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT u.id, u.full_name, u.role,
+                    (SELECT COUNT(*) FROM sales s WHERE s.cashier_id = u.id AND s.business_date BETWEEN ? AND ?
+                       AND NOT EXISTS (SELECT 1 FROM pos_imports pi WHERE pi.sale_id = s.id)) AS sales
+             FROM users u
+             WHERE (u.active = 1 AND u.role IN ('admin', 'manager', 'advisor', 'cashier'))
+                OR u.id IN (SELECT cashier_id FROM sales WHERE business_date BETWEEN ? AND ?)
+             ORDER BY sales DESC, u.full_name"
+        );
+        $stmt->execute([$from, $to, $from, $to]);
+        return $stmt->fetchAll();
     }
 
     /** A sale with its lines, payments and correction requests. */
