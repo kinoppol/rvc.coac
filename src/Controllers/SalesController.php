@@ -48,7 +48,7 @@ class SalesController
         }
         $db = Db::connection();
         $role = $request->getAttribute('user')['role'] ?? null;
-        $short = !empty($params['short']) && (new SettingsService($db))->posRoleAllows('pos_short_stock_roles', $role);
+        $short = (new SettingsService($db))->sellShortStock($role, !empty($params['short']));
         $stock = $short ? '1 = 1' : 'p.qty_stock > 0';
         if (!empty($params['out']) && $q !== '') {
             // Matches the POS cannot sell (stock below 1), shown so the cashier knows why.
@@ -113,6 +113,7 @@ class SalesController
             'payment_methods' => $methods,
             'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
             'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
+            'sell_out_of_stock_always' => $settings->get('pos_short_stock_always') === '1',
             'store_hours' => [
                 'open' => $settings->get('store_open_time'),
                 'close' => $settings->get('store_close_time'),
@@ -168,7 +169,7 @@ class SalesController
                 'after_hours' => $day['after_hours'],
                 'payments' => $payments,
                 // The cashier's own switch, honoured only for roles the admin allows.
-                'allow_short_stock' => !empty($body['allow_short']) && $settings->posRoleAllows('pos_short_stock_roles', $user['role'] ?? null),
+                'allow_short_stock' => $settings->sellShortStock($user['role'] ?? null, !empty($body['allow_short'])),
             ]);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);

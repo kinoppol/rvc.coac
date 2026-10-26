@@ -44,6 +44,9 @@ class SettingsController
         if (isset($body['qr_login'])) {
             $body['qr_login'] = in_array($body['qr_login'], ['1', 1, true], true) ? '1' : '0';
         }
+        if (isset($body['pos_short_stock_always'])) {
+            $body['pos_short_stock_always'] = in_array($body['pos_short_stock_always'], ['1', 1, true], true) ? '1' : '0';
+        }
         if (isset($body['sale_edit_enabled'])) {
             $body['sale_edit_enabled'] = in_array($body['sale_edit_enabled'], ['1', 1, true], true) ? '1' : '0';
         }

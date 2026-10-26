@@ -176,6 +176,9 @@ export async function render(page, { user, permissions, params = {} }) {
                   <div style="font-weight:600;font-size:14px">ขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 (0 หรือติดลบ)</div>
                   <p class="muted" style="font-size:12.5px;margin:4px 0 0">ใช้เมื่อสต๊อกในระบบคลาดเคลื่อน หรือมีของเข้าร้านแล้วแต่ยังไม่ได้บันทึกรับเข้าระบบ
                     เมื่อผู้ใช้เปิดสวิตช์ สินค้าเหล่านี้จะค้นหาเจอ (สีจาง) และขายได้แม้สต๊อกจะติดลบ ควรตรวจนับหรือบันทึกรับสินค้าให้ตรงภายหลัง</p>
+                  <label style="display:flex;align-items:center;gap:10px;font-size:14px;margin-top:12px"><input type="checkbox" name="short_always" value="1" ${s.pos_short_stock_always === '1' ? 'checked' : ''} style="width:20px;height:20px">
+                    <span><b>เปิดขายทั้งระบบ</b> — ผู้ใช้ทุกคนขายได้ทันที ไม่ต้องเปิดสวิตช์ในหน้าขาย</span></label>
+                  <div class="muted" style="font-size:12.5px;margin-top:10px">ถ้าไม่เปิดขายทั้งระบบ บทบาทที่เลือกด้านล่างเปิดสวิตช์เองได้ในหน้าขาย</div>
                   ${roleBoxes('short_roles', s.pos_short_stock_roles)}
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
@@ -205,6 +208,7 @@ export async function render(page, { user, permissions, params = {} }) {
             const fd = new FormData(e.target);
             try {
                 await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
+                    pos_short_stock_always: fd.get('short_always') === '1' ? '1' : '0',
                     sale_edit_enabled: fd.get('sale_edit_enabled') === '1' ? '1' : '0', sale_edit_minutes: fd.get('sale_edit_minutes'),
                     store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),
                     store_closed_days: WEEKDAYS.map((d, i) => String(i)).filter((i) => !fd.getAll('open_day').includes(i)).join(','),

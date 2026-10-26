@@ -80,13 +80,14 @@ export async function render(container, { user } = {}) {
     let sort = pref('sort', 'popular');
     let group = pref('group', 'all');
     let keyboard = !TOUCH || pref('kb', '0') === '1';
-    let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false };
+    let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false, sell_out_of_stock_always: false };
     // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
     // The user's own switch (remembered on this device); only roles the admin allows get it.
     const SHORT_KEY = `short.${user?.id ?? 0}`;
     let shortMode = pref(SHORT_KEY, '0') === '1';
     const canShort = () => !!options.sell_out_of_stock;
-    const allowShort = () => canShort() && shortMode;
+    // Admin may also turn it on for everyone, with no switch on this page.
+    const allowShort = () => !!options.sell_out_of_stock_always || (canShort() && shortMode);
     let modal = null; // the payment dialog element while open
     // Cash drawer of the current accounting day: counted before selling, or skipped for a few minutes.
     let drawer = null; // state from /sales/options and /drawer/*
@@ -394,7 +395,7 @@ export async function render(container, { user } = {}) {
     }
 
     function drawShortBar() {
-        el('shortbar').innerHTML = allowShort() ? `
+        el('shortbar').innerHTML = allowShort() && !options.sell_out_of_stock_always ? `
           <div class="pos-short-bar"><label class="pos-switch"><input type="checkbox" data-out-switch checked><span aria-hidden="true"></span>
             กำลังเปิดขายสินค้าที่มีจำนวนคงเหลือต่ำกว่า 1 <small>แตะเพื่อปิด</small></label></div>` : '';
     }

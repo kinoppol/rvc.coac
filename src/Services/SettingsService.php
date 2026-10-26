@@ -34,6 +34,7 @@ class SettingsService
         // stock is below 1 (miscounted stock, or goods never received in the system).
         'pos_mixed_roles' => 'admin,manager,advisor,cashier',
         'pos_short_stock_roles' => 'admin,manager',
+        'pos_short_stock_always' => '0', // '1' = every user sells stock below 1 without the POS switch
         // Cashiers may ask to correct a sale they made, within this many minutes of it;
         // the correction takes effect once a manager or admin approves it.
         'sale_edit_enabled' => '1',
@@ -102,6 +103,12 @@ class SettingsService
     public function posRoleAllows(string $key, ?string $role): bool
     {
         return $role !== null && in_array($role, explode(',', (string) $this->get($key)), true);
+    }
+
+    /** Whether a sale may take products whose stock is below 1: always (admin setting), or the user turned the POS switch on and their role may. */
+    public function sellShortStock(?string $role, bool $switchOn): bool
+    {
+        return $this->get('pos_short_stock_always') === '1' || ($switchOn && $this->posRoleAllows('pos_short_stock_roles', $role));
     }
 
     public const PAYMENT_METHODS = ['cash' => 'เงินสด', 'transfer' => 'โอนเงินเข้าบัญชี', 'qr' => 'สแกน QR-Code', 'card' => 'บัตรเครดิต'];
