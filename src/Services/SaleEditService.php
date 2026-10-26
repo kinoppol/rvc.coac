@@ -42,24 +42,29 @@ class SaleEditService
         return $until > time() ? date('Y-m-d H:i:s', $until) : null;
     }
 
-    /** POS sales a cashier made, by accounting day; POS imports are not theirs to correct. */
-    /** POS sales of one cashier ($userId), or of every cashier (null), by accounting day. */
-    public function mine(?int $userId, string $from, string $to): array
+    /**
+     * POS sales of one cashier ($userId), or of every cashier (null), by accounting day.
+     * Sales imported from the external POS are left out unless $withImports (admins and
+     * managers checking the day); they are never open to correction requests.
+     */
+    public function mine(?int $userId, string $from, string $to, bool $withImports = false): array
     {
         $stmt = $this->db->prepare(
             "SELECT s.id, s.doc_no, s.sale_datetime, s.business_date, s.after_hours, s.total_qty, s.total_value,
                     s.cashier_id, (SELECT u.full_name FROM users u WHERE u.id = s.cashier_id) AS cashier_name,
+                    pim.id AS pos_import, pim.source_label AS pos_source,
                     s.cash_received, s.change_amount,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS line_count,
                     (SELECT GROUP_CONCAT(DISTINCT sp.method ORDER BY sp.id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
                     (SELECT r.status FROM sale_edit_requests r WHERE r.sale_id = s.id ORDER BY r.id DESC LIMIT 1) AS edit_status,
                     (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved') AS edits_approved
              FROM sales s
+             LEFT JOIN pos_imports pim ON pim.sale_id = s.id
              WHERE (? IS NULL OR s.cashier_id = ?) AND s.business_date BETWEEN ? AND ?
-               AND NOT EXISTS (SELECT 1 FROM pos_imports pi WHERE pi.sale_id = s.id)
+               AND (? OR pim.id IS NULL)
              ORDER BY s.sale_datetime DESC, s.id DESC LIMIT 1000"
         );
-        $stmt->execute([$userId, $userId, $from, $to]);
+        $stmt->execute([$userId, $userId, $from, $to, $withImports ? 1 : 0]);
         $rows = $stmt->fetchAll();
         foreach ($rows as &$r) {
             $r['methods'] = $r['methods'] ? explode(',', $r['methods']) : [];

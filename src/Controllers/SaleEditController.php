@@ -34,7 +34,7 @@ class SaleEditController
         $oversee = in_array($user['role'] ?? '', ['admin', 'manager'], true);
         $pick = (string) ($params['cashier_id'] ?? '');
         $cashier = $oversee && $pick === 'all' ? null : ($oversee && (int) $pick > 0 ? (int) $pick : (int) $user['id']);
-        $rows = $service->mine($cashier, $from, $to);
+        $rows = $service->mine($cashier, $from, $to, $oversee);
         return $this->json($response, [
             'from' => $from, 'to' => $to, 'data' => $rows,
             'cashier_id' => $cashier ?? 'all',

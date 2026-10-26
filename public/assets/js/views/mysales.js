@@ -88,13 +88,13 @@ export async function render(container, { user }) {
             <thead><tr><th>เลขที่</th><th>เวลาขาย</th>${self ? '' : '<th>พนักงาน</th>'}<th class="num">รายการ</th><th class="num">ชิ้น</th><th class="num">ยอดขาย</th><th>ชำระโดย</th><th>สถานะ</th><th></th></tr></thead>
             <tbody>${rows.map((s) => `
               <tr>
-                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(s.doc_no)}</td>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(s.doc_no)}${s.pos_import ? `<div><span class="pill muted" title="${escapeHtml(s.pos_source || 'นำเข้ายอดขายจาก POS ภายนอก')}">นำเข้าจาก POS</span></div>` : ''}</td>
                 <td style="font-size:12.5px">${escapeHtml(fmtDateTime(s.sale_datetime))}${Number(s.after_hours) ? ' <span class="pill muted">นอกเวลา</span>' : ''}</td>
                 ${self ? '' : `<td style="font-size:12.5px">${escapeHtml(s.cashier_name || '-')}</td>`}
                 <td class="num">${count(s.line_count)}</td>
                 <td class="num">${count(s.total_qty)}</td>
                 <td class="num" style="font-weight:600">${money(s.total_value)}</td>
-                <td style="font-size:12.5px">${escapeHtml(s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || '-')}</td>
+                <td style="font-size:12.5px">${escapeHtml(s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || (s.pos_import ? 'ไม่ระบุ (POS ภายนอก)' : '-'))}</td>
                 <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}</td>
                 <td style="white-space:nowrap;text-align:right">
                   <button type="button" class="btn secondary sm" data-view="${s.id}">ดูรายละเอียด</button>
