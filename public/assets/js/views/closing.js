@@ -368,9 +368,9 @@ export async function render(container, { user, permissions = [] } = {}) {
         const row = (label, v, style = '') => `<tr><td>${label}</td><td class="num" style="${style}">${v}</td></tr>`;
         if (m.editing) {
             return `
-            <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
-              ${f.drawer ? `<label class="field">คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป (บาท) <input data-f="float_kept" type="number" min="0" step="0.25" value="${escapeHtml(m.form.float_kept)}">
-                <span class="muted" style="font-size:11.5px;font-weight:400">เงินตั้งต้นวันนี้ ฿${money(f.drawer.opening_cash)} · เหลือในลิ้นชัก ฿${money(f.drawer.after_pay)}</span></label>` : ''}
+            <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:start">
+              ${f.drawer ? `<label class="field">เงินทอนวันถัดไป (บาท) <input data-f="float_kept" type="number" min="0" step="0.25" value="${escapeHtml(m.form.float_kept)}">
+                <span class="muted" style="font-size:11.5px;font-weight:400">คงไว้ในลิ้นชัก · เงินตั้งต้นวันนี้ ฿${money(f.drawer.opening_cash)} · เหลือในลิ้นชัก ฿${money(f.drawer.after_pay)}</span></label>` : ''}
               <label class="field">จำนวนเงินสดที่ส่ง (บาท) * <input data-f="cash_sent" type="number" min="0" step="0.25" value="${escapeHtml(m.form.cash_sent)}">
                 <span class="muted" style="font-size:11.5px;font-weight:400">ควรส่ง <span id="cl-expected">฿${money(expectedSend(m))}</span> <span id="cl-diff">${diffText(Number(m.form.cash_sent) - expectedSend(m))}</span></span></label>
               <label class="field">ส่งให้ <input data-f="sent_to" maxlength="150" value="${escapeHtml(m.form.sent_to)}"></label>
