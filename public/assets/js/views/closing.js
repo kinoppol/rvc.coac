@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { alertDialog, promptDialog } from '../dialog.js';
+import { printClosingReport } from '../print-slip.js';
 
 const SKIP_LABEL = { drawer: 'ปิดยอดลิ้นชัก', wages: 'จ่ายค่าแรง', payouts: 'จ่ายเงินผู้ฝากขาย', purchases: 'ซื้อสินค้าเข้าร้าน' };
 const PAY_METHOD = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
@@ -482,22 +483,21 @@ export async function render(container, { user, permissions = [] } = {}) {
         drawDay();
     }
 
+    /** A plain one-page accounting sheet of the day, with what is being typed if the summary is being edited. */
     function printReport() {
-        const body = modal.el.querySelector('#cl-report').cloneNode(true);
-        body.querySelectorAll('.no-print, button, input, textarea').forEach((x) => {
-            if (x.tagName === 'INPUT' || x.tagName === 'TEXTAREA') x.replaceWith(document.createTextNode(x.value || '-'));
-            else x.remove();
+        const m = modal;
+        const c = m.closing;
+        const src = m.editing ? { ...m.form, actual: m.form.actual } : { ...(c || {}), actual: c?.actual_accounts };
+        const status = !c ? 'ยังไม่สรุป' : c.verified_at ? 'ยืนยันแล้ว' : 'สรุปแล้ว รอยืนยัน';
+        printClosingReport(m, {
+            weekday: data.weekdays[new Date(m.date + 'T00:00:00').getDay() || 7],
+            status,
+            send: {
+                expected_send: m.editing || !c ? expectedSend(m) : Number(c.expected_send),
+                float_kept: m.editing ? floatOf(m) : (c?.float_kept != null ? Number(c.float_kept) : null),
+                cash_sent: src.cash_sent, sent_to: src.sent_to, receipt_no: src.receipt_no, note: src.note, actual: src.actual,
+            },
         });
-        const title = modal.el.querySelector('.modal-head h2').textContent.trim();
-        const css = new URL('assets/css/app.css', location.href.split('#')[0]).href;
-        const w = window.open('', '_blank');
-        if (!w) return;
-        w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
-          <link rel="stylesheet" href="${css}"><style>body{padding:24px;background:#fff}.card{break-inside:avoid;box-shadow:none}.cl-t{width:100%}.cl-t td{padding:3px 0}</style></head>
-          <body><h2 style="margin:0 0 4px">${escapeHtml(title)}</h2>${body.innerHTML}
-          <div style="display:flex;justify-content:space-around;margin-top:48px;text-align:center"><div>ลงชื่อ ................................<br>ผู้สรุปบัญชี</div><div>ลงชื่อ ................................<br>ผู้รับเงิน</div></div></body></html>`);
-        w.document.close();
-        setTimeout(() => w.print(), 500);
     }
 
     function diffText(diff) {

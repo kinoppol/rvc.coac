@@ -393,7 +393,128 @@ export function printWageSlip(w, types = {}, methods = {}) {
 }
 
 /** Prints a standalone HTML document through a hidden iframe (no pop-up window to block). */
-function printHtml(html) {
+const CLOSING_PAY = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
+
+/**
+ * Prints the end-of-day account summary (รายงานสรุปบัญชีประจำวัน) as a plain accounting
+ * sheet on one A4 page in TH Sarabun New (else the Sarabun web font), shrunk to fit.
+ * r: the day's report (figures, accounts, wages, payouts, purchases, closing, on_duty);
+ * send: what was / is being handed over {cash_sent, expected_send, float_kept, sent_to, receipt_no, note, actual}.
+ */
+export function printClosingReport(r, { weekday, status, send }) {
+    const f = r.figures;
+    const dr = f.drawer;
+    const c = r.closing;
+    const n = (v) => money(v);
+    const signed = (v) => (Math.abs(v) < 0.005 ? '0.00' : `${v < 0 ? '(' : ''}${money(Math.abs(v))}${v < 0 ? ')' : ''}`);
+    const row = (label, v, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${v}</td></tr>`;
+    const none = (text) => `<tr><td colspan="2" class="muted">${text}</td></tr>`;
+    const section = (title, rows) => `<table class="led"><thead><tr><th colspan="2">${title}</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+    const sales = section('1. ยอดขาย', `
+        ${f.methods.map((x) => row(`&nbsp;&nbsp;${escapeHtml(x.label)}`, n(x.amount))).join('')}
+        ${f.unknown_sales ? row('&nbsp;&nbsp;นำเข้าจาก POS (ไม่ทราบวิธีชำระ)', n(f.unknown_sales)) : ''}
+        ${row(`รวมยอดขาย (${f.sales_count} บิล)`, n(f.total_sales), 'total')}`);
+
+    const drawer = section('2. เงินสดในลิ้นชัก', dr ? `
+        ${row('เงินในลิ้นชักตอนเปิดร้าน', n(dr.opening_cash))}
+        ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
+        ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
+        ${dr.counted_cash !== null ? `${row('เงินที่นับได้จริงตอนปิดยอด', n(dr.counted_cash))}
+          ${row('เงินขาด (เกิน)', signed(dr.counted_cash - dr.should_have))}` : row('เงินที่นับได้จริงตอนปิดยอด', 'ยังไม่ได้นับ')}
+        ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 4)', n(f.cash_out))}
+        ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 5)', n(f.payout_out || 0))}
+        ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 6)', n(f.purchase_out))}
+        ${row('เงินสดคงเหลือในลิ้นชักหลังจ่าย', n(dr.after_pay), 'sub')}
+        ${row('หัก คงไว้เป็นเงินทอนวันถัดไป', n(send.float_kept ?? f.float_kept))}
+        ${row('เงินสดที่ต้องส่งวิทยาลัย', n(send.expected_send), 'total')}` : none('ไม่ได้ระบุเงินในลิ้นชัก'));
+
+    const accounts = section('3. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต', r.accounts.length ? r.accounts.map((a) => {
+        const got = send.actual?.[a.method];
+        const has = got !== undefined && got !== null && got !== '';
+        return row(`${escapeHtml(a.label)} <span class="muted">ควรได้ ${n(a.expected)}${has && Math.abs(Number(got) - a.expected) >= 0.005 ? ` · ต่าง ${signed(Number(got) - a.expected)}` : ''}</span>`,
+            has ? n(got) : 'ยังไม่ได้ตรวจ');
+    }).join('') : none('ไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตร'));
+
+    const wages = section('4. การจ่ายค่าแรง', r.wages.rows.length ? `
+        ${r.wages.rows.map((w) => row(`${escapeHtml(w.employee_name || '-')} <span class="muted">${escapeHtml(w.doc_no)} · ${w.drawer_date === f.date ? 'จากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, n(w.amount))).join('')}
+        ${row('รวม', n(r.wages.total), 'total')}` : none('ไม่มีการจ่ายค่าแรง'));
+
+    const payouts = section('5. การจ่ายเงินค่าสินค้าฝากขาย', r.payouts.rows.length ? `
+        ${r.payouts.rows.map((w) => row(`${escapeHtml(w.consignor_code)} ${escapeHtml(w.consignor_name)} <span class="muted">${escapeHtml(w.doc_no)} · ${CLOSING_PAY[w.method] || w.method}${w.method === 'cash' ? (w.from_drawer ? ' จากลิ้นชัก' : ' (ไม่ใช้เงินลิ้นชัก)') : ''}</span>`, n(w.amount))).join('')}
+        ${row('รวม', n(r.payouts.total), 'total')}` : none('ไม่มีการจ่ายเงินผู้ฝากขาย'));
+
+    const purchases = section('6. การเบิกเงินซื้อสินค้าเข้าร้าน', r.purchases.rows.length ? `
+        ${r.purchases.rows.map((p) => row(`${escapeHtml(p.supplier_name || '-')} <span class="muted">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.from_drawer ? 'จากลิ้นชัก' : 'ไม่ใช้เงินลิ้นชัก'}</span>`, n(p.total))).join('')}
+        ${row('รวม', n(r.purchases.total), 'total')}` : none('ไม่มีการซื้อสินค้าเข้าร้าน'));
+
+    const sent = send.cash_sent !== undefined && send.cash_sent !== null && send.cash_sent !== '';
+    const handover = section('7. ส่งเงินสดให้วิทยาลัย', `
+        ${row('ยอดที่ควรส่ง', n(send.expected_send))}
+        ${row('เงินสดที่ส่ง', sent ? n(send.cash_sent) : '..........................', 'total')}
+        ${sent && Math.abs(Number(send.cash_sent) - send.expected_send) >= 0.005 ? row('ส่งขาด (เกิน)', signed(send.expected_send - Number(send.cash_sent))) : ''}
+        ${row('ส่งให้', escapeHtml(send.sent_to || '-'))}
+        ${row('เลขที่ใบเสร็จ / ใบรับเงิน', escapeHtml(send.receipt_no || '..........................'))}
+        ${send.note ? `<tr><td colspan="2">หมายเหตุ: ${escapeHtml(send.note)}</td></tr>` : ''}`);
+
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>รายงานสรุปบัญชีประจำวัน ${escapeHtml(fmtDate(f.date))}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: 'THSarabun'; font-weight: 400; src: local('TH Sarabun New'), local('THSarabunNew'), local('TH SarabunPSK'), local('THSarabunPSK'); }
+  @font-face { font-family: 'THSarabun'; font-weight: 700; src: local('TH Sarabun New Bold'), local('THSarabunNew-Bold'), local('TH SarabunPSK Bold'), local('THSarabunPSK-Bold'); }
+  @page { size: A4 portrait; margin: 10mm 12mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #000; background: #fff;
+         font-size: 14pt; line-height: 1.1; margin: 0; width: 186mm; }
+  .head { text-align: center; margin-bottom: 4px; }
+  .head h1 { font-size: 18pt; margin: 0; }
+  .head div { font-size: 14pt; }
+  .info { display: flex; justify-content: space-between; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; padding: 1px 0; margin-bottom: 6px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 6mm; align-items: start; }
+  .led { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+  .led th { text-align: left; font-weight: 700; border-bottom: 1px solid #000; padding: 1px 0; }
+  .led td { padding: 0 0; vertical-align: top; }
+  .led td.num { text-align: right; white-space: nowrap; padding-left: 8px; font-variant-numeric: tabular-nums; width: 1%; }
+  .led tr.sub td { font-weight: 700; }
+  .led tr.sub td.num { border-top: 1px solid #000; }
+  .led tr.total td { font-weight: 700; }
+  .led tr.total td.num { border-top: 1px solid #000; border-bottom: 3px double #000; }
+  .muted { color: #444; font-size: 12pt; }
+  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; margin-top: 14mm; text-align: center; }
+  .sign .line { border-top: 1px dotted #000; margin: 0 4mm 1px; padding-top: 1px; }
+  .foot { margin-top: 4mm; font-size: 11pt; color: #444; text-align: right; }
+</style></head><body>
+  <div class="head"><h1>รายงานสรุปบัญชีประจำวัน</h1><div>ร้านค้าสหการ</div></div>
+  <div class="info">
+    <span>วัน${escapeHtml(weekday)}ที่ ${escapeHtml(fmtDate(f.date))}</span>
+    <span>ผู้มีเวรสรุปบัญชี: ${escapeHtml(r.on_duty.map((p) => p.full_name).join(', ') || '-')}</span>
+    <span>สถานะ: ${escapeHtml(status)}</span>
+  </div>
+  <div class="cols">
+    <div>${sales}${accounts}${wages}</div>
+    <div>${drawer}${handover}</div>
+  </div>
+  <div class="cols">
+    <div>${payouts}</div>
+    <div>${purchases}</div>
+  </div>
+  ${dr && dr.counted_cash !== null ? `<div class="muted">ปิดยอดลิ้นชักโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? escapeHtml(fmtDateTime(dr.closed_at)) : ''}</div>` : ''}
+  <div class="sign">
+    <div><div class="line">(${escapeHtml(c?.closer_name || '.......................................')})</div>ผู้สรุปบัญชี</div>
+    <div><div class="line">(.......................................)</div>ผู้รับเงิน (วิทยาลัย)</div>
+    <div><div class="line">(${escapeHtml(c?.verified_by_name || '.......................................')})</div>ผู้ตรวจสอบ</div>
+  </div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
+</body></html>`;
+
+    printHtml(html, { fitPage: true });
+}
+
+function printHtml(html, { fitPage = false } = {}) {
     const frame = document.createElement('iframe');
     frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
@@ -405,6 +526,13 @@ function printHtml(html) {
         done = true;
         // Wait for the Thai web font (if it loads) so the print isn't in a fallback font.
         try { await Promise.race([win.document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]); } catch (e) { /* ignore */ }
+        if (fitPage) {
+            // Shrink to one A4 page: 297mm less the 10mm top and bottom margins, in CSS px.
+            const page = (277 * 96) / 25.4;
+            const body = win.document.body;
+            const h = body.scrollHeight;
+            if (h > page) body.style.zoom = String(Math.floor((page / h) * 0.98 * 1000) / 1000);
+        }
         win.addEventListener('afterprint', () => frame.remove());
         setTimeout(() => frame.remove(), 120000);
         win.focus();
