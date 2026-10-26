@@ -165,6 +165,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         m.editing = true;
         m.form = {
             cash_sent: String(m.figures.expected_send),
+            float_kept: String(m.figures.float_kept),
             sent_to: c?.sent_to || 'งานการเงิน วิทยาลัย',
             receipt_no: c?.receipt_no || '',
             note: c?.note || '',
@@ -177,6 +178,13 @@ export async function render(container, { user, permissions = [] } = {}) {
         modal = null;
     }
 
+    // Change kept in the drawer for the next day: as typed while editing, else as the server has it.
+    const floatOf = (m) => (m.editing && m.form.float_kept !== '' ? Number(m.form.float_kept) || 0 : Number(m.figures.float_kept));
+    // Cash to hand over: what is left in the drawer after paying out, less the change kept.
+    const expectedSend = (m) => {
+        const dr = m.figures.drawer;
+        return dr ? Math.max(0, Math.round((dr.after_pay - floatOf(m)) * 100) / 100) : Number(m.figures.expected_send);
+    };
     const isDiff = (a, b) => Math.abs(Number(a) - Number(b)) >= 0.005;
     const signed = (v) => `${v > 0 ? '+' : v < 0 ? '-' : ''}฿ ${money(Math.abs(v))}`;
 
@@ -229,10 +237,13 @@ export async function render(container, { user, permissions = [] } = {}) {
             ${dr.counted_cash !== null ? `
               ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
               ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}
-            ${f.cash_out || f.purchase_out ? `
-              ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(หลังปิดยอด)</span>', `฿ ${money(f.cash_out)}`) : ''}
+            ${f.cash_out || f.payout_out || f.purchase_out ? `
+              ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 4)</span>', `฿ ${money(f.cash_out)}`) : ''}
+              ${f.payout_out ? line('- จ่ายเงินผู้ฝากขายจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.payout_out)}`) : ''}
               ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 6)</span>', `฿ ${money(f.purchase_out)}`) : ''}
-              ${line(`<b>เงินสดคงเหลือในลิ้นชักหลังจ่าย</b>${dr.counted_cash === null ? ' <span class="muted" style="font-size:12px">(ยังไม่ได้นับ)</span>' : ''}`, `<b>฿ ${money(dr.after_pay)}</b>`)}` : ''}`
+              ${line(`<b>เงินสดคงเหลือในลิ้นชักหลังจ่าย</b>${dr.counted_cash === null ? ' <span class="muted" style="font-size:12px">(ยังไม่ได้นับ)</span>' : ''}`, `<b>฿ ${money(dr.after_pay)}</b>`)}` : ''}
+            ${line('- คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป', `<span id="cl-float-v">฿ ${money(floatOf(m))}</span>`)}
+            ${line('<b>เงินสดที่ต้องส่งวิทยาลัย</b> <span class="muted" style="font-size:12px">(ข้อ 7)</span>', `<b id="cl-send-v">฿ ${money(expectedSend(m))}</b>`)}`
             : line('เงินในลิ้นชักตอนเปิดร้าน', '<span class="muted">ไม่ได้ระบุ</span>');
 
         m.el.innerHTML = `
@@ -303,9 +314,17 @@ export async function render(container, { user, permissions = [] } = {}) {
                 <section class="card card-pad">
                   <h3 style="margin:0 0 8px">5. การจ่ายเงินค่าสินค้าฝากขายให้ผู้ฝากขาย</h3>
                   ${m.payouts.rows.length ? `<table class="cl-t"><tbody>
-                    ${m.payouts.rows.map((w) => line(`${escapeHtml(w.consignor_code)} - ${escapeHtml(w.consignor_name)} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${PAY_METHOD[w.method] || w.method}</span>`, `฿ ${money(w.amount)}`)).join('')}
+                    ${m.payouts.rows.map((w) => `<tr><td>${escapeHtml(w.consignor_code)} - ${escapeHtml(w.consignor_name)} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${PAY_METHOD[w.method] || w.method}</span>
+                      ${w.method === 'cash' ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px">
+                        ${w.from_drawer ? '<span class="pill" style="font-size:11.5px">จ่ายจากเงินในลิ้นชักวันนี้</span>' : '<span class="pill ok" style="font-size:11.5px">ไม่ได้ใช้เงินจากลิ้นชักวันนี้</span>'}
+                        ${w.flagged_by ? `<span class="muted" style="font-size:11px">ระบุโดย ${escapeHtml(w.flagged_by)}</span>` : ''}
+                        ${m.can_submit ? `<button type="button" class="btn sm secondary no-print" data-wdrawer="${w.id}" data-on="${w.from_drawer ? 0 : 1}">${w.from_drawer ? 'ไม่ได้ใช้เงินจากลิ้นชัก' : 'จ่ายจากลิ้นชักวันนี้'}</button>` : ''}
+                      </div>` : ''}</td>
+                      <td class="num" style="vertical-align:top;${w.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(w.amount)}</td></tr>`).join('')}
                     ${line('<b>รวม</b>', `<b>฿ ${money(m.payouts.total)}</b>${m.payouts.cash ? ` <span class="muted" style="font-size:11.5px">(เงินสด ฿${money(m.payouts.cash)})</span>` : ''}`)}
-                  </tbody></table>` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
+                    ${m.payouts.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 2)</span>', `฿ ${money(m.payouts.from_drawer)}`) : ''}
+                  </tbody></table>
+                  ${m.payouts.cash ? '<div class="muted" style="font-size:12px;margin-top:6px">จ่ายเป็นเงินสดถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>' : ''}` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
                   ${m.payouts.pending_count ? `<div style="margin-top:8px"><span class="pill warn" style="font-size:12px">คำขอเบิกรอจ่าย ${m.payouts.pending_count} รายการ ฿${money(m.payouts.pending_amount)}</span>
                     ${can('withdraw.create') ? '<a class="btn sm no-print" href="#/withdraw" style="margin-left:6px">ไปจ่ายเงิน</a>' : ''}</div>` : ''}
                   ${stepActions(m, 'payouts', !m.payouts.rows.length, 'ยังไม่มีการจ่ายเงินผู้ฝากขาย')}
@@ -323,7 +342,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                       </div></td>
                     <td class="num" style="vertical-align:top;${p.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(p.total)}</td></tr>`).join('')}
                   ${line('<b>รวม</b>', `<b>฿ ${money(m.purchases.total)}</b>`)}
-                  ${line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักจากเงินที่ควรมีในลิ้นชัก)</span>', `฿ ${money(m.purchases.from_drawer)}`)}
+                  ${line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 2)</span>', `฿ ${money(m.purchases.from_drawer)}`)}
                 </tbody></table>
                 <div class="muted" style="font-size:12px;margin-top:6px">ปกติถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น (เช่น เงินที่เบิกจากกำไรวันก่อน) กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>` : '<div class="muted">ไม่มีการซื้อสินค้าเข้าร้านวันนี้</div>'}
                 ${stepActions(m, 'purchases', !m.purchases.rows.length, 'ยังไม่มีการบันทึกซื้อสินค้า')}
@@ -350,13 +369,15 @@ export async function render(container, { user, permissions = [] } = {}) {
         if (m.editing) {
             return `
             <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+              ${f.drawer ? `<label class="field">คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป (บาท) <input data-f="float_kept" type="number" min="0" step="0.25" value="${escapeHtml(m.form.float_kept)}">
+                <span class="muted" style="font-size:11.5px;font-weight:400">เงินตั้งต้นวันนี้ ฿${money(f.drawer.opening_cash)} · เหลือในลิ้นชัก ฿${money(f.drawer.after_pay)}</span></label>` : ''}
               <label class="field">จำนวนเงินสดที่ส่ง (บาท) * <input data-f="cash_sent" type="number" min="0" step="0.25" value="${escapeHtml(m.form.cash_sent)}">
-                <span class="muted" style="font-size:11.5px;font-weight:400">ควรส่ง ฿${money(f.expected_send)} <span id="cl-diff">${diffText(Number(m.form.cash_sent) - Number(f.expected_send))}</span></span></label>
+                <span class="muted" style="font-size:11.5px;font-weight:400">ควรส่ง <span id="cl-expected">฿${money(expectedSend(m))}</span> <span id="cl-diff">${diffText(Number(m.form.cash_sent) - expectedSend(m))}</span></span></label>
               <label class="field">ส่งให้ <input data-f="sent_to" maxlength="150" value="${escapeHtml(m.form.sent_to)}"></label>
               <label class="field">เลขที่ใบเสร็จ / ใบรับเงิน <input data-f="receipt_no" maxlength="60" value="${escapeHtml(m.form.receipt_no)}"></label>
             </div>
             <label class="field" style="margin-top:10px">หมายเหตุ <span class="muted" style="font-weight:400">(จำเป็นถ้ายอดเงินไม่ตรง)</span><textarea data-f="note" rows="2" maxlength="500">${escapeHtml(m.form.note)}</textarea></label>
-            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก หักเงินตั้งต้นที่คงไว้ในลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้ยอดขายเงินสด หักค่าแรงและค่าสินค้าที่จ่ายจากลิ้นชัก)</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้เงินที่ควรมี) หักค่าแรง เงินผู้ฝากขาย และค่าสินค้าที่จ่ายจากลิ้นชัก แล้วหักเงินที่คงไว้เป็นเงินทอนวันถัดไป (ดูข้อ 2)</div>
             ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
             <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
               ${c ? '<button type="button" class="btn secondary" id="cl-cancel">ยกเลิก</button>' : ''}
@@ -369,6 +390,7 @@ export async function render(container, { user, permissions = [] } = {}) {
           <table class="cl-t"><tbody>
             ${row('<b>เงินสดที่ส่ง</b>', `<b>฿ ${money(c.cash_sent)}</b>`)}
             ${row('ยอดที่ควรส่ง (ตอนสรุป)', `฿ ${money(c.expected_send)}`)}
+            ${c.float_kept != null ? row('คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป', `฿ ${money(c.float_kept)}`) : ''}
             ${isDiff(c.cash_sent, c.expected_send) ? row('ส่วนต่าง', signed(Number(c.cash_sent) - Number(c.expected_send)), 'color:var(--bad);font-weight:600') : ''}
             ${row('ส่งให้', escapeHtml(c.sent_to || '-'))}
             ${row('เลขที่ใบเสร็จ', escapeHtml(c.receipt_no || '-'))}
@@ -392,8 +414,19 @@ export async function render(container, { user, permissions = [] } = {}) {
         m.el.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeDay));
         m.el.querySelector('#cl-print').addEventListener('click', printReport);
         m.el.querySelectorAll('[data-f]').forEach((inp) => inp.addEventListener('input', () => {
+            const before = expectedSend(m);
             m.form[inp.dataset.f] = inp.value;
-            if (inp.dataset.f === 'cash_sent') m.el.querySelector('#cl-diff').textContent = diffText(Number(inp.value) - Number(f.expected_send));
+            if (inp.dataset.f === 'float_kept') {
+                // The suggested amount to send follows the change kept, unless it was typed in.
+                if (Number(m.form.cash_sent) === before) {
+                    m.form.cash_sent = String(expectedSend(m));
+                    m.el.querySelector('[data-f="cash_sent"]').value = m.form.cash_sent;
+                }
+                m.el.querySelector('#cl-float-v').textContent = `฿ ${money(floatOf(m))}`;
+                m.el.querySelector('#cl-send-v').textContent = `฿ ${money(expectedSend(m))}`;
+                m.el.querySelector('#cl-expected').textContent = `฿${money(expectedSend(m))}`;
+            }
+            m.el.querySelector('#cl-diff').textContent = diffText(Number(m.form.cash_sent) - expectedSend(m));
         }));
         m.el.querySelectorAll('[data-acc]').forEach((inp) => inp.addEventListener('input', () => {
             m.form.actual[inp.dataset.acc] = inp.value;
@@ -403,7 +436,8 @@ export async function render(container, { user, permissions = [] } = {}) {
                 : `<span style="${isDiff(inp.value, a.expected) ? 'color:var(--bad);font-weight:600' : ''}">${signed(Number(inp.value) - a.expected)}</span>`;
         }));
         m.el.querySelectorAll('[data-skip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.skip, true)));
-        m.el.querySelectorAll('[data-pdrawer]').forEach((b) => b.addEventListener('click', () => purchaseDrawer(Number(b.dataset.pdrawer), b.dataset.on === '1')));
+        m.el.querySelectorAll('[data-pdrawer]').forEach((b) => b.addEventListener('click', () => setDrawer('purchases', Number(b.dataset.pdrawer), b.dataset.on === '1')));
+        m.el.querySelectorAll('[data-wdrawer]').forEach((b) => b.addEventListener('click', () => setDrawer('payouts', Number(b.dataset.wdrawer), b.dataset.on === '1')));
         m.el.querySelectorAll('[data-unskip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.unskip, false)));
         m.el.querySelectorAll('a[href^="#/"]').forEach((a) => a.addEventListener('click', closeDay));
         m.el.querySelector('#cl-save')?.addEventListener('click', save);
@@ -432,15 +466,15 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     const docModalGone = (m) => modal !== m;
 
-    /** Paid from today's drawer or with other money: the drawer and the cash to send follow. */
-    async function purchaseDrawer(id, fromDrawer) {
+    /** A purchase / consignor payout paid from today's drawer or with other money: the drawer and the cash to send follow. */
+    async function setDrawer(kind, id, fromDrawer) {
         const m = modal;
         try {
-            const r = (await api.post(`/closing/${m.date}/purchases/${id}`, { from_drawer: fromDrawer })).data;
+            const r = (await api.post(`/closing/${m.date}/${kind}/${id}`, { from_drawer: fromDrawer })).data;
             if (docModalGone(m)) return;
-            const keepSend = m.editing && Number(m.form.cash_sent) === Number(m.figures.expected_send);
+            const keepSend = m.editing && Number(m.form.cash_sent) === expectedSend(m);
             Object.assign(m, r);
-            if (keepSend) m.form.cash_sent = String(m.figures.expected_send); // the suggested amount follows
+            if (keepSend) m.form.cash_sent = String(expectedSend(m)); // the suggested amount follows
             load();
         } catch (e) {
             alertDialog(e.message, { tone: 'error' });
@@ -484,7 +518,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         drawDay();
         try {
             m.closing = (await api.post(`/closing/${m.date}`, {
-                cash_sent: Number(m.form.cash_sent), sent_to: m.form.sent_to, receipt_no: m.form.receipt_no, note: m.form.note,
+                cash_sent: Number(m.form.cash_sent), float_kept: m.figures.drawer ? floatOf(m) : null, sent_to: m.form.sent_to, receipt_no: m.form.receipt_no, note: m.form.note,
                 actual_accounts: Object.fromEntries(Object.entries(m.form.actual).map(([k, v]) => [k, Number(v)])),
             })).data;
             m.editing = false;

@@ -95,6 +95,17 @@ class ClosingController
     /** Whether a purchase of the day was paid from the drawer (body: from_drawer). */
     public function purchaseDrawer(Request $request, Response $response, array $args): Response
     {
+        return $this->drawerFlag($request, $response, $args, 'setPurchaseDrawer');
+    }
+
+    /** Whether a consignor paid in cash that day was paid from the drawer (body: from_drawer). */
+    public function payoutDrawer(Request $request, Response $response, array $args): Response
+    {
+        return $this->drawerFlag($request, $response, $args, 'setPayoutDrawer');
+    }
+
+    private function drawerFlag(Request $request, Response $response, array $args, string $setter): Response
+    {
         $db = Db::connection();
         $date = $this->dateParam($args['date']);
         $user = $request->getAttribute('user');
@@ -106,7 +117,7 @@ class ClosingController
             return $this->error($response, 'ระบุได้เฉพาะผู้มีเวรสรุปบัญชีวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ', 403);
         }
         try {
-            $service->setPurchaseDrawer($date, (int) $args['id'], !empty(((array) $request->getParsedBody())['from_drawer']), (int) $user['id'], $this->ip($request));
+            $service->$setter($date, (int) $args['id'], !empty(((array) $request->getParsedBody())['from_drawer']), (int) $user['id'], $this->ip($request));
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

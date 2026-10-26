@@ -136,11 +136,67 @@ class ClosingService
     }
 
     /**
-     * The day's figures as the system has them now: sales per payment method, cash paid
-     * out of the drawer (wages, goods bought), and the cash to hand over (the drawer's
-     * float stays in the drawer).
+     * Consignors paid that day. One paid in cash is paid from the day's drawer unless
+     * marked as paid with other money; transfers never touch the drawer.
      */
-    public function figures(string $date): array
+    public function payoutsOf(string $date): array
+    {
+        $sql = "SELECT w.id, w.doc_no, w.amount, w.method, w.paid_at, c.code AS consignor_code, c.name AS consignor_name,
+                       IF(w.method = 'cash', %s, 0) AS from_drawer, %s AS flagged_by
+                FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id %s
+                WHERE w.status = 'paid' AND DATE(w.paid_at) = ? ORDER BY w.id";
+        try {
+            $stmt = $this->db->prepare(sprintf($sql, 'COALESCE(f.from_drawer, 1)', 'u.full_name',
+                'LEFT JOIN closing_payout_flags f ON f.withdrawal_id = w.id LEFT JOIN users u ON u.id = f.user_id'));
+            $stmt->execute([$date]);
+        } catch (\PDOException $e) {
+            try {
+                $stmt = $this->db->prepare(sprintf($sql, '1', 'NULL', '')); // migration 0054 not run yet
+                $stmt->execute([$date]);
+            } catch (\PDOException $e) {
+                return [];
+            }
+        }
+        return array_map(fn ($r) => ['from_drawer' => (bool) $r['from_drawer']] + $r, $stmt->fetchAll());
+    }
+
+    /** Marks whether a consignor paid in cash was paid from its day's drawer. */
+    public function setPayoutDrawer(string $date, int $withdrawalId, bool $fromDrawer, int $userId, ?string $ip): void
+    {
+        $cash = array_filter($this->payoutsOf($date), fn ($p) => $p['method'] === 'cash');
+        if (!in_array($withdrawalId, array_map(fn ($p) => (int) $p['id'], $cash), true)) {
+            throw new \RuntimeException('ไม่พบรายการจ่ายเงินสดให้ผู้ฝากขายของวันนี้');
+        }
+        try {
+            $this->db->prepare(
+                'INSERT INTO closing_payout_flags (withdrawal_id, from_drawer, user_id, updated_at) VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE from_drawer = VALUES(from_drawer), user_id = VALUES(user_id), updated_at = NOW()'
+            )->execute([$withdrawalId, $fromDrawer ? 1 : 0, $userId]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('ยังระบุไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0054) ก่อน');
+        }
+        $this->audit->log('withdrawals', $withdrawalId, 'update', null, ['closing_date' => $date, 'from_drawer' => $fromDrawer], $userId, $ip);
+    }
+
+    /** The change left in the drawer for the next day, as saved with the day's summary (null = not set). */
+    private function savedFloat(string $date): ?float
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT float_kept FROM daily_closings WHERE business_date = ?');
+        $stmt->execute([$date]);
+        $v = $stmt->fetchColumn();
+        return $v === false || $v === null ? null : (float) $v;
+    }
+
+    /**
+     * The day's figures as the system has them now: sales per payment method, the drawer at
+     * closing (float + cash sales, against the count), cash paid out of it afterwards (wages,
+     * consignors, goods bought), the change kept for the next day ($floatKept; by default as
+     * saved, else the day's opening float) and the cash to hand over (the rest).
+     */
+    public function figures(string $date, ?float $floatKept = null): array
     {
         $s = (new CashDrawerService($this->db, $this->audit))->summary($date, false);
         $by = fn (array $methods) => round(array_sum(array_column($methods, 'amount')), 2);
@@ -149,14 +205,17 @@ class ClosingService
         $card = $by(array_filter($s['methods'], fn ($m) => $m['method'] === 'card'));
         $cashOut = round((float) $s['cash_out'], 2);
         $purchaseOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['total'] : 0, $this->purchasesOf($date))), 2);
+        $payoutOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['amount'] : 0, $this->payoutsOf($date))), 2);
+        $out = round($cashOut + $payoutOut + $purchaseOut, 2);
         $drawer = $s['drawer'];
         $counted = $drawer && $drawer['counted_cash'] !== null ? (float) $drawer['counted_cash'] : null;
-        // Closing counts the sales only; wages and goods paid from the drawer come out of that count afterwards.
+        // Closing counts the sales only; wages, consignors and goods paid from the drawer come out of that count afterwards.
         $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash, 2) : null;
-        $afterPay = $drawer ? round(($counted ?? $atClose) - $cashOut - $purchaseOut, 2) : null;
+        $afterPay = $drawer ? round(($counted ?? $atClose) - $out, 2) : null;
+        $float = $drawer ? round($floatKept ?? $this->savedFloat($date) ?? (float) $drawer['opening_cash'], 2) : 0.0;
         $expected = $drawer
-            ? round($afterPay - (float) $drawer['opening_cash'], 2) // what is left in the drawer, less the float
-            : round($cash - $cashOut - $purchaseOut, 2);
+            ? round($afterPay - $float, 2) // what is left in the drawer, less the change kept for the next day
+            : round($cash - $out, 2);
         return [
             'date' => $date,
             'total_sales' => round((float) $s['total']['amount'], 2),
@@ -166,13 +225,15 @@ class ClosingService
             'card_sales' => $card,
             'unknown_sales' => round((float) $s['unknown']['amount'], 2),
             'cash_out' => $cashOut,
+            'payout_out' => $payoutOut,
             'purchase_out' => $purchaseOut,
+            'float_kept' => $float,
             'methods' => $s['methods'],
             'drawer' => $drawer ? [
                 'opening_cash' => (float) $drawer['opening_cash'],
                 // Cash that should be in the drawer at closing: the float plus cash sales.
                 'should_have' => $atClose,
-                // Left in the drawer after wages and goods were paid from it (from the count once closed).
+                // Left in the drawer after wages, consignors and goods were paid from it (from the count once closed).
                 'after_pay' => $afterPay,
                 'counted_cash' => $counted,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
@@ -255,7 +316,17 @@ class ClosingService
         $sentTo = $text('sent_to', 150);
         $receipt = $text('receipt_no', 60);
         $note = $text('note', 500);
-        $f = $this->figures($date);
+        $float = null;
+        if (isset($data['float_kept']) && $data['float_kept'] !== '') {
+            $float = round((float) $data['float_kept'], 2);
+            if (!is_numeric($data['float_kept']) || $float < 0) {
+                throw new \RuntimeException('เงินที่คงไว้เป็นเงินทอนวันถัดไปต้องไม่ติดลบ');
+            }
+        }
+        $f = $this->figures($date, $float);
+        if ($f['drawer'] && $f['float_kept'] > $f['drawer']['after_pay'] + 0.005) {
+            throw new \RuntimeException('เงินที่คงไว้เป็นเงินทอนมากกว่าเงินสดที่เหลือในลิ้นชัก (฿' . number_format($f['drawer']['after_pay'], 2) . ')');
+        }
         if (abs($sent - $f['expected_send']) >= 0.005 && $note === null) {
             throw new \RuntimeException('เงินที่ส่งไม่ตรงกับยอดที่ควรส่ง (฿' . number_format($f['expected_send'], 2) . ') กรุณาระบุหมายเหตุ');
         }
@@ -280,6 +351,9 @@ class ClosingService
             $f['cash_out'], $f['expected_send'], $sent, $sentTo, $receipt, $note, json_encode($f, JSON_UNESCAPED_UNICODE),
         ];
         $this->saveRow($old, $date, $values, $actual);
+        if ($f['drawer'] && \App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
+            $this->db->prepare('UPDATE daily_closings SET float_kept = ? WHERE business_date = ?')->execute([$f['float_kept'], $date]);
+        }
         $strip = fn (?array $r) => $r ? array_diff_key($r, array_flip(['snapshot', 'closer_name', 'verified_by_name'])) : null;
         $new = $this->find($date);
         $this->audit->log('daily_closings', (int) $new['id'], $old ? 'update' : 'create', $strip($old), $strip($new), $userId, $ip);
@@ -350,12 +424,7 @@ class ClosingService
              WHERE w.cancelled_at IS NULL AND (w.pay_date = ? OR w.drawer_date = ?) ORDER BY w.id",
             [$date, $date]
         );
-        $payouts = $q(
-            "SELECT w.doc_no, w.amount, w.method, w.paid_at, c.code AS consignor_code, c.name AS consignor_name FROM withdrawals w
-             JOIN consignors c ON c.id = w.consignor_id
-             WHERE w.status = 'paid' AND DATE(w.paid_at) = ? ORDER BY w.id",
-            [$date]
-        );
+        $payouts = $this->payoutsOf($date);
         $pending = $q("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amount FROM withdrawals WHERE status = 'pending'", [])[0]
             ?? ['n' => 0, 'amount' => 0];
         $purchases = $this->purchasesOf($date);
@@ -370,7 +439,7 @@ class ClosingService
             'wages' => ['rows' => $wages, 'total' => $sum($wages, 'amount'),
                 'from_drawer' => $sum(array_filter($wages, fn ($w) => $w['drawer_date'] === $date), 'amount')],
             'payouts' => ['rows' => $payouts, 'total' => $sum($payouts, 'amount'),
-                'cash' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'cash'), 'amount'),
+                'cash' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'cash'), 'amount'), 'from_drawer' => $f['payout_out'],
                 'pending_count' => (int) $pending['n'], 'pending_amount' => round((float) $pending['amount'], 2)],
             'purchases' => ['rows' => $purchases, 'total' => $sum($purchases, 'total'), 'from_drawer' => $f['purchase_out']],
             'skips' => (object) $skips,
