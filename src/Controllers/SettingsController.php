@@ -10,6 +10,7 @@ use App\Support\AppShell;
 use App\Support\Config;
 use App\Support\Db;
 use App\Support\JsonResponse;
+use App\Support\SessionLifetime;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
@@ -40,6 +41,16 @@ class SettingsController
         }
         if (isset($body['asset_mode']) && !in_array($body['asset_mode'], AppShell::MODES, true)) {
             return $this->error($response, 'โหมดการทำงานไม่ถูกต้อง', 422);
+        }
+        if (isset($body['session_hours'])) {
+            if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+                return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่กำหนดระยะเวลาเข้าสู่ระบบได้', 403);
+            }
+            $hours = (int) $body['session_hours'];
+            if ($hours < SessionLifetime::MIN_HOURS || $hours > SessionLifetime::MAX_HOURS) {
+                return $this->error($response, 'ระยะเวลาเข้าสู่ระบบต้องอยู่ระหว่าง ' . SessionLifetime::MIN_HOURS . '–' . SessionLifetime::MAX_HOURS . ' ชั่วโมง', 422);
+            }
+            $body['session_hours'] = (string) $hours;
         }
         if (isset($body['qr_login'])) {
             $body['qr_login'] = in_array($body['qr_login'], ['1', 1, true], true) ? '1' : '0';
@@ -109,6 +120,9 @@ class SettingsController
         $db = Db::connection();
         $settings = new SettingsService($db);
         $settings->update($body, (int) $user['id']);
+        if (isset($body['session_hours'])) {
+            SessionLifetime::save((int) $body['session_hours']);
+        }
         return $this->json($response, ['settings' => $settings->all()]);
     }
 }

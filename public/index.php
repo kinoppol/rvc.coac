@@ -40,6 +40,7 @@ use App\Support\AppShell;
 use App\Support\Config;
 use App\Support\Db;
 use App\Support\RequestLog;
+use App\Support\SessionLifetime;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
@@ -53,11 +54,17 @@ if (session_status() === PHP_SESSION_NONE) {
     // wait. Only sign-in/out, role switching and impersonation change the session;
     // every other request reads it and releases the lock at once.
     $writesSession = preg_match('#/auth/|/impersonate$#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
+    // Idle lifetime set by the admin (Settings > ผู้ใช้งาน); see SessionLifetime.
+    $sessionTtl = SessionLifetime::hours() * 3600;
     session_start([
         'cookie_httponly' => true,
         'cookie_samesite' => 'Lax',
+        'cookie_lifetime' => $sessionTtl,
+        'gc_maxlifetime' => $sessionTtl,
+        'save_path' => SessionLifetime::savePath(),
         'read_and_close' => !$writesSession,
     ]);
+    SessionLifetime::keepAlive($sessionTtl);
 }
 $sessionWait = microtime(true) - $requestStarted;
 

@@ -39,14 +39,27 @@ export async function renderUsersPanel(el, { user: me }) {
     let message = null;
     let searchQ = '';
     let results = [];
+    let sessionHours = '12';
     const act = makeAct((m) => { message = m; }, load);
 
     async function load() {
-        draw((await api.get('/users')).data);
+        const [users, s] = await Promise.all([api.get('/users'), api.get('/settings').catch(() => null)]);
+        if (s) sessionHours = s.settings.session_hours || '12';
+        draw(users.data);
     }
 
     function draw(users) {
         el.innerHTML = `
+        ${me.role === 'admin' ? `<section class="card card-pad" style="margin-bottom:16px">
+          <h2 style="margin-bottom:6px">ระยะเวลาเข้าสู่ระบบ</h2>
+          <p class="muted" style="font-size:13px;margin:0 0 12px">ถ้าไม่ได้ใช้งานนานเกินกำหนด ระบบจะให้ลงชื่อเข้าใช้ใหม่ · นับใหม่ทุกครั้งที่ใช้งาน และปิดเบราว์เซอร์แล้วเปิดใหม่ยังอยู่ในระบบ</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+            <label class="field">ไม่ได้ใช้งานนานเกิน (ชั่วโมง)
+              <input id="session-hours" type="number" min="1" max="720" step="1" value="${escapeHtml(sessionHours)}" style="width:140px"></label>
+            <button type="button" class="btn" id="session-save">บันทึก</button>
+            <span class="muted" style="font-size:12.5px">1–720 ชั่วโมง (เช่น 12 = ครึ่งวัน, 24 = 1 วัน, 168 = 7 วัน)</span>
+          </div>
+        </section>` : ''}
         <section class="card">
           <div class="card-head"><h2>ผู้ใช้งานระบบ</h2></div>
           ${message ? `<div class="card-pad" style="display:flex;padding-bottom:0">${messageBox(message)}</div>` : ''}
@@ -99,6 +112,13 @@ export async function renderUsersPanel(el, { user: me }) {
     }
 
     function bind() {
+        el.querySelector('#session-save')?.addEventListener('click', () => {
+            const hours = el.querySelector('#session-hours').value;
+            act(async () => {
+                await api.put('/settings', { session_hours: hours });
+                sessionHours = String(Number(hours));
+            }, `บันทึกแล้ว: ไม่ได้ใช้งานเกิน ${Number(hours)} ชั่วโมงต้องลงชื่อเข้าใช้ใหม่`);
+        });
         el.querySelectorAll('tr[data-id]').forEach((tr) => {
             const id = tr.dataset.id;
             tr.querySelector('[data-role]')?.addEventListener('change', (e) =>

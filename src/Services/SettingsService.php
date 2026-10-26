@@ -25,6 +25,7 @@ class SettingsService
         'ai_markdown_min_chars' => '1000',
         'ai_markdown_min_table_rows' => '10',
         'login_methods' => 'both',
+        'session_hours' => '12', // idle hours before a signed-in session ends (App\Support\SessionLifetime)
         'qr_login' => '0', // '1' = signed-out screens offer sign-in by scanning a QR-Code with a signed-in phone
         'timezone' => '', // '' = app.timezone from config/config.php
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)

@@ -9,4 +9,5 @@
 .DS_Store
 Thumbs.db
 /storage/uploads/*
+/storage/sessions/
 !/storage/uploads/.gitkeep
