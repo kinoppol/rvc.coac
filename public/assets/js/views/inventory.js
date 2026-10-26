@@ -230,6 +230,8 @@ export async function render(container, { navigate, permissions, user }) {
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
                 priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price),
                 pastQty: Number(p.store_sold_qty), claimPast: true,
+                // Consigned goods (admin): what the consignor gets and the shelf price, per piece.
+                cpCost: String(Number(p.cost_price)), cpPrice: String(Number(p.sale_price)),
                 error: null, busy: false,
             };
             if (!consigned && !editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
@@ -421,7 +423,7 @@ export async function render(container, { navigate, permissions, user }) {
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
-            ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
+            ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขราคาฝากขายและบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
@@ -441,7 +443,7 @@ export async function render(container, { navigate, permissions, user }) {
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:660px">
             <div class="modal-head">
-              <h2>${e.consigned ? 'แก้ไขบาร์โค้ดสินค้าฝากขาย' : 'แก้ไขสินค้า'}</h2>
+              <h2>${e.consigned ? 'แก้ไขสินค้าฝากขาย' : 'แก้ไขสินค้า'}</h2>
               <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
@@ -457,7 +459,7 @@ export async function render(container, { navigate, permissions, user }) {
                 <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
                 <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
               </label>` : ''}
-              ${e.consigned ? '' : packsHtml(e)}
+              ${e.consigned ? consignPriceHtml(e) : packsHtml(e)}
               ${canConsign && !e.consigned ? consignHtml(e) : ''}
               ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
             </div>
@@ -521,6 +523,29 @@ export async function render(container, { navigate, permissions, user }) {
         return `ชิ้นละ ฿${money(per)}${piece > 0 ? ` (แยกชิ้น ฿${money(piece)}${per < piece ? `, ถูกกว่า ฿${money((piece - per) * size)}/แพ็ค` : ''})` : ''}`;
     }
 
+    /** Admin: correct a consigned product's prices (applies to sales from now on). */
+    function consignPriceHtml(e) {
+        return `
+              <div style="font-weight:600;margin-bottom:8px">ราคาฝากขาย (ต่อชิ้น)</div>
+              <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+                <label class="field">ราคาที่ผู้ฝากได้ (บาท) <input id="cp-cost" type="number" min="0" step="0.25" value="${escapeHtml(e.cpCost)}"></label>
+                <label class="field">ราคาขายหน้าร้าน (บาท) <input id="cp-price" type="number" min="0" step="0.25" value="${escapeHtml(e.cpPrice)}"></label>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:8px">
+                <span class="muted" id="cp-hint" style="font-size:12.5px">${consignPriceHint(e)}</span>
+                <button type="button" class="btn secondary sm" id="cp-calc">คำนวณราคาขายตามค่าฝากขาย</button>
+              </div>
+              <div class="muted" style="font-size:12px;margin-top:6px">มีผลกับการขายตั้งแต่บันทึกเป็นต้นไป · ยอดที่ขายและลงสมุดบัญชีผู้ฝากไปแล้วไม่เปลี่ยน</div>`;
+    }
+
+    function consignPriceHint(e) {
+        const cost = Number(e.cpCost);
+        const price = Number(e.cpPrice);
+        if (e.cpCost === '' || e.cpPrice === '' || !(price > 0)) return 'ใส่ราคาให้ครบ';
+        if (cost > price) return '⚠️ ราคาที่ผู้ฝากได้สูงกว่าราคาขาย';
+        return `ร้านได้ค่าฝากขาย ฿${money(price - cost)}/ชิ้น`;
+    }
+
     /** Admin section: turn this store product into a consignor's product. */
     function consignHtml(e) {
         const cost = Number(e.consignCost);
@@ -578,6 +603,20 @@ export async function render(container, { navigate, permissions, user }) {
             container.querySelector('#bc-name')?.focus();
         }));
         container.querySelector('#bc-piece').addEventListener('input', (ev) => { e.barcode = ev.target.value; });
+        const cpHint = () => { container.querySelector('#cp-hint').textContent = consignPriceHint(e); };
+        container.querySelector('#cp-cost')?.addEventListener('input', (ev) => { e.cpCost = ev.target.value; cpHint(); });
+        container.querySelector('#cp-price')?.addEventListener('input', (ev) => { e.cpPrice = ev.target.value; cpHint(); });
+        container.querySelector('#cp-calc')?.addEventListener('click', async () => {
+            if (e.cpCost === '' || !(Number(e.cpCost) >= 0)) { e.error = 'กรุณาใส่ราคาที่ผู้ฝากได้ก่อน'; draw(); return; }
+            try {
+                e.cpPrice = String((await api.post('/receive/quote', { cost_price: Number(e.cpCost) })).data.price);
+                container.querySelector('#cp-price').value = e.cpPrice;
+                cpHint();
+            } catch (err) {
+                e.error = err.message;
+                draw();
+            }
+        });
         container.querySelector('#bc-price')?.addEventListener('input', (ev) => {
             e.priceInput = ev.target.value;
             if (Number(ev.target.value) > 0) e.salePrice = Number(ev.target.value);
@@ -609,6 +648,12 @@ export async function render(container, { navigate, permissions, user }) {
             const setPrice = canSetPrice && !e.consigned;
             if (setPrice && !(Number(e.priceInput) > 0)) { e.error = 'กรุณาระบุราคาขาย/ชิ้นให้มากกว่า 0'; draw(); return; }
             const p0 = res.data.find((x) => x.id === e.id);
+            const cpChanged = e.consigned && (Math.abs(Number(e.cpCost) - Number(p0.cost_price)) >= 0.005 || Math.abs(Number(e.cpPrice) - Number(p0.sale_price)) >= 0.005);
+            if (cpChanged && (e.cpCost === '' || !(Number(e.cpPrice) > 0) || !(Number(e.cpCost) >= 0) || Number(e.cpCost) > Number(e.cpPrice))) {
+                e.error = 'ราคาขายต้องมากกว่า 0 และราคาที่ผู้ฝากได้ต้องอยู่ระหว่าง 0 ถึงราคาขาย';
+                draw();
+                return;
+            }
             const priceChanged = setPrice && Math.abs(Number(e.priceInput) - Number(p0.sale_price)) >= 0.005;
             if (priceChanged && Number(e.priceInput) < e.costPrice
                 && !await confirmDialog(`ราคาขาย ฿${money(e.priceInput)} ต่ำกว่าต้นทุน ฿${money(e.costPrice)} ต่อชิ้น ต้องการบันทึกหรือไม่?`, { title: 'ราคาขายต่ำกว่าทุน', okText: 'บันทึก' })) return;
@@ -634,6 +679,7 @@ export async function render(container, { navigate, permissions, user }) {
                     name: e.name.trim(),
                     barcode: e.barcode.trim(),
                     ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
+                    ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),
                     // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
                     pack_barcodes: e.packs
                         .map((p) => ({
@@ -655,7 +701,7 @@ export async function render(container, { navigate, permissions, user }) {
                     return;
                 }
                 editing = null;
-                if (priceChanged) {
+                if (priceChanged || cpChanged) {
                     await load(); // margin, stock value and totals follow the new price
                     return;
                 }

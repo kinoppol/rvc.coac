@@ -91,6 +91,41 @@ class ProductRepo
         $this->audit->log('products', $productId, 'update', ['sale_price' => (float) $old['sale_price']], ['sale_price' => $price], $userId, $ip);
     }
 
+    /**
+     * Admin correction of a consigned product's prices: what the consignor gets per piece and
+     * the shelf price. The store's fee becomes the difference, so later sales credit the
+     * consignor exactly $cost per piece; past sales and ledger entries are left as they were.
+     * $calc is FeeCalculator::priceFor($cost), kept as is when the shelf price matches it.
+     */
+    public function setConsignPrice(int $productId, float $cost, float $price, array $calc, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old || $old['consignor_id'] === null) {
+            throw new \RuntimeException('ไม่พบสินค้าฝากขาย');
+        }
+        $cost = round($cost, 2);
+        $price = round($price, 2);
+        if ($price <= 0 || $price > 1000000) {
+            throw new \RuntimeException('ราคาขายไม่ถูกต้อง');
+        }
+        if ($cost < 0 || $cost > $price) {
+            throw new \RuntimeException('ราคาที่ผู้ฝากได้ต้องอยู่ระหว่าง 0 ถึงราคาขาย');
+        }
+        if (abs((float) $old['cost_price'] - $cost) < 0.005 && abs((float) $old['sale_price'] - $price) < 0.005) {
+            return;
+        }
+        [$fee, $round] = abs((float) $calc['price'] - $price) < 0.005 ? [(float) $calc['fee'], (float) $calc['round']] : [round($price - $cost, 2), 0.0];
+        if ($round > 0 && $old['rounding_beneficiary'] !== 'store') {
+            // The consignor keeps the rounding: their share is $cost + $round, so fold it into the fee instead.
+            [$fee, $round] = [round($price - $cost, 2), 0.0];
+        }
+        $this->db->prepare('UPDATE products SET cost_price = ?, sale_price = ?, fee_per_unit = ?, round_per_unit = ?, updated_at = NOW() WHERE id = ?')
+            ->execute([$cost, $price, $fee, $round, $productId]);
+        $this->audit->log('products', $productId, 'update',
+            ['cost_price' => (float) $old['cost_price'], 'sale_price' => (float) $old['sale_price'], 'fee_per_unit' => (float) $old['fee_per_unit'], 'round_per_unit' => (float) $old['round_per_unit']],
+            ['cost_price' => $cost, 'sale_price' => $price, 'fee_per_unit' => $fee, 'round_per_unit' => $round], $userId, $ip);
+    }
+
     public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null, bool $allowConsigned = false): void
     {
         $old = $this->find($productId);

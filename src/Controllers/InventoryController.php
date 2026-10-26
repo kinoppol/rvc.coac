@@ -8,6 +8,8 @@ use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use App\Services\AuditLogger;
 use App\Services\DocumentNumberService;
+use App\Services\FeeCalculator;
+use App\Services\SettingsService;
 use App\Services\LedgerService;
 use App\Services\InventoryService;
 use App\Services\StockCountService;
@@ -236,6 +238,12 @@ class InventoryController
                     throw new \RuntimeException('เฉพาะผู้ดูแลระบบและผู้จัดการเท่านั้นที่กำหนดราคาขายได้');
                 }
                 $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            }
+            // Consigned goods: what the consignor gets and the shelf price, admins only (checked above).
+            if ($consigned && isset($body['cost_price'], $body['sale_price'])) {
+                $cost = (float) $body['cost_price'];
+                $repo->setConsignPrice($id, $cost, (float) $body['sale_price'], (new FeeCalculator(new SettingsService($db)))->priceFor($cost),
+                    (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
             }
             $db->commit();
         } catch (\Throwable $e) {
