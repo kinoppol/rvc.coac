@@ -135,9 +135,9 @@ class PosImportService
      * the store has turned on), and cash for the rest of the total (all cash by default).
      * @return array<string,float>
      */
-    private function recordPayments(int $saleId, float $total, array $payments): array
+    private function recordPayments(int $saleId, float $total, array $payments, array $alsoAllowed = []): array
     {
-        $on = (new SettingsService($this->db))->paymentMethods();
+        $on = array_merge((new SettingsService($this->db))->paymentMethods(), $alsoAllowed);
         $rows = [];
         $other = 0.0;
         foreach ($payments as $method => $amount) {
@@ -168,6 +168,37 @@ class PosImportService
             $ins->execute([$saleId, $method, $amount]);
         }
         return $rows;
+    }
+
+    /**
+     * Changes how an import was paid: the amounts for transfer / QR / card, cash for the
+     * rest. The day's drawer (if already closed) is worked out again.
+     * @param array<string,float> $payments
+     */
+    public function setPayments(int $id, array $payments, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT pi.*, s.total_value AS sale_total, s.business_date FROM pos_imports pi LEFT JOIN sales s ON s.id = pi.sale_id WHERE pi.id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $import = $stmt->fetch();
+            if (!$import || $import['status'] === 'cancelled' || $import['sale_id'] === null) {
+                throw new \RuntimeException('ไม่พบการนำเข้าที่แก้ไขการชำระเงินได้ (อาจถูกยกเลิกแล้ว)');
+            }
+            $saleId = (int) $import['sale_id'];
+            $old = $this->db->prepare('SELECT method, amount FROM sale_payments WHERE sale_id = ?');
+            $old->execute([$saleId]);
+            $before = array_column($old->fetchAll(), 'amount', 'method');
+            $this->db->prepare('DELETE FROM sale_payments WHERE sale_id = ?')->execute([$saleId]);
+            $after = $this->recordPayments($saleId, (float) $import['sale_total'], $payments, array_keys($before));
+            (new CashDrawerService($this->db, $this->audit))->refreshClose((string) $import['business_date']);
+            $this->audit->log('pos_imports', $id, 'update', ['payments' => $before], ['payments' => $after], $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        return $this->find($id);
     }
 
     /**
@@ -596,6 +627,12 @@ class PosImportService
             $pay = $this->db->prepare('SELECT method, amount FROM sale_payments WHERE sale_id = ? ORDER BY id');
             $pay->execute([$import['sale_id']]);
             $import['payments'] = array_map(fn ($p) => $p + ['label' => SettingsService::PAYMENT_METHODS[$p['method']] ?? $p['method']], $pay->fetchAll());
+            // Non-cash methods an edit may use: those the store takes, and any this import already has.
+            $methods = array_unique(array_merge((new SettingsService($this->db))->paymentMethods(), array_column($import['payments'], 'method')));
+            $import['payment_methods'] = array_values(array_map(
+                fn ($m) => ['method' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m] ?? $m],
+                array_filter(array_keys(SettingsService::PAYMENT_METHODS), fn ($m) => $m !== 'cash' && in_array($m, $methods, true))
+            ));
         }
         return $import;
     }

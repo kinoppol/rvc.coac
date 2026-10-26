@@ -244,6 +244,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.import'));
     $group->get('/pos-import/{id:[0-9]+}', [PosImportController::class, 'show'])
         ->add(new RoleGuard('sales.import'));
+    $group->put('/pos-import/{id:[0-9]+}/payments', [PosImportController::class, 'payments'])
+        ->add(new RoleGuard('sales.import'));
     $group->post('/pos-import/{id:[0-9]+}/cancel', [PosImportController::class, 'cancel'])
         ->add(new RoleGuard('sales.import.cancel'));
     $group->get('/pos-import/{id:[0-9]+}/items/{item:[0-9]+}/pairs', [PosImportController::class, 'linePairs'])

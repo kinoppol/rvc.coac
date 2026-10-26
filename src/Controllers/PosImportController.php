@@ -164,6 +164,23 @@ class PosImportController
         return $this->json($response, ['data' => $result], 201);
     }
 
+    /** Change how an import was paid (body: payments {transfer, qr, card}; the rest is cash). */
+    public function payments(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        try {
+            $import = self::service()->setPayments(
+                (int) $args['id'],
+                is_array($body['payments'] ?? null) ? $body['payments'] : [],
+                (int) $request->getAttribute('user')['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $import]);
+    }
+
     public function show(Request $request, Response $response, array $args): Response
     {
         $import = self::service()->find((int) $args['id']);

@@ -43,6 +43,7 @@ export async function render(container, { permissions = [] } = {}) {
     let editing = null; // row index shown in the pairing modal
     let modalTab = 'pick';
     let viewing = null; // an earlier import opened from the "นำเข้าล่าสุด" list
+    let payEdit = null; // changing how `viewing` was paid: { amounts: {method: string}, busy, error }
     let repairing = null; // admin re-pairing one line of `viewing`: { item, no, q, results, product, pairs, mapIds, busy, error }
     let mappings = [];
     let mapQ = '';
@@ -438,6 +439,7 @@ export async function render(container, { permissions = [] } = {}) {
 
     async function openImport(id) {
         repairing = null;
+        payEdit = null;
         viewing = { id, loading: true };
         drawModal();
         try {
@@ -469,6 +471,70 @@ export async function render(container, { permissions = [] } = {}) {
         }
     }
 
+    /** How an import was paid, and the form to change it (cash = total − the other amounts). */
+    function payViewHtml(v) {
+        const methods = v.payment_methods || [];
+        if (!payEdit) {
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;margin-bottom:12px">การชำระเงิน: ${(v.payments || []).length
+                ? v.payments.map((p) => `${escapeHtml(p.label)} <b>฿ ${money(p.amount)}</b>`).join(' · ')
+                : '<span class="muted">ไม่ได้แยกวิธีชำระ (นำเข้าก่อนมีการแยกยอด)</span>'}
+              ${methods.length ? '<button type="button" class="btn secondary sm" data-pay-edit>แก้ไขการชำระเงิน</button>' : ''}</div>`;
+        }
+        const other = methods.reduce((s, m) => s + (Number(payEdit.amounts[m.method]) || 0), 0);
+        const cash = Math.round((Number(v.total_value) - other) * 100) / 100;
+        const bad = cash < -0.004 || methods.some((m) => Number(payEdit.amounts[m.method]) < 0);
+        return `
+          <div class="card card-pad" style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end">
+            <div style="flex-basis:100%;font-size:13px;font-weight:600">แก้ไขการชำระเงิน <span class="muted" style="font-weight:400">— ใส่ยอดที่ได้รับทางช่องทางอื่น ที่เหลือเป็นเงินสด</span></div>
+            ${methods.map((m) => `<label class="field" style="width:170px">${escapeHtml(m.label)} (บาท)
+              <input type="number" min="0" step="0.01" data-pay-amt="${m.method}" value="${escapeHtml(payEdit.amounts[m.method] ?? '')}" placeholder="0.00"></label>`).join('')}
+            <div style="font-size:13.5px;padding-bottom:8px">เงินสด <b id="pay-edit-cash" style="${bad ? 'color:var(--bad)' : ''}">฿ ${money(cash)}</b>
+              <span class="muted" style="font-size:12px">= ยอดขาย ฿${money(v.total_value)}${other ? ` − ฿${money(other)}` : ''}</span></div>
+            <div style="flex:1"></div>
+            <button type="button" class="btn secondary" data-pay-cancel>ยกเลิก</button>
+            <button type="button" class="btn" data-pay-save ${bad || payEdit.busy ? 'disabled' : ''}>${payEdit.busy ? 'กำลังบันทึก…' : 'บันทึก'}</button>
+            ${payEdit.error ? `<div class="error-box" style="flex-basis:100%">${escapeHtml(payEdit.error)}</div>` : ''}
+            <div class="muted" style="flex-basis:100%;font-size:12px">ถ้าลิ้นชักวันนั้นปิดยอดแล้ว ระบบคำนวณเงินที่ควรมีในลิ้นชักและส่วนต่างใหม่ให้ · ถ้าสรุปบัญชีวันนั้นไปแล้ว ควรสรุปใหม่</div>
+          </div>`;
+    }
+
+    function bindPayEdit(h) {
+        const v = viewing;
+        h.querySelector('[data-pay-edit]')?.addEventListener('click', () => {
+            const got = Object.fromEntries((v.payments || []).map((p) => [p.method, String(Number(p.amount))]));
+            payEdit = { amounts: Object.fromEntries((v.payment_methods || []).map((m) => [m.method, got[m.method] ?? ''])), busy: false, error: null };
+            drawModal();
+        });
+        h.querySelector('[data-pay-cancel]')?.addEventListener('click', () => { payEdit = null; drawModal(); });
+        h.querySelectorAll('[data-pay-amt]').forEach((inp) => inp.addEventListener('input', () => {
+            payEdit.amounts[inp.dataset.payAmt] = inp.value;
+            const methods = v.payment_methods || [];
+            const other = methods.reduce((s, m) => s + (Number(payEdit.amounts[m.method]) || 0), 0);
+            const cash = Math.round((Number(v.total_value) - other) * 100) / 100;
+            const bad = cash < -0.004 || methods.some((m) => Number(payEdit.amounts[m.method]) < 0);
+            const el = h.querySelector('#pay-edit-cash');
+            el.textContent = `฿ ${money(cash)}`;
+            el.style.color = bad ? 'var(--bad)' : '';
+            el.nextElementSibling.textContent = `= ยอดขาย ฿${money(v.total_value)}${other ? ` − ฿${money(other)}` : ''}`;
+            h.querySelector('[data-pay-save]').disabled = bad;
+        }));
+        h.querySelector('[data-pay-save]')?.addEventListener('click', async () => {
+            payEdit.busy = true;
+            payEdit.error = null;
+            drawModal();
+            try {
+                viewing = (await api.put(`/pos-import/${v.id}/payments`, {
+                    payments: Object.fromEntries(Object.entries(payEdit.amounts).map(([k, a]) => [k, Number(a) || 0])),
+                })).data;
+                payEdit = null;
+            } catch (e) {
+                payEdit.busy = false;
+                payEdit.error = e.message;
+            }
+            drawModal();
+        });
+    }
+
     function importHtml() {
         const v = viewing;
         const items = v.items || [];
@@ -490,9 +556,7 @@ export async function render(container, { permissions = [] } = {}) {
                   นำเข้าโดย ${escapeHtml(v.user_name || '-')} เมื่อ ${escapeHtml(fmtDateTime(v.created_at))}${v.source_label ? ` · ไฟล์ ${escapeHtml(v.source_label)}` : ''}
                   · ${count(v.line_count)} รายการ${Number(v.skipped_count) ? ` · ไม่นำเข้า ${count(v.skipped_count)} รายการ` : ''}${Number(v.new_products) ? ` · สร้างสินค้าใหม่ ${count(v.new_products)}` : ''}
                 </div>
-                ${!cancelled ? `<div style="font-size:13px;margin-bottom:12px">การชำระเงิน: ${(v.payments || []).length
-                    ? v.payments.map((p) => `${escapeHtml(p.label)} <b>฿ ${money(p.amount)}</b>`).join(' · ')
-                    : '<span class="muted">ไม่ได้แยกวิธีชำระ (นำเข้าก่อนมีการแยกยอด)</span>'}</div>` : ''}
+                ${!cancelled ? payViewHtml(v) : ''}
                 ${cancelled ? `<div class="error-box" style="margin-bottom:12px">
                   <b>การนำเข้านี้ถูกยกเลิกแล้ว</b> เมื่อ ${escapeHtml(fmtDateTime(v.cancelled_at))}${v.cancelled_by_name ? ` โดย ${escapeHtml(v.cancelled_by_name)}` : ''}
                   <div>เหตุผล: ${escapeHtml(v.cancel_reason || '-')} — รายการด้านล่างเป็นข้อมูล ณ ตอนยกเลิก ไม่นับรวมในยอดขายและสต๊อกแล้ว</div></div>` : ''}
@@ -648,9 +712,10 @@ export async function render(container, { permissions = [] } = {}) {
         if (!host) return;
         if (viewing && tab === 'import' && step === 'input') {
             host.innerHTML = importHtml();
-            host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; repairing = null; drawModal(); }));
+            host.querySelectorAll('[data-close-view]').forEach((b) => b.addEventListener('click', () => { viewing = null; repairing = null; payEdit = null; drawModal(); }));
             host.querySelector('[data-cancel-import]')?.addEventListener('click', () => cancelImport(viewing));
             bindRepair(host);
+            bindPayEdit(host);
             return;
         }
         if (editing === null || tab !== 'import' || step !== 'review') { host.innerHTML = ''; return; }
