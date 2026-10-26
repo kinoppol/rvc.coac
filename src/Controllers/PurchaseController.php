@@ -101,6 +101,9 @@ class PurchaseController
     {
         $body = (array) $request->getParsedBody();
         $user = $request->getAttribute('user');
+        if ($denied = $this->stockDenied($body, $user, $response)) {
+            return $denied;
+        }
         $images = (new AttachmentService(Db::connection()))->ownedBy((array) ($body['attachments'] ?? []), (int) $user['id']);
         try {
             // order: goods ordered for delivery later, saved without touching stock.
@@ -129,10 +132,28 @@ class PurchaseController
         return $this->json($response, ['data' => $result], 201);
     }
 
+    /** Leftover goods (funding 'stock', no money spent) may be brought into stock by an admin only, never as an order. */
+    private function stockDenied(array $body, array $user, Response $response): ?Response
+    {
+        if ((($body['header'] ?? [])['funding'] ?? '') !== 'stock') {
+            return null;
+        }
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เพิ่มสินค้าคงค้างเข้าสต๊อกได้เฉพาะผู้ดูแลระบบ', 403);
+        }
+        if (!empty($body['order'])) {
+            return $this->error($response, 'สินค้าคงค้างอยู่ในร้านแล้ว บันทึกเป็นใบสั่งซื้อไม่ได้', 422);
+        }
+        return null;
+    }
+
     public function update(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
         $user = $request->getAttribute('user');
+        if ($denied = $this->stockDenied($body, $user, $response)) {
+            return $denied;
+        }
         $id = (int) $args['id'];
         $attachments = new AttachmentService(Db::connection());
         $tokens = array_map('strval', (array) ($body['attachments'] ?? []));

@@ -673,7 +673,7 @@ class PurchaseService
             'total' => isset($header['total']) && (float) $header['total'] > 0 ? round((float) $header['total'], 2) : round($subtotal - $discount, 2),
             'total_qty' => array_sum(array_map(fn ($l) => $l['item_type'] === 'stock' ? $l['units'] : 0, $lines)),
             'note' => trim((string) ($header['note'] ?? '')) ?: null,
-            'funding' => ($header['funding'] ?? 'capital') === 'profit' ? 'profit' : 'capital',
+            'funding' => in_array($header['funding'] ?? '', self::FUNDING, true) ? $header['funding'] : 'capital',
             'buyer_id' => $this->buyerId($header['buyer_id'] ?? null),
         ], $lines];
     }
@@ -726,11 +726,17 @@ class PurchaseService
         return array_map(fn ($d) => $d + ['buyer_name' => $names[(int) ($d['buyer_id'] ?? 0)] ?? null], $rows);
     }
 
+    /** capital = invested money, profit = the business's profit, stock = leftover goods brought in (admin only, no money spent). */
+    public const FUNDING = ['capital', 'profit', 'stock'];
+
     private function saveFunding(int $id, string $funding): void
     {
         try {
             $this->db->prepare('UPDATE purchase_documents SET funding = ? WHERE id = ?')->execute([$funding, $id]);
         } catch (\PDOException $e) {
+            if ($funding === 'stock') {
+                throw new \RuntimeException('ยังบันทึกสินค้าคงค้างไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0048) ก่อน');
+            }
             // migration 0036 not run yet: every purchase counts as invested money
         }
     }

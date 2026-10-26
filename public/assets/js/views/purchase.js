@@ -21,7 +21,8 @@ const isImage = (f) => !f.mime || f.mime.startsWith('image/');
 const evidence = (a) => ({ token: a.token, mime: a.mime, name: a.name, preview: attachmentUrl(a.token) });
 
 function emptyHeader() {
-    // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit')
+    // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit');
+    // 'stock' = leftover goods already in the store, brought into stock by an admin (no money spent)
     // buyer_id: the staff member who bought the goods ('' = not given)
     return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital', buyer_id: '' };
 }
@@ -43,7 +44,8 @@ const RANGES = [
 ];
 const STATUSES = [['', 'ทั้งหมด'], ['draft', 'ร่างใบสั่งซื้อ'], ['ordered', 'รอส่งของ'], ['active', 'รับเข้าแล้ว'], ['cancelled', 'ยกเลิกแล้ว']];
 
-export async function render(container) {
+export async function render(container, { user } = {}) {
+    const isAdmin = user?.role === 'admin';
     let photos = []; // receipt evidence: [{ token, preview, mime?, name? }] — photos and .md files
     let header = emptyHeader();
     let items = [emptyItem()];
@@ -147,7 +149,7 @@ export async function render(container) {
             ...emptyHeader(),
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
             receipt_date: d.receipt_date || '', discount: Number(d.discount) || 0, vat: Number(d.vat) || 0, total: Number(d.total) || 0, note: d.note || '',
-            funding: d.funding === 'profit' ? 'profit' : 'capital',
+            funding: ['profit', 'stock'].includes(d.funding) ? d.funding : 'capital',
             buyer_id: d.buyer_id ? String(d.buyer_id) : '',
         };
         // An order keeps its lines as entered: a line paired with a product stays paired.
@@ -320,10 +322,11 @@ export async function render(container) {
             <label class="field">หมายเหตุ <input data-h="note" value="${escapeHtml(header.note)}"></label>
             <label class="field">ซื้อด้วยเงิน
               <select data-h="funding">
-                <option value="capital" ${header.funding !== 'profit' ? 'selected' : ''}>เงินลงทุน (นับเป็นงบลงทุน)</option>
+                <option value="capital" ${header.funding === 'capital' ? 'selected' : ''}>เงินลงทุน (นับเป็นงบลงทุน)</option>
                 <option value="profit" ${header.funding === 'profit' ? 'selected' : ''}>เงินกำไรของกิจการ</option>
+                ${isAdmin || header.funding === 'stock' ? `<option value="stock" ${header.funding === 'stock' ? 'selected' : ''} ${isAdmin ? '' : 'disabled'}>สินค้าคงค้างในร้าน (ไม่ได้ซื้อใหม่)</option>` : ''}
               </select>
-              <span class="muted" style="font-size:11.5px;font-weight:400">ซื้อด้วยเงินกำไรของร้าน ไม่นับเพิ่มในงบลงทุน</span></label>
+              <span class="muted" style="font-size:11.5px;font-weight:400" data-funding-hint>${fundingHint()}</span></label>
             <label class="field">ผู้ซื้อ
               <select data-h="buyer_id">
                 <option value="">— ไม่ระบุ —</option>
@@ -424,7 +427,7 @@ export async function render(container) {
             <tbody>
               ${docs.map((d) => `
                 <tr class="${isCancelled(d) ? 'pc-cancelled' : ''}">
-                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}
+                  <td style="font-weight:600;white-space:nowrap">${escapeHtml(d.doc_no)} ${d.source === 'ai' ? '<span class="pill muted" title="อ่านจากใบเสร็จด้วย AI">AI</span>' : ''}${d.funding === 'profit' ? ' <span class="pill ok" title="ซื้อด้วยเงินกำไรของกิจการ ไม่นับเป็นงบลงทุน">เงินกำไร</span>' : ''}${d.funding === 'stock' ? ' <span class="pill muted" title="สินค้าคงค้างในร้าน ไม่ได้ซื้อใหม่ ไม่นับเป็นเงินที่จ่าย">สินค้าคงค้าง</span>' : ''}
                     ${isCancelled(d) ? `<span class="pill bad" title="${escapeHtml(d.cancel_reason || '')}">ยกเลิกแล้ว</span>` : ''}
                     ${isOrdered(d) ? '<span class="pill warn" title="ใบสั่งซื้อ ร้านยังไม่มาส่ง สินค้ายังไม่เข้าสต๊อก">รอส่งของ</span>' : ''}
                     ${isDraft(d) ? '<span class="pill muted" title="ยังไม่ได้สั่งกับร้าน เพิ่มรายการได้อีก">ร่างใบสั่งซื้อ</span>' : ''}</td>
@@ -803,9 +806,26 @@ export async function render(container) {
 
     // ---------------- Events ----------------
 
+    function fundingHint() {
+        return header.funding === 'stock'
+            ? 'เพิ่มสินค้าที่มีอยู่ในร้านแล้วเข้าสต๊อก ไม่นับเป็นเงินที่จ่ายซื้อ (ไม่นับในงบลงทุนและเงินกำไร) ใส่ราคาทุนเดิมเพื่อใช้คิดกำไรตอนขาย'
+            : 'ซื้อด้วยเงินกำไรของร้าน ไม่นับเพิ่มในงบลงทุน';
+    }
+
     function bindHeaderInputs(root) {
         root.querySelectorAll('[data-h]').forEach((inp) => inp.addEventListener('input', () => {
             header[inp.dataset.h] = inp.value;
+            if (inp.dataset.h === 'funding') {
+                // Leftover goods have no supplier: name the source so the document reads clearly.
+                if (inp.value === 'stock' && !header.supplier_name.trim()) {
+                    header.supplier_name = 'สินค้าคงค้างในร้าน';
+                    const name = root.querySelector('[data-h="supplier_name"]');
+                    if (name) name.value = header.supplier_name;
+                }
+                const hint = root.querySelector('[data-funding-hint]');
+                if (hint) hint.textContent = fundingHint();
+                return;
+            }
             if (['discount', 'total', 'vat'].includes(inp.dataset.h)) redrawSummary();
         }));
         root.querySelector('[data-add-vat]')?.addEventListener('click', addVatToLines);
