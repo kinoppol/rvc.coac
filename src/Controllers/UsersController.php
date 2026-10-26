@@ -17,7 +17,7 @@ class UsersController
 {
     use JsonResponse;
 
-    private const ROLES = ['admin', 'manager', 'advisor', 'cashier', 'consignor'];
+    private const ROLES = ['admin', 'manager', 'advisor', 'cashier', 'closer', 'consignor'];
 
     public function index(Request $request, Response $response): Response
     {

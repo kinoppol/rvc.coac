@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', consignor: 'ผู้ฝากขายเท่านั้น' };
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', closer: 'ผู้สรุปบัญชีรายวัน', consignor: 'ผู้ฝากขายเท่านั้น' };
 const METHOD_LABEL = { both: 'รหัสผ่าน และ RVC-ONE', sso: 'เฉพาะ RVC-ONE', password: 'เฉพาะรหัสผ่าน' };
 const SYNC_TYPE_LABEL = { '': 'ครูและนักเรียนนักศึกษา', staff: 'เฉพาะครู/บุคลากร', student: 'เฉพาะนักเรียนนักศึกษา' };
 const METHOD_HINT = {

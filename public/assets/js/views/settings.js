@@ -23,7 +23,7 @@ function holidayRow(h) {
 }
 const PAYMENT_LABEL ={ cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)' };
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย (นักเรียน)', closer: 'ผู้สรุปบัญชีรายวัน' };
 
 const TABS = [
     { key: 'fees', label: 'ค่าฝากขาย' },

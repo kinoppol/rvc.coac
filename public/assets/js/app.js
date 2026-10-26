@@ -12,13 +12,13 @@ const ROUTE_PERMS = {
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
-    posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage',
+    posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage', closing: 'closing.submit',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
-    dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', wages: 'report',
+    dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', closing: 'report', wages: 'report',
     capital: 'report', mysales: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report',
     settings: 'form', ai: 'form', receive: 'form', ret: 'form', purchase: 'form',
 };

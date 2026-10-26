@@ -6,6 +6,7 @@ use App\Controllers\AiController;
 use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
 use App\Controllers\CapitalController;
+use App\Controllers\ClosingController;
 use App\Controllers\DrawerController;
 use App\Controllers\WageController;
 use App\Controllers\AttachmentController;
@@ -214,6 +215,17 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('drawer.manage'));
     $group->get('/drawer/behavior', [DrawerController::class, 'behavior'])
         ->add(new RoleGuard('drawer.manage'));
+
+    $group->get('/closing', [ClosingController::class, 'index'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->get('/closing/{date}', [ClosingController::class, 'show'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}', [ClosingController::class, 'submit'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}/verify', [ClosingController::class, 'verify'])
+        ->add(new RoleGuard('closing.manage'));
+    $group->put('/closing-roster', [ClosingController::class, 'setRoster'])
+        ->add(new RoleGuard('closing.manage'));
 
     $group->get('/wages', [WageController::class, 'index'])
         ->add(new RoleGuard('wages.manage'));

@@ -31,7 +31,7 @@ class AiController
     private const MAX_DOC_CHARS = 60000;
     private const MAX_PROMPT_CHARS = 20000;
 
-    private const ROLE_LABEL = ['admin' => 'ผู้ดูแลระบบ', 'manager' => 'ผู้จัดการร้าน', 'advisor' => 'ครูที่ปรึกษา', 'cashier' => 'พนักงานขาย'];
+    private const ROLE_LABEL = ['admin' => 'ผู้ดูแลระบบ', 'manager' => 'ผู้จัดการร้าน', 'advisor' => 'ครูที่ปรึกษา', 'cashier' => 'พนักงานขาย', 'closer' => 'ผู้สรุปบัญชีรายวัน'];
 
     private function repo(): AiProviderRepo
     {
