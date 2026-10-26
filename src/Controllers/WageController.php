@@ -25,9 +25,8 @@ class WageController
         $to = $this->date($q['to'] ?? null) ?? date('Y-m-d');
         $db = Db::connection();
         $service = $this->service($db);
-        $drawerDay = DrawerController::currentDay(new SettingsService($db))['date'];
-        $drawer = $db->prepare('SELECT closed_at FROM cash_drawers WHERE business_date = ?');
-        $drawer->execute([$drawerDay]);
+        $drawer = $db->prepare('SELECT 1 FROM cash_drawers WHERE business_date = ?');
+        $drawer->execute([$this->drawerDay($db)]);
         $row = $drawer->fetch();
         return $this->json($response, ['data' => $service->list($from, $to, !empty($q['user_id']) ? (int) $q['user_id'] : null) + [
             'from' => $from,
@@ -44,9 +43,8 @@ class WageController
     {
         $db = Db::connection();
         $user = $request->getAttribute('user');
-        $drawerDay = DrawerController::currentDay(new SettingsService($db))['date'];
         try {
-            $wage = $this->service($db)->pay((array) $request->getParsedBody(), (int) $user['id'], $drawerDay, $this->ip($request));
+            $wage = $this->service($db)->pay((array) $request->getParsedBody(), (int) $user['id'], $this->drawerDay($db), $this->ip($request));
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
@@ -71,6 +69,24 @@ class WageController
     private function service(\PDO $db): WageService
     {
         return new WageService($db, new AuditLogger($db), new DocumentNumberService($db));
+    }
+
+    /**
+     * The drawer that pays wages now: the current business day's, or once the store has closed
+     * (the business day has moved on to the next open day) today's drawer that was just closed.
+     */
+    private function drawerDay(\PDO $db): string
+    {
+        $day = DrawerController::currentDay(new SettingsService($db))['date'];
+        if ($day !== date('Y-m-d')) {
+            $stmt = $db->prepare('SELECT business_date FROM cash_drawers WHERE business_date IN (?, ?) ORDER BY business_date DESC');
+            $stmt->execute([$day, date('Y-m-d')]);
+            $found = $stmt->fetchColumn();
+            if ($found !== false) {
+                return (string) $found;
+            }
+        }
+        return $day;
     }
 
     private function date(mixed $v): ?string
