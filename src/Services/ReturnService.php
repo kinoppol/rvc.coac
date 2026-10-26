@@ -79,8 +79,11 @@ class ReturnService
     public function documents(string $q = '', int $limit = 50): array
     {
         $like = '%' . addcslashes($q, '%_\\') . '%';
+        // Cancel columns come with migration 0050; until it runs nothing is cancelled.
+        $cancel = \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at')
+            ? 'rd.cancelled_at, rd.cancel_reason' : 'NULL AS cancelled_at, NULL AS cancel_reason';
         $stmt = $this->db->prepare(
-            "SELECT rd.id, rd.doc_no, rd.created_at, rd.recipient_name, rd.total_qty, rd.total_value, rd.cancelled_at, rd.cancel_reason,
+            "SELECT rd.id, rd.doc_no, rd.created_at, rd.recipient_name, rd.total_qty, rd.total_value, {$cancel},
                     c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name,
                     (SELECT COUNT(*) FROM return_items ri WHERE ri.return_document_id = rd.id) AS items,
                     (SELECT GROUP_CONCAT(p.name ORDER BY ri.id SEPARATOR ', ') FROM return_items ri JOIN products p ON p.id = ri.product_id
@@ -101,10 +104,15 @@ class ReturnService
     public function document(int $id): ?array
     {
         $stmt = $this->db->prepare(
-            'SELECT rd.*, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name, cu.full_name AS cancelled_by_name
-             FROM return_documents rd JOIN consignors c ON c.id = rd.consignor_id LEFT JOIN users u ON u.id = rd.user_id
-             LEFT JOIN users cu ON cu.id = rd.cancelled_by
-             WHERE rd.id = ?'
+            \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_by')
+                ? 'SELECT rd.*, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name, cu.full_name AS cancelled_by_name
+                   FROM return_documents rd JOIN consignors c ON c.id = rd.consignor_id LEFT JOIN users u ON u.id = rd.user_id
+                   LEFT JOIN users cu ON cu.id = rd.cancelled_by
+                   WHERE rd.id = ?'
+                : 'SELECT rd.*, NULL AS cancelled_at, NULL AS cancel_reason, NULL AS cancelled_by_name,
+                          c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name
+                   FROM return_documents rd JOIN consignors c ON c.id = rd.consignor_id LEFT JOIN users u ON u.id = rd.user_id
+                   WHERE rd.id = ?'
         );
         $stmt->execute([$id]);
         $doc = $stmt->fetch();

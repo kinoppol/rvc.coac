@@ -50,7 +50,7 @@ class ReportService
              FROM receive_documents rd
              JOIN consignors c ON c.id = rd.consignor_id
              JOIN receive_items ri ON ri.receive_document_id = rd.id
-             WHERE DATE(rd.created_at) BETWEEN ? AND ? AND rd.cancelled_at IS NULL
+             WHERE DATE(rd.created_at) BETWEEN ? AND ?' . (\App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '') . '
              ORDER BY rd.created_at ASC'
         );
         $stmt->execute([$from, $to]);
@@ -64,7 +64,7 @@ class ReportService
              FROM return_documents rd
              JOIN consignors c ON c.id = rd.consignor_id
              JOIN return_items ri ON ri.return_document_id = rd.id
-             WHERE DATE(rd.created_at) BETWEEN ? AND ? AND rd.cancelled_at IS NULL
+             WHERE DATE(rd.created_at) BETWEEN ? AND ?' . (\App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '') . '
              ORDER BY rd.created_at ASC'
         );
         $stmt->execute([$from, $to]);

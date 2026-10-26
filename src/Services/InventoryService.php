@@ -101,7 +101,7 @@ class InventoryService
                 JOIN receive_documents rd ON rd.id = ri.receive_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1\$s) AND rd.cancelled_at IS NULL
+                WHERE ri.product_id IN (%1\$s)%2\$s
               UNION ALL
                 SELECT si.product_id, s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
                        IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
@@ -118,7 +118,7 @@ class InventoryService
                 JOIN return_documents rd ON rd.id = ri.return_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1\$s) AND rd.cancelled_at IS NULL
+                WHERE ri.product_id IN (%1\$s)%3\$s
               UNION ALL
                 SELECT sci.product_id, sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
                        NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
@@ -127,7 +127,10 @@ class InventoryService
                 LEFT JOIN users u ON u.id = sc.approved_by
                 WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
-            $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?'
+            $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?',
+            // Cancelled receive / return documents (migration 0050) moved nothing.
+            \App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '',
+            \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : ''
         ));
         $stmt->execute($productId === null ? [] : array_fill(0, 5, $productId));
         return $stmt->fetchAll();

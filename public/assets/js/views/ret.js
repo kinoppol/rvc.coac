@@ -168,13 +168,16 @@ export async function render(container, { user } = {}) {
     let docs = [];
     let docsQ = '';
     let docsTimer;
+    let docsError = null; // shown in the list, so a failed load doesn't look like an empty one
     let docModal = null; // { el, doc, busy }
 
     async function loadDocs() {
         try {
             docs = (await api.get(`/returns/docs?q=${encodeURIComponent(docsQ)}`)).data;
+            docsError = null;
         } catch (e) {
             docs = [];
+            docsError = e.message;
         }
         drawDocs();
     }
@@ -201,7 +204,7 @@ export async function render(container, { user } = {}) {
                 <td class="num">${Number(d.total_qty)}</td>
                 <td class="num">${money(d.total_value)}</td>
                 <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">ดู</button></td>
-              </tr>`).join('') || `<tr><td colspan="8" class="empty">${docsQ ? 'ไม่พบใบคืนสินค้าที่ค้นหา' : 'ยังไม่มีรายการคืนสินค้า'}</td></tr>`}
+              </tr>`).join('') || `<tr><td colspan="8" class="empty">${docsError ? `โหลดรายการไม่สำเร็จ: ${escapeHtml(docsError)}` : docsQ ? 'ไม่พบใบคืนสินค้าที่ค้นหา' : 'ยังไม่มีรายการคืนสินค้า'}</td></tr>`}
             </tbody>
           </table></div>
         </section>`;

@@ -71,8 +71,27 @@ class Db
         ]);
     }
 
+    /** @var array<string,bool> */
+    private static array $columns = [];
+
+    /**
+     * Whether a column exists yet: lets a query that reads a column added by a newer
+     * migration keep working until an admin has run that migration.
+     */
+    public static function hasColumn(PDO $db, string $table, string $column): bool
+    {
+        $key = "{$table}.{$column}";
+        if (!isset(self::$columns[$key])) {
+            $stmt = $db->prepare('SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
+            $stmt->execute([$table, $column]);
+            self::$columns[$key] = $stmt->fetchColumn() !== false;
+        }
+        return self::$columns[$key];
+    }
+
     public static function reset(): void
     {
         self::$pdo = null;
+        self::$columns = [];
     }
 }

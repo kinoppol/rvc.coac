@@ -437,13 +437,16 @@ export async function render(container, { permissions = [], user } = {}) {
     let docs = [];
     let docsQ = '';
     let docsTimer;
+    let docsError = null; // shown in the list, so a failed load doesn't look like an empty one
     let docModal = null; // { el, doc, edit: { item id, fields } | null, error, busy }
 
     async function loadDocs() {
         try {
             docs = (await api.get(`/receive/docs?q=${encodeURIComponent(docsQ)}`)).data;
+            docsError = null;
         } catch (e) {
             docs = [];
+            docsError = e.message;
         }
         drawDocs();
     }
@@ -469,7 +472,7 @@ export async function render(container, { permissions = [], user } = {}) {
                 <td class="num">${Number(d.total_qty)}</td>
                 <td class="num">${money(d.total_value)}</td>
                 <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin && !d.cancelled_at ? 'ดู / แก้ไข' : 'ดู'}</button></td>
-              </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsQ ? 'ไม่พบใบรับฝากที่ค้นหา' : 'ยังไม่มีรายการรับฝาก'}</td></tr>`}
+              </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsError ? `โหลดรายการไม่สำเร็จ: ${escapeHtml(docsError)}` : docsQ ? 'ไม่พบใบรับฝากที่ค้นหา' : 'ยังไม่มีรายการรับฝาก'}</td></tr>`}
             </tbody>
           </table></div>
         </section>`;

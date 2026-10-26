@@ -21,9 +21,9 @@ class ListingFeeService
     {
         // Lots of a cancelled receive document do not use up the free quota.
         $stmt = $this->db->prepare(
-            'SELECT COUNT(*) FROM products p WHERE p.consignor_id = ?
-               AND NOT EXISTS (SELECT 1 FROM receive_items ri JOIN receive_documents rd ON rd.id = ri.receive_document_id
-                               WHERE ri.product_id = p.id AND rd.cancelled_at IS NOT NULL)'
+            'SELECT COUNT(*) FROM products p WHERE p.consignor_id = ?' . (\App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at')
+                ? ' AND NOT EXISTS (SELECT 1 FROM receive_items ri JOIN receive_documents rd ON rd.id = ri.receive_document_id
+                                    WHERE ri.product_id = p.id AND rd.cancelled_at IS NOT NULL)' : '')
         );
         $stmt->execute([$consignorId]);
         return (int) $stmt->fetchColumn();
