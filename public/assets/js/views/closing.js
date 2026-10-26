@@ -239,9 +239,9 @@ export async function render(container, { user, permissions = [] } = {}) {
               ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
               ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}
             ${f.cash_out || f.payout_out || f.purchase_out ? `
-              ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 4)</span>', `฿ ${money(f.cash_out)}`) : ''}
-              ${f.payout_out ? line('- จ่ายเงินผู้ฝากขายจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.payout_out)}`) : ''}
-              ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 6)</span>', `฿ ${money(f.purchase_out)}`) : ''}
+              ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 3)</span>', `฿ ${money(f.cash_out)}`) : ''}
+              ${f.payout_out ? line('- จ่ายเงินผู้ฝากขายจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 4)</span>', `฿ ${money(f.payout_out)}`) : ''}
+              ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.purchase_out)}`) : ''}
               ${line(`<b>เงินสดคงเหลือในลิ้นชักหลังจ่าย</b>${dr.counted_cash === null ? ' <span class="muted" style="font-size:12px">(ยังไม่ได้นับ)</span>' : ''}`, `<b>฿ ${money(dr.after_pay)}</b>`)}` : ''}
             ${line('- คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป', `<span id="cl-float-v">฿ ${money(floatOf(m))}</span>`)}
             ${line('<b>เงินสดที่ต้องส่งวิทยาลัย</b> <span class="muted" style="font-size:12px">(ข้อ 7)</span>', `<b id="cl-send-v">฿ ${money(expectedSend(m))}</b>`)}`
@@ -271,15 +271,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                 </section>
 
                 <section class="card card-pad">
-                  <h3 style="margin:0 0 8px">2. เงินสดในลิ้นชัก</h3>
-                  <table class="cl-t"><tbody>${drawerHtml}</tbody></table>
-                  ${dr && dr.counted_cash !== null ? `<div class="muted" style="font-size:11.5px;margin-top:4px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>` : ''}
-                  ${stepActions(m, 'drawer', !(dr && dr.counted_cash !== null), dr ? 'ยังไม่ได้นับเงินปิดยอดลิ้นชัก' : 'ไม่ได้ระบุเงินในลิ้นชัก / ยังไม่ปิดยอด')}
-                </section>
-              </div>
-
-              <section class="card card-pad" style="margin-top:14px">
-                <h3 style="margin:0 0 8px">3. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต</h3>
+                <h3 style="margin:0 0 8px">2. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต</h3>
                 ${m.accounts.length ? `
                 <div class="table-wrap"><table>
                   <thead><tr><th>ช่องทาง</th><th class="num">ควรได้รับ (ตามยอดขาย)</th><th class="num">ได้รับจริง</th><th class="num">ส่วนต่าง</th></tr></thead>
@@ -300,11 +292,12 @@ export async function render(container, { user, permissions = [] } = {}) {
                 </table></div>
                 ${!m.editing && !c ? '<div class="muted" style="font-size:12px;margin-top:6px">ตรวจยอดในแอปธนาคาร / เครื่องรูดบัตร แล้วกรอกตอนบันทึกสรุปบัญชี (ข้อ 7)</div>' : ''}`
                 : '<div class="muted">ร้านไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตรเครดิต</div>'}
-              </section>
+                </section>
+              </div>
 
               <div class="two-col" style="gap:14px;align-items:start;margin-top:14px">
                 <section class="card card-pad">
-                  <h3 style="margin:0 0 8px">4. การจ่ายค่าแรง</h3>
+                  <h3 style="margin:0 0 8px">3. การจ่ายค่าแรง</h3>
                   ${m.wages.rows.length ? `<table class="cl-t"><tbody>
                     ${m.wages.rows.map((w) => line(`${escapeHtml(w.employee_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${w.drawer_date === m.date ? 'จ่ายจากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, `฿ ${money(w.amount)}`)).join('')}
                     ${line('<b>รวม</b>', `<b>฿ ${money(m.wages.total)}</b>`)}
@@ -313,7 +306,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                 </section>
 
                 <section class="card card-pad">
-                  <h3 style="margin:0 0 8px">5. การจ่ายเงินค่าสินค้าฝากขายให้ผู้ฝากขาย</h3>
+                  <h3 style="margin:0 0 8px">4. การจ่ายเงินค่าสินค้าฝากขายให้ผู้ฝากขาย</h3>
                   ${m.payouts.rows.length ? `<table class="cl-t"><tbody>
                     ${m.payouts.rows.map((w) => `<tr><td>${escapeHtml(w.consignor_code)} - ${escapeHtml(w.consignor_name)} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${PAY_METHOD[w.method] || w.method}</span>
                       ${w.method === 'cash' ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px">
@@ -323,7 +316,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                       </div>` : ''}</td>
                       <td class="num" style="vertical-align:top;${w.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(w.amount)}</td></tr>`).join('')}
                     ${line('<b>รวม</b>', `<b>฿ ${money(m.payouts.total)}</b>${m.payouts.cash ? ` <span class="muted" style="font-size:11.5px">(เงินสด ฿${money(m.payouts.cash)})</span>` : ''}`)}
-                    ${m.payouts.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 2)</span>', `฿ ${money(m.payouts.from_drawer)}`) : ''}
+                    ${m.payouts.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 6)</span>', `฿ ${money(m.payouts.from_drawer)}`) : ''}
                   </tbody></table>
                   ${m.payouts.cash ? '<div class="muted" style="font-size:12px;margin-top:6px">จ่ายเป็นเงินสดถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>' : ''}` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
                   ${m.payouts.pending_count ? `<div style="margin-top:8px"><span class="pill warn" style="font-size:12px">คำขอเบิกรอจ่าย ${m.payouts.pending_count} รายการ ฿${money(m.payouts.pending_amount)}</span>
@@ -333,7 +326,7 @@ export async function render(container, { user, permissions = [] } = {}) {
               </div>
 
               <section class="card card-pad" style="margin-top:14px">
-                <h3 style="margin:0 0 8px">6. การเบิกเงินซื้อสินค้าอื่น ๆ เข้าร้าน</h3>
+                <h3 style="margin:0 0 8px">5. การเบิกเงินซื้อสินค้าอื่น ๆ เข้าร้าน</h3>
                 ${m.purchases.rows.length ? `<table class="cl-t"><tbody>
                   ${m.purchases.rows.map((p) => `<tr><td>${escapeHtml(p.supplier_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.funding === 'profit' ? 'จากกำไร' : 'จากงบลงทุน'}</span>
                       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px">
@@ -343,10 +336,17 @@ export async function render(container, { user, permissions = [] } = {}) {
                       </div></td>
                     <td class="num" style="vertical-align:top;${p.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(p.total)}</td></tr>`).join('')}
                   ${line('<b>รวม</b>', `<b>฿ ${money(m.purchases.total)}</b>`)}
-                  ${line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 2)</span>', `฿ ${money(m.purchases.from_drawer)}`)}
+                  ${line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 6)</span>', `฿ ${money(m.purchases.from_drawer)}`)}
                 </tbody></table>
                 <div class="muted" style="font-size:12px;margin-top:6px">ปกติถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น (เช่น เงินที่เบิกจากกำไรวันก่อน) กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>` : '<div class="muted">ไม่มีการซื้อสินค้าเข้าร้านวันนี้</div>'}
                 ${stepActions(m, 'purchases', !m.purchases.rows.length, 'ยังไม่มีการบันทึกซื้อสินค้า')}
+              </section>
+
+              <section class="card card-pad" style="margin-top:14px">
+                <h3 style="margin:0 0 8px">6. เงินสดในลิ้นชัก</h3>
+                <table class="cl-t" style="max-width:620px"><tbody>${drawerHtml}</tbody></table>
+                ${dr && dr.counted_cash !== null ? `<div class="muted" style="font-size:11.5px;margin-top:4px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>` : ''}
+                ${stepActions(m, 'drawer', !(dr && dr.counted_cash !== null), dr ? 'ยังไม่ได้นับเงินปิดยอดลิ้นชัก' : 'ไม่ได้ระบุเงินในลิ้นชัก / ยังไม่ปิดยอด')}
               </section>
 
               <section class="card card-pad" style="margin-top:14px">
@@ -378,7 +378,7 @@ export async function render(container, { user, permissions = [] } = {}) {
               <label class="field">เลขที่ใบเสร็จ / ใบรับเงิน <input data-f="receipt_no" maxlength="60" value="${escapeHtml(m.form.receipt_no)}"></label>
             </div>
             <label class="field" style="margin-top:10px">หมายเหตุ <span class="muted" style="font-weight:400">(จำเป็นถ้ายอดเงินไม่ตรง)</span><textarea data-f="note" rows="2" maxlength="500">${escapeHtml(m.form.note)}</textarea></label>
-            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้เงินที่ควรมี) หักค่าแรง เงินผู้ฝากขาย และค่าสินค้าที่จ่ายจากลิ้นชัก แล้วหักเงินที่คงไว้เป็นเงินทอนวันถัดไป (ดูข้อ 2)</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้เงินที่ควรมี) หักค่าแรง เงินผู้ฝากขาย และค่าสินค้าที่จ่ายจากลิ้นชัก แล้วหักเงินที่คงไว้เป็นเงินทอนวันถัดไป (ดูข้อ 6)</div>
             ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
             <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
               ${c ? '<button type="button" class="btn secondary" id="cl-cancel">ยกเลิก</button>' : ''}
@@ -511,7 +511,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             m.error = 'กรุณากรอกจำนวนเงินสดที่ส่ง';
         } else {
             const missing = m.accounts.find((a) => m.form.actual[a.method] === '' || !(Number(m.form.actual[a.method]) >= 0));
-            m.error = missing ? `กรุณากรอกยอดที่ได้รับจริง: ${missing.label} (ข้อ 3)` : null;
+            m.error = missing ? `กรุณากรอกยอดที่ได้รับจริง: ${missing.label} (ข้อ 2)` : null;
         }
         if (m.error) { drawDay(); return; }
         m.busy = true;

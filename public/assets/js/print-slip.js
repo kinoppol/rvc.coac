@@ -418,35 +418,35 @@ export function printClosingReport(r, { weekday, status, send }) {
         ${f.unknown_sales ? row('&nbsp;&nbsp;นำเข้าจาก POS (ไม่ทราบวิธีชำระ)', n(f.unknown_sales)) : ''}
         ${row(`รวมยอดขาย (${f.sales_count} บิล)`, n(f.total_sales), 'total')}`);
 
-    const drawer = section('2. เงินสดในลิ้นชัก', dr ? `
+    const drawer = section('6. เงินสดในลิ้นชัก', dr ? `
         ${row('เงินในลิ้นชักตอนเปิดร้าน', n(dr.opening_cash))}
         ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
         ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
         ${dr.counted_cash !== null ? `${row('เงินที่นับได้จริงตอนปิดยอด', n(dr.counted_cash))}
           ${shortOver('เงิน', dr.counted_cash - dr.should_have)}` : row('เงินที่นับได้จริงตอนปิดยอด', 'ยังไม่ได้นับ')}
-        ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 4)', n(f.cash_out))}
-        ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 5)', n(f.payout_out || 0))}
-        ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 6)', n(f.purchase_out))}
+        ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 3)', n(f.cash_out))}
+        ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 4)', n(f.payout_out || 0))}
+        ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 5)', n(f.purchase_out))}
         ${row('เงินสดคงเหลือในลิ้นชักหลังจ่าย', n(dr.after_pay), 'sub')}
         ${row('หัก คงไว้เป็นเงินทอนวันถัดไป', n(send.float_kept ?? f.float_kept))}
         ${row('เงินสดที่ต้องส่งวิทยาลัย', n(send.expected_send), 'total')}` : none('ไม่ได้ระบุเงินในลิ้นชัก'));
 
-    const accounts = section('3. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต', r.accounts.length ? r.accounts.map((a) => {
+    const accounts = section('2. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต', r.accounts.length ? r.accounts.map((a) => {
         const got = send.actual?.[a.method];
         const has = got !== undefined && got !== null && got !== '';
         return row(`${escapeHtml(a.label)} <span class="muted">ควรได้ ${n(a.expected)}${has && Math.abs(Number(got) - a.expected) >= 0.005 ? ` · ${Number(got) < a.expected ? 'ขาด' : 'เกิน'} ${n(Math.abs(Number(got) - a.expected))}` : ''}</span>`,
             has ? n(got) : 'ยังไม่ได้ตรวจ');
     }).join('') : none('ไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตร'));
 
-    const wages = section('4. การจ่ายค่าแรง', r.wages.rows.length ? `
+    const wages = section('3. การจ่ายค่าแรง', r.wages.rows.length ? `
         ${r.wages.rows.map((w) => row(`${escapeHtml(w.employee_name || '-')} <span class="muted">${escapeHtml(w.doc_no)} · ${w.drawer_date === f.date ? 'จากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, n(w.amount))).join('')}
         ${row('รวม', n(r.wages.total), 'total')}` : none('ไม่มีการจ่ายค่าแรง'));
 
-    const payouts = section('5. การจ่ายเงินค่าสินค้าฝากขาย', r.payouts.rows.length ? `
+    const payouts = section('4. การจ่ายเงินค่าสินค้าฝากขาย', r.payouts.rows.length ? `
         ${r.payouts.rows.map((w) => row(`${escapeHtml(w.consignor_code)} ${escapeHtml(w.consignor_name)} <span class="muted">${escapeHtml(w.doc_no)} · ${CLOSING_PAY[w.method] || w.method}${w.method === 'cash' ? (w.from_drawer ? ' จากลิ้นชัก' : ' (ไม่ใช้เงินลิ้นชัก)') : ''}</span>`, n(w.amount))).join('')}
         ${row('รวม', n(r.payouts.total), 'total')}` : none('ไม่มีการจ่ายเงินผู้ฝากขาย'));
 
-    const purchases = section('6. การเบิกเงินซื้อสินค้าเข้าร้าน', r.purchases.rows.length ? `
+    const purchases = section('5. การเบิกเงินซื้อสินค้าเข้าร้าน', r.purchases.rows.length ? `
         ${r.purchases.rows.map((p) => row(`${escapeHtml(p.supplier_name || '-')} <span class="muted">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.from_drawer ? 'จากลิ้นชัก' : 'ไม่ใช้เงินลิ้นชัก'}</span>`, n(p.total))).join('')}
         ${row('รวม', n(r.purchases.total), 'total')}` : none('ไม่มีการซื้อสินค้าเข้าร้าน'));
 
@@ -497,14 +497,11 @@ export function printClosingReport(r, { weekday, status, send }) {
     <span>สถานะ: ${escapeHtml(status)}</span>
   </div>
   <div class="cols">
-    <div>${sales}${accounts}${wages}</div>
-    <div>${drawer}${handover}</div>
+    <div>${sales}${accounts}${wages}${payouts}${purchases}</div>
+    <div>${drawer}
+      ${dr && dr.counted_cash !== null ? `<div class="muted" style="margin:-4px 0 6px">ปิดยอดลิ้นชักโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? escapeHtml(fmtDateTime(dr.closed_at)) : ''}</div>` : ''}
+      ${handover}</div>
   </div>
-  <div class="cols">
-    <div>${payouts}</div>
-    <div>${purchases}</div>
-  </div>
-  ${dr && dr.counted_cash !== null ? `<div class="muted">ปิดยอดลิ้นชักโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? escapeHtml(fmtDateTime(dr.closed_at)) : ''}</div>` : ''}
   <div class="sign">
     <div><div class="line">(${escapeHtml(c?.closer_name || '.......................................')})</div>ผู้สรุปบัญชี</div>
     <div><div class="line">(.......................................)</div>ผู้รับเงิน (วิทยาลัย)</div>
