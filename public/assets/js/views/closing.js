@@ -1,12 +1,15 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
-import { alertDialog } from '../dialog.js';
+import { alertDialog, promptDialog } from '../dialog.js';
+
+const SKIP_LABEL = { drawer: 'ปิดยอดลิ้นชัก', wages: 'จ่ายค่าแรง', payouts: 'จ่ายเงินผู้ฝากขาย', purchases: 'ซื้อสินค้าเข้าร้าน' };
+const PAY_METHOD = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
 
 /**
  * สรุปบัญชีรายวัน: the person on duty for a weekday checks that day's figures, records the
  * cash handed to the college and its receipt; admin / manager set the roster and confirm.
  */
-export async function render(container, { user } = {}) {
+export async function render(container, { user, permissions = [] } = {}) {
     let data = null;
     let error = null;
     let modal = null; // { el, date, figures, closing, on_duty, can_submit, form, error, busy }
@@ -128,22 +131,22 @@ export async function render(container, { user } = {}) {
         });
     }
 
-    // ---------------- One day ----------------
+    // ---------------- One day: the end-of-day report ----------------
+
+    const can = (perm) => permissions.includes(perm);
+    // Where to go to do a step that is still missing (only if this user may open that page).
+    const LINKS = {
+        drawer: ['drawer', 'sales.create', 'ไปปิดยอดลิ้นชัก'],
+        wages: ['wages', 'wages.manage', 'ไปจ่ายค่าแรง'],
+        payouts: ['withdraw', 'withdraw.create', 'ไปจ่ายเงินผู้ฝากขาย'],
+        purchases: ['purchase', 'purchase.create', 'ไปบันทึกซื้อสินค้า'],
+    };
 
     async function openDay(date) {
         try {
             const d = (await api.get(`/closing/${date}`)).data;
-            const c = d.closing;
-            modal = {
-                el: document.createElement('div'), date, ...d, error: null, busy: false,
-                editing: !c && d.can_submit,
-                form: {
-                    cash_sent: String(c ? Number(c.cash_sent) : d.figures.expected_send),
-                    sent_to: c?.sent_to || 'งานการเงิน วิทยาลัย',
-                    receipt_no: c?.receipt_no || '',
-                    note: c?.note || '',
-                },
-            };
+            modal = { el: document.createElement('div'), date, ...d, error: null, busy: false, editing: false, form: null };
+            if (!d.closing && d.can_submit) startEdit();
             document.body.appendChild(modal.el);
             drawDay();
         } catch (e) {
@@ -151,9 +154,60 @@ export async function render(container, { user } = {}) {
         }
     }
 
+    async function reloadDay() {
+        const d = (await api.get(`/closing/${modal.date}`)).data;
+        Object.assign(modal, d);
+    }
+
+    function startEdit() {
+        const m = modal;
+        const c = m.closing;
+        m.editing = true;
+        m.form = {
+            cash_sent: String(m.figures.expected_send),
+            sent_to: c?.sent_to || 'งานการเงิน วิทยาลัย',
+            receipt_no: c?.receipt_no || '',
+            note: c?.note || '',
+            actual: Object.fromEntries(m.accounts.map((a) => [a.method, c?.actual_accounts?.[a.method] != null ? String(c.actual_accounts[a.method]) : ''])),
+        };
+    }
+
     function closeDay() {
         modal?.el.remove();
         modal = null;
+    }
+
+    const isDiff = (a, b) => Math.abs(Number(a) - Number(b)) >= 0.005;
+    const signed = (v) => `${v > 0 ? '+' : v < 0 ? '-' : ''}฿ ${money(Math.abs(v))}`;
+
+    /** What still needs doing (and has not been skipped for now). */
+    function todo(m) {
+        const out = [];
+        const sk = m.skips || {};
+        if (!(m.figures.drawer && m.figures.drawer.counted_cash !== null) && !sk.drawer) out.push('drawer');
+        if (!m.wages.rows.length && !sk.wages) out.push('wages');
+        if (!m.payouts.rows.length && !sk.payouts) out.push('payouts');
+        if (!m.purchases.rows.length && !sk.purchases) out.push('purchases');
+        return out;
+    }
+
+    /** A section's footer: a link to do the missing step, "skip for now", or who skipped it. */
+    function stepActions(m, item, missing, missingText) {
+        const sk = (m.skips || {})[item];
+        const [route, perm, label] = LINKS[item];
+        const mayAct = m.can_submit;
+        const href = `#/${route}${item === 'drawer' ? `?date=${m.date}` : ''}`;
+        if (!missing) return '';
+        if (sk) {
+            return `<div class="step-note muted" style="font-size:12.5px;margin-top:8px">⏭️ ข้ามไปก่อนโดย ${escapeHtml(sk.user_name || '-')} · ${fmtDateTime(sk.created_at)}${sk.note ? ` · ${escapeHtml(sk.note)}` : ''}
+              ${mayAct ? `<button type="button" class="btn sm secondary no-print" data-unskip="${item}" style="margin-left:6px">ยกเลิกการข้าม</button>` : ''}
+              ${can(perm) ? `<a class="btn sm secondary no-print" href="${href}" style="margin-left:6px">${label}</a>` : ''}</div>`;
+        }
+        return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px">
+            <span class="pill warn" style="font-size:12px">${missingText}</span>
+            ${can(perm) ? `<a class="btn sm no-print" href="${href}">${label}</a>` : `<span class="muted no-print" style="font-size:12px">(ให้ผู้มีสิทธิ์ดำเนินการ)</span>`}
+            ${mayAct ? `<button type="button" class="btn sm secondary no-print" data-skip="${item}">ข้ามไปก่อน</button>` : ''}
+          </div>`;
     }
 
     function drawDay() {
@@ -162,99 +216,249 @@ export async function render(container, { user } = {}) {
         const c = m.closing;
         const dr = f.drawer;
         const W = data.weekdays;
-        const row = (label, v, opts = '') => `<div style="display:flex;justify-content:space-between;gap:12px;${opts}"><span class="muted">${label}</span><span>${v}</span></div>`;
-        const diff = Number(m.form.cash_sent) - Number(f.expected_send);
+        const weekday = W[new Date(m.date + 'T00:00:00').getDay() || 7];
+        const line = (label, v, style = '') => `<tr><td>${label}</td><td class="num" style="${style}">${v}</td></tr>`;
+        const left = todo(m);
+        const actual = (method) => m.editing ? m.form.actual[method] : c?.actual_accounts?.[method];
+        const sumAccExpected = m.accounts.reduce((s, a) => s + a.expected, 0);
+
+        const drawerHtml = dr ? `
+            ${line('เงินในลิ้นชักตอนเปิดร้าน', `฿ ${money(dr.opening_cash)}`)}
+            ${line('+ ขายได้เป็นเงินสด', `฿ ${money(f.cash_sales)}`)}
+            ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก', `฿ ${money(f.cash_out)}`) : ''}
+            ${line('<b>เงินสดที่ควรมีในลิ้นชัก</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
+            ${dr.counted_cash !== null ? `
+              ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
+              ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}`
+            : line('เงินในลิ้นชักตอนเปิดร้าน', '<span class="muted">ไม่ได้ระบุ</span>');
+
         m.el.innerHTML = `
         <div class="modal-backdrop">
-          <div class="modal" role="dialog" aria-modal="true" aria-label="สรุปบัญชีวันที่ ${fmtDate(m.date)}" style="width:820px">
+          <div class="modal" role="dialog" aria-modal="true" aria-label="รายงานสรุปบัญชีวันที่ ${fmtDate(m.date)}" style="width:960px">
             <div class="modal-head">
-              <h2>สรุปบัญชี วัน${W[new Date(m.date + 'T00:00:00').getDay() || 7]} ${fmtDate(m.date)} ${statusPill(c)}</h2>
+              <h2>รายงานสรุปบัญชีประจำวัน${weekday} ${fmtDate(m.date)} ${statusPill(c)}</h2>
               <button type="button" class="modal-close" data-close aria-label="ปิด">✕</button>
             </div>
-            <div class="modal-body">
-              <div class="muted" style="font-size:12.5px;margin-bottom:12px">เวร: ${m.on_duty.length ? names(m.on_duty) : 'ไม่มีเวร'}</div>
-              <div class="two-col" style="gap:16px">
-                <section class="card card-pad" style="display:flex;flex-direction:column;gap:7px;font-size:13.5px">
-                  <h3 style="margin:0 0 4px">ยอดขายของวัน${c ? ' <span class="muted" style="font-weight:400;font-size:12px">(ตอนนี้)</span>' : ''}</h3>
-                  ${row('ยอดขายรวม', `<b>฿ ${money(f.total_sales)}</b> (${f.sales_count} บิล)`)}
-                  ${f.methods.map((x) => row(escapeHtml(x.label), `฿ ${money(x.amount)}`)).join('')}
-                  ${f.unknown_sales ? row('นำเข้าจาก POS (ไม่ทราบวิธีชำระ)', `฿ ${money(f.unknown_sales)}`) : ''}
-                  ${row('จ่ายค่าแรงจากลิ้นชัก', `- ฿ ${money(f.cash_out)}`)}
-                  <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-                  ${dr ? `
-                    ${row('เงินตั้งต้นในลิ้นชัก (คงไว้)', `฿ ${money(dr.opening_cash)}`)}
-                    ${dr.counted_cash !== null
-                        ? `${row('นับเงินตอนปิดยอด', `฿ ${money(dr.counted_cash)}`)}
-                           ${dr.cash_diff ? row('เงินขาด / เกินตอนปิดยอด', `<span style="color:${dr.cash_diff < 0 ? 'var(--bad)' : 'inherit'}">฿ ${money(dr.cash_diff)}</span>`) : ''}
-                           <div class="muted" style="font-size:11.5px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>`
-                        : '<div class="pill warn" style="font-size:12px">ลิ้นชักยังไม่ได้ปิดยอด — ยอดที่ควรส่งคำนวณจากยอดขายเงินสด</div>'}`
-                    : '<div class="pill warn" style="font-size:12px">วันนี้ไม่ได้ระบุเงินในลิ้นชัก</div>'}
-                  ${row('<b>เงินสดที่ควรส่งวิทยาลัย</b>', `<b>฿ ${money(f.expected_send)}</b>`, 'font-size:15px')}
+            <div class="modal-body" id="cl-report">
+              <div class="muted" style="font-size:12.5px;margin-bottom:10px">เวรสรุปบัญชี: ${m.on_duty.length ? names(m.on_duty) : 'ไม่มีเวร'}</div>
+              ${left.length
+                  ? `<div class="hint no-print" style="margin:0 0 14px"><div class="dot">!</div><div>ยังต้องดำเนินการ: <b>${left.map((k) => escapeHtml(SKIP_LABEL[k])).join(', ')}</b> — กดลิงก์ในแต่ละหัวข้อเพื่อไปทำ หรือกด <b>ข้ามไปก่อน</b></div></div>`
+                  : '<div class="pill ok no-print" style="margin-bottom:14px">ข้อมูลของวันครบแล้ว</div>'}
+
+              <div class="two-col" style="gap:14px;align-items:start">
+                <section class="card card-pad">
+                  <h3 style="margin:0 0 8px">1. ยอดขาย</h3>
+                  <table class="cl-t"><tbody>
+                    ${line('<b>ยอดขายทั้งหมด</b>', `<b>฿ ${money(f.total_sales)}</b> <span class="muted">(${f.sales_count} บิล)</span>`)}
+                    ${f.methods.map((x) => line(`&nbsp;&nbsp;${escapeHtml(x.label)}`, `฿ ${money(x.amount)}`)).join('')}
+                    ${f.unknown_sales ? line('&nbsp;&nbsp;นำเข้าจาก POS (ไม่ทราบวิธีชำระ)', `฿ ${money(f.unknown_sales)}`) : ''}
+                  </tbody></table>
                 </section>
-                <section class="card card-pad" style="display:flex;flex-direction:column;gap:10px">
-                  <h3 style="margin:0">ส่งเงินสดให้วิทยาลัย</h3>
-                  ${m.editing ? `
-                    <label class="field">จำนวนเงินสดที่ส่ง (บาท) * <input data-f="cash_sent" type="number" min="0" step="0.25" value="${escapeHtml(m.form.cash_sent)}"></label>
-                    <div class="muted" id="cl-diff" style="font-size:12.5px">${diffText(diff)}</div>
-                    <label class="field">ส่งให้ <input data-f="sent_to" maxlength="150" value="${escapeHtml(m.form.sent_to)}"></label>
-                    <label class="field">เลขที่ใบเสร็จ / ใบรับเงิน <input data-f="receipt_no" maxlength="60" value="${escapeHtml(m.form.receipt_no)}"></label>
-                    <label class="field">หมายเหตุ <span class="muted" style="font-weight:400">(จำเป็นถ้ายอดไม่ตรง)</span><textarea data-f="note" rows="2" maxlength="500">${escapeHtml(m.form.note)}</textarea></label>
-                    ${m.error ? `<div class="error-box">${escapeHtml(m.error)}</div>` : ''}
-                    <div style="display:flex;gap:8px;justify-content:flex-end">
-                      ${c ? '<button type="button" class="btn secondary" id="cl-cancel">ยกเลิก</button>' : ''}
-                      <button type="button" class="btn" id="cl-save" ${m.busy ? 'disabled' : ''}>${m.busy ? 'กำลังบันทึก...' : 'บันทึกสรุปบัญชี'}</button>
-                    </div>`
-                  : c ? `
-                    <div style="display:flex;flex-direction:column;gap:7px;font-size:13.5px">
-                      ${row('เงินสดที่ส่ง', `<b>฿ ${money(c.cash_sent)}</b>`)}
-                      ${row('ยอดที่ควรส่ง (ตอนสรุป)', `฿ ${money(c.expected_send)}`)}
-                      ${Math.abs(Number(c.cash_sent) - Number(c.expected_send)) >= 0.005 ? row('ส่วนต่าง', `<span style="color:var(--bad)">฿ ${money(Number(c.cash_sent) - Number(c.expected_send))}</span>`) : ''}
-                      ${row('ส่งให้', escapeHtml(c.sent_to || '-'))}
-                      ${row('เลขที่ใบเสร็จ', escapeHtml(c.receipt_no || '-'))}
-                      ${c.note ? row('หมายเหตุ', escapeHtml(c.note)) : ''}
-                      <div class="muted" style="font-size:12px">สรุปโดย ${escapeHtml(c.closer_name || '-')} · ${fmtDateTime(c.updated_at)}</div>
-                      ${c.verified_at ? `<div class="pill ok" style="font-size:12px">ยืนยันโดย ${escapeHtml(c.verified_by_name || '-')} · ${fmtDateTime(c.verified_at)}</div>` : ''}
-                      ${Math.abs(Number(c.total_sales) - Number(f.total_sales)) >= 0.005 ? `<div class="pill warn" style="font-size:12px">ยอดขายเปลี่ยนไปหลังสรุป (ตอนสรุป ฿${money(c.total_sales)}) — ควรสรุปใหม่</div>` : ''}
-                    </div>
-                    ${m.error ? `<div class="error-box">${escapeHtml(m.error)}</div>` : ''}
-                    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-                      ${m.can_submit && (!c.verified_at || data.can_manage) ? '<button type="button" class="btn secondary" id="cl-edit">แก้ไข / สรุปใหม่</button>' : ''}
-                      ${data.can_manage && !c.verified_at ? `<button type="button" class="btn" id="cl-verify" ${m.busy ? 'disabled' : ''}>ยืนยันว่าวิทยาลัยได้รับเงินแล้ว</button>` : ''}
-                    </div>`
-                  : `<div class="muted">ยังไม่มีการสรุปบัญชีวันนี้${m.can_submit ? '' : ' — สรุปได้เฉพาะผู้ที่มีเวรวันนี้'}</div>`}
+
+                <section class="card card-pad">
+                  <h3 style="margin:0 0 8px">2. เงินสดในลิ้นชัก</h3>
+                  <table class="cl-t"><tbody>${drawerHtml}</tbody></table>
+                  ${dr && dr.counted_cash !== null ? `<div class="muted" style="font-size:11.5px;margin-top:4px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>` : ''}
+                  ${stepActions(m, 'drawer', !(dr && dr.counted_cash !== null), dr ? 'ยังไม่ได้นับเงินปิดยอดลิ้นชัก' : 'ไม่ได้ระบุเงินในลิ้นชัก / ยังไม่ปิดยอด')}
                 </section>
               </div>
+
+              <section class="card card-pad" style="margin-top:14px">
+                <h3 style="margin:0 0 8px">3. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต</h3>
+                ${m.accounts.length ? `
+                <div class="table-wrap"><table>
+                  <thead><tr><th>ช่องทาง</th><th class="num">ควรได้รับ (ตามยอดขาย)</th><th class="num">ได้รับจริง</th><th class="num">ส่วนต่าง</th></tr></thead>
+                  <tbody>${m.accounts.map((a) => {
+                      const got = actual(a.method);
+                      const has = got !== undefined && got !== null && got !== '';
+                      return `<tr>
+                        <td>${escapeHtml(a.label)}</td>
+                        <td class="num">${money(a.expected)}</td>
+                        <td class="num">${m.editing
+                            ? `<input type="number" min="0" step="0.01" data-acc="${a.method}" value="${escapeHtml(got ?? '')}" placeholder="ดูจากบัญชี" style="width:130px;text-align:right">`
+                            : has ? `<b>${money(got)}</b>` : '<span class="muted">ยังไม่ได้ตรวจ</span>'}</td>
+                        <td class="num" data-accdiff="${a.method}">${has ? `<span style="${isDiff(got, a.expected) ? 'color:var(--bad);font-weight:600' : ''}">${signed(Number(got) - a.expected)}</span>` : '-'}</td>
+                      </tr>`;
+                  }).join('')}
+                  ${m.accounts.length > 1 ? `<tr><td><b>รวม</b></td><td class="num"><b>${money(sumAccExpected)}</b></td><td></td><td></td></tr>` : ''}
+                  </tbody>
+                </table></div>
+                ${!m.editing && !c ? '<div class="muted" style="font-size:12px;margin-top:6px">ตรวจยอดในแอปธนาคาร / เครื่องรูดบัตร แล้วกรอกตอนบันทึกสรุปบัญชี (ข้อ 7)</div>' : ''}`
+                : '<div class="muted">ร้านไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตรเครดิต</div>'}
+              </section>
+
+              <div class="two-col" style="gap:14px;align-items:start;margin-top:14px">
+                <section class="card card-pad">
+                  <h3 style="margin:0 0 8px">4. การจ่ายค่าแรง</h3>
+                  ${m.wages.rows.length ? `<table class="cl-t"><tbody>
+                    ${m.wages.rows.map((w) => line(`${escapeHtml(w.employee_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${w.drawer_date === m.date ? 'จ่ายจากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, `฿ ${money(w.amount)}`)).join('')}
+                    ${line('<b>รวม</b>', `<b>฿ ${money(m.wages.total)}</b>`)}
+                  </tbody></table>` : '<div class="muted">ไม่มีการจ่ายค่าแรงวันนี้</div>'}
+                  ${stepActions(m, 'wages', !m.wages.rows.length, 'ยังไม่มีการจ่ายค่าแรง')}
+                </section>
+
+                <section class="card card-pad">
+                  <h3 style="margin:0 0 8px">5. การจ่ายเงินค่าสินค้าฝากขายให้ผู้ฝากขาย</h3>
+                  ${m.payouts.rows.length ? `<table class="cl-t"><tbody>
+                    ${m.payouts.rows.map((w) => line(`${escapeHtml(w.consignor_code)} - ${escapeHtml(w.consignor_name)} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${PAY_METHOD[w.method] || w.method}</span>`, `฿ ${money(w.amount)}`)).join('')}
+                    ${line('<b>รวม</b>', `<b>฿ ${money(m.payouts.total)}</b>${m.payouts.cash ? ` <span class="muted" style="font-size:11.5px">(เงินสด ฿${money(m.payouts.cash)})</span>` : ''}`)}
+                  </tbody></table>` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
+                  ${m.payouts.pending_count ? `<div style="margin-top:8px"><span class="pill warn" style="font-size:12px">คำขอเบิกรอจ่าย ${m.payouts.pending_count} รายการ ฿${money(m.payouts.pending_amount)}</span>
+                    ${can('withdraw.create') ? '<a class="btn sm no-print" href="#/withdraw" style="margin-left:6px">ไปจ่ายเงิน</a>' : ''}</div>` : ''}
+                  ${stepActions(m, 'payouts', !m.payouts.rows.length, 'ยังไม่มีการจ่ายเงินผู้ฝากขาย')}
+                </section>
+              </div>
+
+              <section class="card card-pad" style="margin-top:14px">
+                <h3 style="margin:0 0 8px">6. การเบิกเงินซื้อสินค้าอื่น ๆ เข้าร้าน</h3>
+                ${m.purchases.rows.length ? `<table class="cl-t"><tbody>
+                  ${m.purchases.rows.map((p) => line(`${escapeHtml(p.supplier_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.funding === 'profit' ? 'จากกำไร' : 'จากงบลงทุน'}</span>`, `฿ ${money(p.total)}`)).join('')}
+                  ${line('<b>รวม</b>', `<b>฿ ${money(m.purchases.total)}</b>`)}
+                </tbody></table>` : '<div class="muted">ไม่มีการซื้อสินค้าเข้าร้านวันนี้</div>'}
+                ${stepActions(m, 'purchases', !m.purchases.rows.length, 'ยังไม่มีการบันทึกซื้อสินค้า')}
+              </section>
+
+              <section class="card card-pad" style="margin-top:14px">
+                <h3 style="margin:0 0 8px">7. ส่งเงินสดให้วิทยาลัย</h3>
+                ${sendHtml(m)}
+              </section>
             </div>
-            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-close>ปิด</button></div>
+            <div class="modal-foot">
+              <button type="button" class="btn secondary" id="cl-print">พิมพ์รายงาน</button>
+              <button type="button" class="btn secondary" data-close>ปิด</button>
+            </div>
           </div>
         </div>`;
+        wireDay();
+    }
+
+    function sendHtml(m) {
+        const f = m.figures;
+        const c = m.closing;
+        const row = (label, v, style = '') => `<tr><td>${label}</td><td class="num" style="${style}">${v}</td></tr>`;
+        if (m.editing) {
+            return `
+            <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+              <label class="field">จำนวนเงินสดที่ส่ง (บาท) * <input data-f="cash_sent" type="number" min="0" step="0.25" value="${escapeHtml(m.form.cash_sent)}">
+                <span class="muted" style="font-size:11.5px;font-weight:400">ควรส่ง ฿${money(f.expected_send)} <span id="cl-diff">${diffText(Number(m.form.cash_sent) - Number(f.expected_send))}</span></span></label>
+              <label class="field">ส่งให้ <input data-f="sent_to" maxlength="150" value="${escapeHtml(m.form.sent_to)}"></label>
+              <label class="field">เลขที่ใบเสร็จ / ใบรับเงิน <input data-f="receipt_no" maxlength="60" value="${escapeHtml(m.form.receipt_no)}"></label>
+            </div>
+            <label class="field" style="margin-top:10px">หมายเหตุ <span class="muted" style="font-weight:400">(จำเป็นถ้ายอดเงินไม่ตรง)</span><textarea data-f="note" rows="2" maxlength="500">${escapeHtml(m.form.note)}</textarea></label>
+            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก หักเงินตั้งต้นที่คงไว้ในลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้ยอดขายเงินสดหักค่าแรงที่จ่ายจากลิ้นชัก)</div>
+            ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
+            <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+              ${c ? '<button type="button" class="btn secondary" id="cl-cancel">ยกเลิก</button>' : ''}
+              <button type="button" class="btn" id="cl-save" ${m.busy ? 'disabled' : ''}>${m.busy ? 'กำลังบันทึก...' : 'บันทึกสรุปบัญชี'}</button>
+            </div>`;
+        }
+        if (!c) return `<div class="muted">ยังไม่มีการสรุปบัญชีวันนี้${m.can_submit ? '' : ' — สรุปได้เฉพาะผู้ที่มีเวรวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ'}</div>`;
+        const self = Number(c.closer_id) === Number(user?.id);
+        return `
+          <table class="cl-t"><tbody>
+            ${row('<b>เงินสดที่ส่ง</b>', `<b>฿ ${money(c.cash_sent)}</b>`)}
+            ${row('ยอดที่ควรส่ง (ตอนสรุป)', `฿ ${money(c.expected_send)}`)}
+            ${isDiff(c.cash_sent, c.expected_send) ? row('ส่วนต่าง', signed(Number(c.cash_sent) - Number(c.expected_send)), 'color:var(--bad);font-weight:600') : ''}
+            ${row('ส่งให้', escapeHtml(c.sent_to || '-'))}
+            ${row('เลขที่ใบเสร็จ', escapeHtml(c.receipt_no || '-'))}
+            ${c.note ? row('หมายเหตุ', escapeHtml(c.note)) : ''}
+          </tbody></table>
+          <div class="muted" style="font-size:12px;margin-top:6px">สรุปโดย ${escapeHtml(c.closer_name || '-')} · ${fmtDateTime(c.updated_at)}</div>
+          ${c.verified_at ? `<div class="pill ok" style="font-size:12px;margin-top:6px">ยืนยันโดย ${escapeHtml(c.verified_by_name || '-')} · ${fmtDateTime(c.verified_at)}</div>` : ''}
+          ${isDiff(c.total_sales, f.total_sales) ? `<div class="pill warn" style="font-size:12px;margin-top:6px">ยอดขายเปลี่ยนไปหลังสรุป (ตอนสรุป ฿${money(c.total_sales)}) — ควรสรุปใหม่</div>` : ''}
+          ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
+          <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px">
+            ${m.can_submit && (!c.verified_at || data.can_manage) ? '<button type="button" class="btn secondary" id="cl-edit">แก้ไข / สรุปใหม่</button>' : ''}
+            ${data.can_manage && !c.verified_at ? (self
+                ? '<span class="muted" style="font-size:12px;align-self:center">คุณเป็นผู้สรุปวันนี้ ให้ผู้จัดการหรือผู้ดูแลระบบคนอื่นยืนยัน</span>'
+                : `<button type="button" class="btn" id="cl-verify" ${m.busy ? 'disabled' : ''}>ยืนยันว่าวิทยาลัยได้รับเงินแล้ว</button>`) : ''}
+          </div>`;
+    }
+
+    function wireDay() {
+        const m = modal;
+        const f = m.figures;
         m.el.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeDay));
+        m.el.querySelector('#cl-print').addEventListener('click', printReport);
         m.el.querySelectorAll('[data-f]').forEach((inp) => inp.addEventListener('input', () => {
             m.form[inp.dataset.f] = inp.value;
             if (inp.dataset.f === 'cash_sent') m.el.querySelector('#cl-diff').textContent = diffText(Number(inp.value) - Number(f.expected_send));
         }));
+        m.el.querySelectorAll('[data-acc]').forEach((inp) => inp.addEventListener('input', () => {
+            m.form.actual[inp.dataset.acc] = inp.value;
+            const a = m.accounts.find((x) => x.method === inp.dataset.acc);
+            const cell = m.el.querySelector(`[data-accdiff="${a.method}"]`);
+            cell.innerHTML = inp.value === '' ? '-'
+                : `<span style="${isDiff(inp.value, a.expected) ? 'color:var(--bad);font-weight:600' : ''}">${signed(Number(inp.value) - a.expected)}</span>`;
+        }));
+        m.el.querySelectorAll('[data-skip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.skip, true)));
+        m.el.querySelectorAll('[data-unskip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.unskip, false)));
+        m.el.querySelectorAll('a[href^="#/"]').forEach((a) => a.addEventListener('click', closeDay));
         m.el.querySelector('#cl-save')?.addEventListener('click', save);
         m.el.querySelector('#cl-cancel')?.addEventListener('click', () => { m.editing = false; m.error = null; drawDay(); });
-        m.el.querySelector('#cl-edit')?.addEventListener('click', () => { m.editing = true; m.form.cash_sent = String(Number(m.figures.expected_send)); drawDay(); });
+        m.el.querySelector('#cl-edit')?.addEventListener('click', () => { startEdit(); drawDay(); });
         m.el.querySelector('#cl-verify')?.addEventListener('click', verify);
     }
 
+    async function skip(item, on) {
+        const m = modal;
+        let note = null;
+        if (on) {
+            note = await promptDialog(`ข้าม "${SKIP_LABEL[item]}" ของวันนี้ไปก่อน (ยังกลับมาทำทีหลังได้)`, {
+                title: 'ข้ามไปก่อน', okText: 'ข้ามไปก่อน', placeholder: 'เหตุผล (ไม่บังคับ) เช่น ผู้ฝากยังไม่มารับเงิน',
+            });
+            if (note === null || note === undefined || docModalGone(m)) return;
+        }
+        try {
+            m.skips = (await api.post(`/closing/${m.date}/skip`, { item, on, note })).data;
+            m.error = null;
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        drawDay();
+    }
+
+    const docModalGone = (m) => modal !== m;
+
+    function printReport() {
+        const body = modal.el.querySelector('#cl-report').cloneNode(true);
+        body.querySelectorAll('.no-print, button, input, textarea').forEach((x) => {
+            if (x.tagName === 'INPUT' || x.tagName === 'TEXTAREA') x.replaceWith(document.createTextNode(x.value || '-'));
+            else x.remove();
+        });
+        const title = modal.el.querySelector('.modal-head h2').textContent.trim();
+        const css = new URL('assets/css/app.css', location.href.split('#')[0]).href;
+        const w = window.open('', '_blank');
+        if (!w) return;
+        w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+          <link rel="stylesheet" href="${css}"><style>body{padding:24px;background:#fff}.card{break-inside:avoid;box-shadow:none}.cl-t{width:100%}.cl-t td{padding:3px 0}</style></head>
+          <body><h2 style="margin:0 0 4px">${escapeHtml(title)}</h2>${body.innerHTML}
+          <div style="display:flex;justify-content:space-around;margin-top:48px;text-align:center"><div>ลงชื่อ ................................<br>ผู้สรุปบัญชี</div><div>ลงชื่อ ................................<br>ผู้รับเงิน</div></div></body></html>`);
+        w.document.close();
+        setTimeout(() => w.print(), 500);
+    }
+
     function diffText(diff) {
-        if (!Number.isFinite(diff) || Math.abs(diff) < 0.005) return 'ตรงกับยอดที่ควรส่ง';
-        return diff < 0 ? `ส่งขาด ฿${money(-diff)} — กรุณาระบุหมายเหตุ` : `ส่งเกิน ฿${money(diff)} — กรุณาระบุหมายเหตุ`;
+        if (!Number.isFinite(diff) || Math.abs(diff) < 0.005) return '· ตรงกับยอดที่ควรส่ง';
+        return diff < 0 ? `· ส่งขาด ฿${money(-diff)} (ระบุหมายเหตุ)` : `· ส่งเกิน ฿${money(diff)} (ระบุหมายเหตุ)`;
     }
 
     async function save() {
         const m = modal;
         if (m.form.cash_sent === '' || !(Number(m.form.cash_sent) >= 0)) {
             m.error = 'กรุณากรอกจำนวนเงินสดที่ส่ง';
-            drawDay();
-            return;
+        } else {
+            const missing = m.accounts.find((a) => m.form.actual[a.method] === '' || !(Number(m.form.actual[a.method]) >= 0));
+            m.error = missing ? `กรุณากรอกยอดที่ได้รับจริง: ${missing.label} (ข้อ 3)` : null;
         }
+        if (m.error) { drawDay(); return; }
         m.busy = true;
         drawDay();
         try {
-            m.closing = (await api.post(`/closing/${m.date}`, { ...m.form, cash_sent: Number(m.form.cash_sent) })).data;
+            m.closing = (await api.post(`/closing/${m.date}`, {
+                cash_sent: Number(m.form.cash_sent), sent_to: m.form.sent_to, receipt_no: m.form.receipt_no, note: m.form.note,
+                actual_accounts: Object.fromEntries(Object.entries(m.form.actual).map(([k, v]) => [k, Number(v)])),
+            })).data;
             m.editing = false;
             m.error = null;
             load();

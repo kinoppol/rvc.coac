@@ -123,6 +123,8 @@ class ClosingService
             'methods' => $s['methods'],
             'drawer' => $drawer ? [
                 'opening_cash' => (float) $drawer['opening_cash'],
+                // Cash that should be in the drawer now: the float, plus cash sales, less wages paid from it.
+                'should_have' => round((float) $drawer['opening_cash'] + $cash - $cashOut, 2),
                 'counted_cash' => $counted,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
                 'cash_diff' => $drawer['cash_diff'] !== null ? (float) $drawer['cash_diff'] : null,
@@ -146,6 +148,7 @@ class ClosingService
             return null;
         }
         $row['snapshot'] = $row['snapshot'] ? json_decode($row['snapshot'], true) : null;
+        $row['actual_accounts'] = !empty($row['actual_accounts']) ? json_decode($row['actual_accounts'], true) : null;
         return $row;
     }
 
@@ -207,10 +210,35 @@ class ClosingService
         if (abs($sent - $f['expected_send']) >= 0.005 && $note === null) {
             throw new \RuntimeException('เงินที่ส่งไม่ตรงกับยอดที่ควรส่ง (฿' . number_format($f['expected_send'], 2) . ') กรุณาระบุหมายเหตุ');
         }
+        // What actually reached each receiving account, for every non-cash method in use.
+        $actual = null;
+        if (\App\Support\Db::hasColumn($this->db, 'daily_closings', 'actual_accounts')) {
+            $given = is_array($data['actual_accounts'] ?? null) ? $data['actual_accounts'] : [];
+            $actual = [];
+            foreach ($this->accounts($f) as $a) {
+                $v = $given[$a['method']] ?? null;
+                if ($v === null || $v === '' || !is_numeric($v) || (float) $v < 0) {
+                    throw new \RuntimeException("กรุณากรอกยอดที่ได้รับจริง: {$a['label']}");
+                }
+                $actual[$a['method']] = round((float) $v, 2);
+                if (abs($actual[$a['method']] - $a['expected']) >= 0.005 && $note === null) {
+                    throw new \RuntimeException("{$a['label']} ได้รับจริงไม่ตรงกับยอดขาย (฿" . number_format($a['expected'], 2) . ') กรุณาระบุหมายเหตุ');
+                }
+            }
+        }
         $values = [
             $userId, $f['total_sales'], $f['cash_sales'], $f['transfer_sales'], $f['card_sales'], $f['unknown_sales'],
             $f['cash_out'], $f['expected_send'], $sent, $sentTo, $receipt, $note, json_encode($f, JSON_UNESCAPED_UNICODE),
         ];
+        $this->saveRow($old, $date, $values, $actual);
+        $strip = fn (?array $r) => $r ? array_diff_key($r, array_flip(['snapshot', 'closer_name', 'verified_by_name'])) : null;
+        $new = $this->find($date);
+        $this->audit->log('daily_closings', (int) $new['id'], $old ? 'update' : 'create', $strip($old), $strip($new), $userId, $ip);
+        return $new;
+    }
+
+    private function saveRow(?array $old, string $date, array $values, ?array $actual): void
+    {
         if ($old) {
             // Any change needs confirming again.
             $this->db->prepare(
@@ -219,19 +247,108 @@ class ClosingService
                     verified_by = NULL, verified_at = NULL
                  WHERE id = ?'
             )->execute([...$values, $old['id']]);
-            $id = (int) $old['id'];
         } else {
             $this->db->prepare(
                 'INSERT INTO daily_closings (closer_id, total_sales, cash_sales, transfer_sales, card_sales, unknown_sales,
                     cash_out, expected_send, cash_sent, sent_to, receipt_no, note, snapshot, business_date, created_at, updated_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([...$values, $date]);
-            $id = (int) $this->db->lastInsertId();
         }
-        $strip = fn (?array $r) => $r ? array_diff_key($r, array_flip(['snapshot', 'closer_name', 'verified_by_name'])) : null;
-        $new = $this->find($date);
-        $this->audit->log('daily_closings', $id, $old ? 'update' : 'create', $strip($old), $strip($new), $userId, $ip);
-        return $new;
+        if ($actual !== null) {
+            $this->db->prepare('UPDATE daily_closings SET actual_accounts = ? WHERE business_date = ?')
+                ->execute([json_encode($actual), $date]);
+        }
+    }
+
+    /** Non-cash methods in use (or that took money that day), with what the sales say each account should have received. */
+    public function accounts(array $figures): array
+    {
+        $on = (new SettingsService($this->db))->paymentMethods();
+        $got = array_column($figures['methods'], 'amount', 'method');
+        $out = [];
+        foreach (SettingsService::PAYMENT_METHODS as $method => $label) {
+            if ($method === 'cash' || (!in_array($method, $on, true) && empty($got[$method]))) {
+                continue;
+            }
+            $out[] = ['method' => $method, 'label' => $label, 'expected' => round((float) ($got[$method] ?? 0), 2)];
+        }
+        return $out;
+    }
+
+    /** Steps of the day's report that may be left for later. */
+    public const SKIP_ITEMS = ['drawer' => 'ปิดยอดลิ้นชัก', 'wages' => 'จ่ายค่าแรง', 'payouts' => 'จ่ายเงินผู้ฝากขาย', 'purchases' => 'ซื้อสินค้าเข้าร้าน'];
+
+    /**
+     * The end-of-day report: sales, the drawer (float, what should be there, what was
+     * counted), each receiving account (expected / actually received), wages paid,
+     * consignors paid, money spent on goods for the store, and the steps skipped for now.
+     */
+    public function report(string $date): array
+    {
+        $f = $this->figures($date);
+        $q = function (string $sql, array $args) {
+            try {
+                $stmt = $this->db->prepare($sql);
+                $stmt->execute($args);
+                return $stmt->fetchAll();
+            } catch (\PDOException $e) {
+                return []; // its migration not run yet
+            }
+        };
+        $wages = $q(
+            "SELECT w.doc_no, w.amount, w.method, w.drawer_date, w.note, u.full_name AS employee_name FROM wage_payments w
+             LEFT JOIN users u ON u.id = w.user_id
+             WHERE w.cancelled_at IS NULL AND (w.pay_date = ? OR w.drawer_date = ?) ORDER BY w.id",
+            [$date, $date]
+        );
+        $payouts = $q(
+            "SELECT w.doc_no, w.amount, w.method, w.paid_at, c.code AS consignor_code, c.name AS consignor_name FROM withdrawals w
+             JOIN consignors c ON c.id = w.consignor_id
+             WHERE w.status = 'paid' AND DATE(w.paid_at) = ? ORDER BY w.id",
+            [$date]
+        );
+        $pending = $q("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amount FROM withdrawals WHERE status = 'pending'", [])[0]
+            ?? ['n' => 0, 'amount' => 0];
+        $purchases = $q(
+            "SELECT doc_no, supplier_name, receipt_no, total, funding FROM purchase_documents
+             WHERE status = 'active' AND funding <> 'stock' AND COALESCE(receipt_date, DATE(created_at)) = ? ORDER BY id",
+            [$date]
+        );
+        $skips = [];
+        foreach ($q('SELECT s.item, s.note, s.created_at, u.full_name AS user_name FROM closing_skips s LEFT JOIN users u ON u.id = s.user_id WHERE s.business_date = ?', [$date]) as $s) {
+            $skips[$s['item']] = $s;
+        }
+        $sum = fn (array $rows, string $k) => round(array_sum(array_map(fn ($r) => (float) $r[$k], $rows)), 2);
+        return [
+            'figures' => $f,
+            'accounts' => $this->accounts($f),
+            'wages' => ['rows' => $wages, 'total' => $sum($wages, 'amount'),
+                'from_drawer' => $sum(array_filter($wages, fn ($w) => $w['drawer_date'] === $date), 'amount')],
+            'payouts' => ['rows' => $payouts, 'total' => $sum($payouts, 'amount'),
+                'cash' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'cash'), 'amount'),
+                'pending_count' => (int) $pending['n'], 'pending_amount' => round((float) $pending['amount'], 2)],
+            'purchases' => ['rows' => $purchases, 'total' => $sum($purchases, 'total')],
+            'skips' => (object) $skips,
+        ];
+    }
+
+    /** Marks a step of the day's report as left for later ($on = false takes the mark back). */
+    public function skip(string $date, string $item, bool $on, int $userId, ?string $note, ?string $ip): void
+    {
+        if (!isset(self::SKIP_ITEMS[$item])) {
+            throw new \RuntimeException('ไม่รู้จักรายการนี้');
+        }
+        try {
+            if ($on) {
+                $this->db->prepare('INSERT IGNORE INTO closing_skips (business_date, item, user_id, note, created_at) VALUES (?, ?, ?, ?, NOW())')
+                    ->execute([$date, $item, $userId, $note !== null && trim($note) !== '' ? mb_substr(trim($note), 0, 255) : null]);
+            } else {
+                $this->db->prepare('DELETE FROM closing_skips WHERE business_date = ? AND item = ?')->execute([$date, $item]);
+            }
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('ยังข้ามรายการไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0052) ก่อน');
+        }
+        $this->audit->log('daily_closings', 0, 'update', null, ['date' => $date, 'skip' => $item, 'on' => $on], $userId, $ip);
     }
 
     /** Admin / manager: confirms the summary (the cash was received by the college). */
@@ -243,6 +360,10 @@ class ClosingService
         }
         if ($old['verified_at'] !== null) {
             throw new \RuntimeException('สรุปบัญชีวันนี้ยืนยันไปแล้ว');
+        }
+        // A manager on the roster sums up some days; someone else confirms them.
+        if ((int) $old['closer_id'] === $userId) {
+            throw new \RuntimeException('ยืนยันสรุปบัญชีที่ตัวเองบันทึกไม่ได้ ให้ผู้ดูแลระบบหรือผู้จัดการคนอื่นยืนยัน');
         }
         $this->db->prepare('UPDATE daily_closings SET verified_by = ?, verified_at = NOW() WHERE id = ?')->execute([$userId, $old['id']]);
         $this->audit->log('daily_closings', (int) $old['id'], 'update', ['verified_at' => null], ['verified_by' => $userId], $userId, $ip);

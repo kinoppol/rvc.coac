@@ -47,8 +47,7 @@ class ClosingController
         }
         $service = $this->service($db);
         $user = $request->getAttribute('user');
-        return $this->json($response, ['data' => [
-            'figures' => $service->figures($date),
+        return $this->json($response, ['data' => $service->report($date) + [
             'closing' => $service->find($date),
             'on_duty' => $service->roster()[$service->weekdayOf($date)],
             'can_submit' => $date <= date('Y-m-d') && ($this->canManage($db, $user) || $service->isOnDuty((int) $user['id'], $date)),
@@ -69,6 +68,28 @@ class ClosingController
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $row]);
+    }
+
+    /** Leave a step of the day's report for later, or take that back (body: item, on, note). */
+    public function skip(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        $date = $this->dateParam($args['date']);
+        $user = $request->getAttribute('user');
+        $service = $this->service($db);
+        if ($date === null) {
+            return $this->error($response, 'วันที่ไม่ถูกต้อง', 422);
+        }
+        if (!$this->canManage($db, $user) && !$service->isOnDuty((int) $user['id'], $date)) {
+            return $this->error($response, 'ข้ามรายการได้เฉพาะผู้มีเวรสรุปบัญชีวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        try {
+            $service->skip($date, (string) ($body['item'] ?? ''), !empty($body['on']), (int) $user['id'], isset($body['note']) ? (string) $body['note'] : null, $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date)['skips']]);
     }
 
     public function verify(Request $request, Response $response, array $args): Response
