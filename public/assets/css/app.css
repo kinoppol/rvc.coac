@@ -533,7 +533,7 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-pack-size { width: 100px; font: inherit; font-size: 18px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
 
 /* ---------- POS (ขายสินค้า) — sized for touch screens ---------- */
-.pos { display: flex; flex-direction: column; gap: 12px; height: max(600px, calc(100vh - 136px)); }
+.pos { display: flex; flex-direction: column; gap: 12px; height: max(420px, calc(100vh - 136px)); height: max(420px, calc(100dvh - 136px)); }
 /* Notice bars (store hours, drawer, short-stock switch, messages) take room only when shown;
    the product grid and cart shrink to fit, so the pay button stays on screen. */
 .pos > div:empty { display: none; }
@@ -585,8 +585,7 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-switch input:checked + span { background: var(--pri); }
 .pos-switch input:checked + span::after { transform: translateX(22px); }
 .pos-switch input:focus-visible + span { outline: 2px solid var(--pri); outline-offset: 2px; }
-.pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; flex: 1; min-height: 380px; }
-.pos-full .pos-main { min-height: 0; }
+.pos-main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; flex: 1; min-height: 0; }
 .pos-products { overflow-y: auto; overscroll-behavior: contain; padding: 12px; min-height: 0; }
 .pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .pos-tile { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; touch-action: manipulation; }
@@ -638,11 +637,23 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-total b { font-size: 30px; color: var(--pri); }
 .btn.pos-pay, .btn.pos-big { min-height: 60px; font-size: 20px; border-radius: 12px; }
 .btn.pos-pay { width: 100%; }
+/* Short screens (laptops, small tablets): tighten the cart so the pay button never falls below the fold. */
+@media (max-height: 760px) {
+    .pos { gap: 8px; }
+    .pos-cart-head { padding: 8px 12px; }
+    .pos-cart-foot { padding: 10px 12px; gap: 8px; }
+    .pos-total b { font-size: 24px; }
+    .btn.pos-pay { min-height: 48px; font-size: 18px; }
+    .pos-line { padding: 8px 12px; }
+}
 @media (max-width: 900px) {
     .pos { height: auto; }
     .pos-main { grid-template-columns: 1fr; flex: none; }
     .pos-products { max-height: 60vh; }
+    .pos-cart { overflow: visible; }
     .pos-cart-list { max-height: 50vh; }
+    /* Stacked layout: keep the total and pay button pinned to the bottom of the screen. */
+    .pos-cart-foot { position: sticky; bottom: 0; z-index: 5; border-radius: 0 0 12px 12px; box-shadow: 0 -4px 12px rgba(16,24,40,.12); }
     .pos-full { overflow-y: auto; }
     .pos-bar { gap: 6px; padding: 8px; }
     .pos-search { flex-basis: 0; padding-left: 10px; font-size: 18px; }
