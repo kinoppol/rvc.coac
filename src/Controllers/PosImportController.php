@@ -79,6 +79,11 @@ class PosImportController
                 'warnings' => $parsed['warnings'],
                 'ai' => $result['ai'],
                 'previous_imports' => $date ? self::service()->forDate($date) : [],
+                // Non-cash methods the store takes: their amounts are entered, the rest is cash.
+                'payment_methods' => array_values(array_map(
+                    fn ($m) => ['method' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]],
+                    array_filter((new SettingsService(Db::connection()))->paymentMethods(), fn ($m) => $m !== 'cash')
+                )),
             ],
         ]);
     }
@@ -150,7 +155,8 @@ class PosImportController
                 !empty($body['allow_short_stock']),
                 trim((string) ($body['source_label'] ?? '')),
                 (int) $user['id'],
-                $request->getServerParams()['REMOTE_ADDR'] ?? null
+                $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                is_array($body['payments'] ?? null) ? $body['payments'] : []
             );
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);

@@ -26,6 +26,9 @@ export async function render(container, { permissions = [] } = {}) {
     let previous = [];
     let filter = 'all';
     let allowShort = false;
+    // How the day was paid: amounts for the non-cash methods the store takes; cash is the rest.
+    let payMethods = [];
+    let payAmounts = {};
     let busy = null; // 'analyze' | 'save'
     // AI pairing runs a few lines per request after the table is shown.
     let aiRun = { running: false, done: 0, total: 0, searches: 0, stopped: false, error: null };
@@ -125,6 +128,33 @@ export async function render(container, { permissions = [] } = {}) {
         return s;
     }
 
+    /** Non-cash total entered, and the cash left over from the day's total (all cash by default). */
+    function paySplit() {
+        const other = payMethods.reduce((sum, p) => sum + (Number(payAmounts[p.method]) || 0), 0);
+        const total = stats().total;
+        return { other: Math.round(other * 100) / 100, cash: Math.round((total - other) * 100) / 100, total };
+    }
+
+    function payHtml() {
+        const p = paySplit();
+        const bad = p.cash < -0.004 || payMethods.some((m) => Number(payAmounts[m.method]) < 0);
+        return `
+          <div class="pos-pay" style="display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;border-top:1px solid var(--border);padding-top:12px">
+            <div style="font-size:13px;font-weight:600;flex-basis:100%">การชำระเงินของยอดขายวันนี้
+              <span class="muted" style="font-weight:400">— ปกติถือเป็นเงินสดทั้งหมด ใส่ยอดที่ได้รับทางช่องทางอื่นแยกไว้ ระบบคำนวณเงินสดให้เอง</span></div>
+            ${payMethods.map((m) => `
+              <label class="field" style="width:170px">${escapeHtml(m.label)} (บาท)
+                <input type="number" min="0" step="0.01" data-pay="${m.method}" value="${escapeHtml(payAmounts[m.method] ?? '')}" placeholder="0.00"></label>`).join('')}
+            <div style="font-size:13.5px;padding-bottom:8px">เงินสด <b id="pos-cash" style="${bad ? 'color:var(--bad)' : ''}">฿ ${money(p.cash)}</b>
+              <span class="muted" style="font-size:12px">= ยอดขาย ฿${money(p.total)}${p.other ? ` − ฿${money(p.other)}` : ''}</span></div>
+            <div id="pos-pay-err" class="pc-warn" style="flex-basis:100%;${bad ? '' : 'display:none'}">ยอดที่ไม่ใช่เงินสดรวมกันเกินยอดขาย หรือมียอดติดลบ</div>
+          </div>`;
+    }
+
+    function payOk() {
+        return paySplit().cash >= -0.004 && payMethods.every((m) => !(Number(payAmounts[m.method]) < 0));
+    }
+
     // ---------- drawing ----------
 
     function draw() {
@@ -207,7 +237,7 @@ export async function render(container, { permissions = [] } = {}) {
 
     function drawReview(body) {
         const s = stats();
-        const canSave = rows.length && rows.every(resolved) && (!s.short || allowShort) && rows.some((r) => !isSkip(r));
+        const canSave = rows.length && rows.every(resolved) && (!s.short || allowShort) && rows.some((r) => !isSkip(r)) && payOk();
         const visible = rows.map((r, i) => [r, i]).filter(([r]) => {
             if (filter === 'todo') return !resolved(r);
             if (filter === 'saved') return r.decision?.origin === 'saved';
@@ -233,6 +263,7 @@ export async function render(container, { permissions = [] } = {}) {
               <button type="button" class="btn" id="pos-save" ${canSave && !busy && !aiRun.running ? '' : 'disabled'}>${busy === 'save' ? 'กำลังบันทึก…' : 'บันทึกยอดขายและจำคู่สินค้า'}</button>
             </div>
           </div>
+          ${payMethods.length ? payHtml() : ''}
           ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
           ${previous.length ? `<div class="pc-warn">วันที่ ${escapeHtml(fmtDate(saleDate))} เคยนำเข้าแล้ว ${previous.length} ครั้ง: ${previous.map((p) =>
                 `${escapeHtml(p.doc_no || '-')} (฿ ${money(p.total_value)} โดย ${escapeHtml(p.user_name || '-')})`).join(', ')} — ตรวจให้แน่ใจว่าไม่ได้นำเข้าซ้ำ</div>` : ''}
@@ -276,6 +307,19 @@ export async function render(container, { permissions = [] } = {}) {
             draw();
         });
         body.querySelector('#pos-save').addEventListener('click', save);
+        // Typing an amount updates the cash in place, so the box keeps its focus.
+        body.querySelectorAll('[data-pay]').forEach((inp) => inp.addEventListener('input', () => {
+            payAmounts[inp.dataset.pay] = inp.value;
+            const p = paySplit();
+            const ok = payOk();
+            const cash = body.querySelector('#pos-cash');
+            cash.textContent = `฿ ${money(p.cash)}`;
+            cash.style.color = ok ? '' : 'var(--bad)';
+            cash.nextElementSibling.textContent = `= ยอดขาย ฿${money(p.total)}${p.other ? ` − ฿${money(p.other)}` : ''}`;
+            body.querySelector('#pos-pay-err').style.display = ok ? 'none' : '';
+            const s = stats();
+            body.querySelector('#pos-save').disabled = !(rows.length && rows.every(resolved) && (!s.short || allowShort) && rows.some((r) => !isSkip(r)) && ok && !busy && !aiRun.running);
+        }));
         body.querySelector('#ai-stop')?.addEventListener('click', () => { aiRun.stopped = true; draw(); });
         body.querySelector('#ai-run')?.addEventListener('click', () => startAi());
         body.querySelector('#ai-retry')?.addEventListener('click', () => runAi());
@@ -446,6 +490,9 @@ export async function render(container, { permissions = [] } = {}) {
                   นำเข้าโดย ${escapeHtml(v.user_name || '-')} เมื่อ ${escapeHtml(fmtDateTime(v.created_at))}${v.source_label ? ` · ไฟล์ ${escapeHtml(v.source_label)}` : ''}
                   · ${count(v.line_count)} รายการ${Number(v.skipped_count) ? ` · ไม่นำเข้า ${count(v.skipped_count)} รายการ` : ''}${Number(v.new_products) ? ` · สร้างสินค้าใหม่ ${count(v.new_products)}` : ''}
                 </div>
+                ${!cancelled ? `<div style="font-size:13px;margin-bottom:12px">การชำระเงิน: ${(v.payments || []).length
+                    ? v.payments.map((p) => `${escapeHtml(p.label)} <b>฿ ${money(p.amount)}</b>`).join(' · ')
+                    : '<span class="muted">ไม่ได้แยกวิธีชำระ (นำเข้าก่อนมีการแยกยอด)</span>'}</div>` : ''}
                 ${cancelled ? `<div class="error-box" style="margin-bottom:12px">
                   <b>การนำเข้านี้ถูกยกเลิกแล้ว</b> เมื่อ ${escapeHtml(fmtDateTime(v.cancelled_at))}${v.cancelled_by_name ? ` โดย ${escapeHtml(v.cancelled_by_name)}` : ''}
                   <div>เหตุผล: ${escapeHtml(v.cancel_reason || '-')} — รายการด้านล่างเป็นข้อมูล ณ ตอนยกเลิก ไม่นับรวมในยอดขายและสต๊อกแล้ว</div></div>` : ''}
@@ -906,6 +953,8 @@ export async function render(container, { permissions = [] } = {}) {
             ai = res.ai;
             warnings = res.warnings || [];
             previous = res.previous_imports || [];
+            payMethods = res.payment_methods || [];
+            payAmounts = {};
             if (res.sale_date) saleDate = res.sale_date;
             filter = 'all';
             allowShort = false;
@@ -927,6 +976,7 @@ export async function render(container, { permissions = [] } = {}) {
                 sale_date: saleDate,
                 source_label: sourceLabel,
                 allow_short_stock: allowShort,
+                payments: Object.fromEntries(payMethods.map((m) => [m.method, Number(payAmounts[m.method]) || 0])),
                 lines: rows.map((r) => ({
                     pos_name: r.pos_name,
                     pos_sku: r.pos_sku,
@@ -948,6 +998,7 @@ export async function render(container, { permissions = [] } = {}) {
             text = '';
             sourceLabel = '';
             rows = [];
+            payAmounts = {};
             dateTouched = false;
             saleDate = todayISO();
             await loadRecent();

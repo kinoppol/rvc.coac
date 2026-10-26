@@ -28,8 +28,9 @@ class PosImportService
     /**
      * @param array<int,array{pos_name:string,pos_category?:?string,qty?:int,net?:float,cost?:?float,action:string,
      *        product_id?:int,origin?:string,new_product?:array{name?:string,consignor_id?:?int,cost_price?:float,sale_price?:float}}> $lines
+     * @param array<string,float> $payments the day's money taken by each non-cash method (transfer / qr / card); the rest is cash
      */
-    public function commit(string $saleDate, array $lines, bool $allowShortStock, string $sourceLabel, int $userId, ?string $ip): array
+    public function commit(string $saleDate, array $lines, bool $allowShortStock, string $sourceLabel, int $userId, ?string $ip, array $payments = []): array
     {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $saleDate) || !checkdate((int) substr($saleDate, 5, 2), (int) substr($saleDate, 8, 2), (int) substr($saleDate, 0, 4))) {
             throw new \RuntimeException('กรุณาระบุวันที่ขายให้ถูกต้อง');
@@ -104,6 +105,9 @@ class PosImportService
                 'allow_short_stock' => $allowShortStock,
                 'note' => 'นำเข้าจาก POS',
             ]);
+            $paid = $this->recordPayments((int) $sale['id'], (float) $sale['total_value'], $payments);
+            // The imported cash is in the drawer too: keep a closed drawer's expected cash in step.
+            (new CashDrawerService($this->db, $this->audit))->refreshClose($saleDate);
 
             $this->db->prepare(
                 'INSERT INTO pos_imports (sale_date, sale_id, source_label, line_count, skipped_count, new_products, total_qty, total_value, user_id, created_at)
@@ -115,7 +119,7 @@ class PosImportService
             $importId = (int) $this->db->lastInsertId();
             $this->audit->log('pos_imports', $importId, 'create', null, [
                 'sale_date' => $saleDate, 'doc_no' => $sale['doc_no'], 'lines' => count($items), 'skipped' => $skipped,
-                'new_products' => $newCount, 'total_value' => $sale['total_value'],
+                'new_products' => $newCount, 'total_value' => $sale['total_value'], 'payments' => $paid,
             ], $userId, $ip);
 
             $this->db->commit();
@@ -124,6 +128,46 @@ class PosImportService
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * How the imported day was paid: the amounts given for transfer / QR / card (methods
+     * the store has turned on), and cash for the rest of the total (all cash by default).
+     * @return array<string,float>
+     */
+    private function recordPayments(int $saleId, float $total, array $payments): array
+    {
+        $on = (new SettingsService($this->db))->paymentMethods();
+        $rows = [];
+        $other = 0.0;
+        foreach ($payments as $method => $amount) {
+            $amount = round((float) $amount, 2);
+            if ($amount == 0.0) {
+                continue;
+            }
+            $label = SettingsService::PAYMENT_METHODS[$method] ?? (string) $method;
+            if ($amount < 0) {
+                throw new \RuntimeException("ยอด{$label}ติดลบ");
+            }
+            if ($method === 'cash' || !in_array($method, $on, true)) {
+                throw new \RuntimeException("ร้านไม่ได้เปิดรับชำระด้วย{$label}");
+            }
+            $rows[$method] = $amount;
+            $other += $amount;
+        }
+        $other = round($other, 2);
+        if ($other > $total + 0.004) {
+            throw new \RuntimeException('ยอดโอน / QR-Code / บัตรเครดิตรวมกัน (฿' . number_format($other, 2) . ') เกินยอดขาย (฿' . number_format($total, 2) . ')');
+        }
+        $cash = round($total - $other, 2);
+        if ($cash > 0) {
+            $rows = ['cash' => $cash] + $rows;
+        }
+        $ins = $this->db->prepare('INSERT INTO sale_payments (sale_id, method, amount) VALUES (?, ?, ?)');
+        foreach ($rows as $method => $amount) {
+            $ins->execute([$saleId, $method, $amount]);
+        }
+        return $rows;
     }
 
     /**
@@ -262,6 +306,9 @@ class PosImportService
                     ['reason' => 'ยกเลิกการนำเข้ายอดขายจาก POS: ' . $reason], $userId, $ip);
             }
             $removed = $this->removeCreatedProducts(array_keys($created), $userId, $ip);
+            if ($sale) {
+                (new CashDrawerService($this->db, $this->audit))->refreshClose((string) $sale['business_date']);
+            }
 
             $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
                 'product_id', 'product_name', 'pos_names', 'pos_skus', 'owner', 'qty', 'unit_price', 'line_total', 'fee_amount', 'is_new',
@@ -545,6 +592,10 @@ class PosImportService
             $import['items'] = array_map(fn ($r) => $r + [
                 'line_total' => round((float) $r['unit_price'] * (int) $r['qty'], 2),
             ], $items->fetchAll());
+            // How it was paid (none for imports made before the payment split existed).
+            $pay = $this->db->prepare('SELECT method, amount FROM sale_payments WHERE sale_id = ? ORDER BY id');
+            $pay->execute([$import['sale_id']]);
+            $import['payments'] = array_map(fn ($p) => $p + ['label' => SettingsService::PAYMENT_METHODS[$p['method']] ?? $p['method']], $pay->fetchAll());
         }
         return $import;
     }
