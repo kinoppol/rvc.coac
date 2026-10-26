@@ -547,7 +547,7 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-pack-size { width: 100px; font: inherit; font-size: 18px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
 
 /* ---------- POS (ขายสินค้า) — sized for touch screens ---------- */
-.pos { display: flex; flex-direction: column; gap: 12px; height: max(420px, calc(100vh - 136px)); height: max(420px, calc(100dvh - 136px)); }
+.pos { display: flex; flex-direction: column; gap: 12px; height: max(420px, calc(100vh - 136px - var(--osk-h, 0px))); height: max(420px, calc(100dvh - 136px - var(--osk-h, 0px))); }
 /* Notice bars (store hours, drawer, short-stock switch, messages) take room only when shown;
    the product grid and cart shrink to fit, so the pay button stays on screen. */
 .pos > div:empty { display: none; }
@@ -810,3 +810,15 @@ div.pos-row.out { cursor: not-allowed; }
 .cnt-photo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .cnt-photo-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
 .cnt-photo-row label.btn { cursor: pointer; }
+
+/* ---------- On-screen keyboard (osk.js) for tablets ---------- */
+.osk { position: fixed; left: 0; right: 0; bottom: 0; z-index: 70; display: flex; flex-direction: column; gap: 6px; padding: 8px max(8px, calc((100vw - 1000px) / 2)) calc(8px + env(safe-area-inset-bottom)); background: var(--surface2); border-top: 1px solid var(--border); box-shadow: 0 -8px 24px rgba(16,24,40,.18); user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+.osk[hidden] { display: none; }
+.osk-row { display: flex; gap: 5px; }
+.osk button { flex: 1 1 0; min-width: 0; height: 46px; padding: 0 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 20px; cursor: pointer; }
+.osk button.down { background: var(--soft); border-color: var(--pri); }
+.osk .osk-wide { flex: 1.5 1 0; font-size: 15px; font-weight: 600; background: var(--hover); }
+.osk .osk-wide.on { background: var(--pri); border-color: var(--pri); color: #fff; }
+.osk .osk-space { flex: 5 1 0; font-size: 14px; color: var(--muted); }
+.osk .osk-enter { flex: 2 1 0; background: var(--pri); border-color: var(--pri); color: #fff; }
+@media (max-height: 700px) { .osk button { height: 40px; font-size: 18px; } .osk { gap: 4px; } }

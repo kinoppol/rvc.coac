@@ -3,6 +3,7 @@ import { money, escapeHtml, fmtDate } from '../util.js';
 import { confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
+import { openKeyboard, closeKeyboard, isKeyboardOpen } from '../osk.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -41,8 +42,9 @@ const GROUP_FN = {
     consign: (p) => p.consignor_id != null,
 };
 const METHOD_ICON = { cash: '💵', transfer: '🏦', qr: '📱', card: '💳' };
-// Touch screens: focusing the search box must not pop up the on-screen
-// keyboard every time (a barcode scanner types into it like a keyboard).
+// Touch screens: focusing the search box must not pop up the system on-screen
+// keyboard every time (a barcode scanner types into it like a keyboard); the page's
+// own keyboard (osk.js) opens instead when the cashier taps the box or ⌨.
 // Tablets with a mouse/scanner attached may report a fine pointer, so any touch support counts.
 const TOUCH = matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
@@ -80,7 +82,7 @@ export async function render(container, { user } = {}) {
     let view = pref('view', 'grid');
     let sort = pref('sort', 'popular');
     let group = pref('group', 'all');
-    let keyboard = !TOUCH || pref('kb', '0') === '1';
+    const keyboard = !TOUCH; // system keyboard allowed in the search box
     let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false, sell_out_of_stock_always: false };
     // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
     // The user's own switch (remembered on this device); only roles the admin allows get it.
@@ -150,8 +152,10 @@ export async function render(container, { user } = {}) {
 
     function setKeyboard() {
         q.inputMode = keyboard ? 'text' : 'none';
-        root.querySelector('[data-act="kb"]')?.classList.toggle('active', keyboard);
+        root.querySelector('[data-act="kb"]')?.classList.toggle('active', isKeyboardOpen());
     }
+
+    const showKeyboard = () => { if (TOUCH && !isKeyboardOpen()) openKeyboard(q, { onClose: setKeyboard }); setKeyboard(); };
 
     /** Puts the cursor back in the search box unless the cashier is typing somewhere else. */
     function focusSearch() {
@@ -163,14 +167,6 @@ export async function render(container, { user } = {}) {
         q.readOnly = true;
         q.focus({ preventScroll: true });
         setTimeout(() => { q.readOnly = false; }, 60);
-    }
-
-    /** After a scan: closes the on-screen keyboard the cashier opened by tapping the search box. */
-    function dropKeyboard() {
-        if (!TOUCH || keyboard || q.inputMode === 'none') return;
-        q.blur();
-        setKeyboard();
-        focusSearch();
     }
 
     function message(text, type = 'ok') {
@@ -544,6 +540,7 @@ export async function render(container, { user } = {}) {
 
     /** One more piece, or with pack one more whole pack at the pack price. */
     function add(p, pack = null) {
+        closeKeyboard(); // show the cart again once a product is picked
         const size = pack?.pack_size || 1;
         const line = cart.find((c) => c.id === p.id && lineSize(c) === size);
         const short = inCart(p.id) + size > p.qty_stock;
@@ -596,7 +593,6 @@ export async function render(container, { user } = {}) {
         }
         q.value = '';
         add(p, pack);
-        dropKeyboard();
     }
 
     function normalize(p) {
@@ -629,6 +625,7 @@ export async function render(container, { user } = {}) {
 
     function openPayment() {
         if (!cart.length) return;
+        closeKeyboard();
         const total = cartTotal();
         const methods = options.payment_methods;
         const mixed = options.payment_mixed;
@@ -856,13 +853,7 @@ export async function render(container, { user } = {}) {
         else if (e.key === 'Escape') { q.value = ''; drawProducts(); }
     });
     // Tapping the search box itself means the cashier wants to type.
-    on(q, 'pointerdown', (e) => {
-        if (e.pointerType === 'touch' && q.inputMode === 'none') {
-            q.inputMode = 'text';
-            q.blur();
-            setTimeout(() => q.focus(), 0);
-        }
-    });
+    on(q, 'pointerdown', showKeyboard);
     on(q, 'blur', () => { if (TOUCH) setTimeout(setKeyboard, 0); });
 
     on(root, 'change', async (e) => {
@@ -976,10 +967,8 @@ export async function render(container, { user } = {}) {
             } else if (t.dataset.act === 'full') {
                 setFull(!root.classList.contains('pos-full'));
             } else if (t.dataset.act === 'kb') {
-                keyboard = !keyboard;
-                savePref('kb', keyboard ? '1' : '0');
-                setKeyboard();
-                q.blur();
+                if (isKeyboardOpen()) closeKeyboard();
+                else showKeyboard();
             }
         }
         setTimeout(focusSearch, 0);
@@ -998,6 +987,7 @@ export async function render(container, { user } = {}) {
     on(window, 'focus', () => setTimeout(focusSearch, 0));
     on(window, 'hashchange', () => {
         if (root.classList.contains('pos-full')) setFull(false);
+        closeKeyboard();
         life.abort();
     });
 
