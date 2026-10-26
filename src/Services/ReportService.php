@@ -28,7 +28,7 @@ class ReportService
         'store_gross_profit' => 'กำไรขั้นต้นสินค้าของร้าน', 'total_income' => 'รายได้รวมของร้าน', 'supply_cost' => 'ค่าวัสดุใช้ในร้าน',
         'wage_cost' => 'ค่าแรง', 'net_profit' => 'กำไรสุทธิ', 'stock_cost_value' => 'มูลค่าทุนคงเหลือ', 'stock_retail_value' => 'มูลค่าตามราคาขาย',
         'consignor_value' => 'มูลค่าที่ผู้ฝากจะได้', 'cash' => 'เงินสด', 'transfer' => 'โอนเงิน', 'qr' => 'QR-Code', 'card' => 'บัตรเครดิต',
-        'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
+        'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'transfer_all' => 'เงินโอน (โอนเข้าบัญชี + QR-Code)', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
         'expected_cash' => 'เงินที่ควรมี', 'counted_cash' => 'นับได้ตอนปิด', 'cash_diff' => 'ขาด(−)/เกิน(+)', 'open_status' => 'ระบุเงินตั้งต้น',
         'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
         'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
@@ -705,6 +705,29 @@ class ReportService
             $buckets[$k]['unknown_method'] = round($buckets[$k]['unknown_method'] + (float) $r['unknown'], 2);
         }
         return array_values($buckets);
+    }
+
+    /**
+     * Daily sales split into cash and money transferred (bank transfer + QR-Code), one row
+     * per day that had sales. Card and imported sales (no method recorded) get their own columns.
+     */
+    public function dailyCashTransfer(string $from, string $to): array
+    {
+        $out = [];
+        foreach ($this->payments($from, $to, 'day') as $r) {
+            if (!$r['bills']) {
+                continue;
+            }
+            $row = [
+                'period' => $r['period'], 'bills' => $r['bills'],
+                'cash' => $r['cash'], 'transfer_all' => round($r['transfer'] + $r['qr'], 2),
+            ];
+            $row['card'] = $r['card'];
+            $row['unknown_method'] = $r['unknown_method'];
+            $row['total_sales'] = $r['total_sales'];
+            $out[] = $row;
+        }
+        return $out;
     }
 
     /** Each day's cash drawer: opening count, cash in and out, closing count and the difference. */

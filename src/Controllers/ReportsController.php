@@ -15,7 +15,7 @@ class ReportsController
     use JsonResponse;
 
     private const TYPES = [
-        'statement', 'profit', 'payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
+        'statement', 'profit', 'payments', 'daily_payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
         'receive', 'return', 'sales', 'detail', 'fee', 'withdrawals', 'balances', 'consign_stock',
         'store_sales', 'store_stock', 'purchases', 'stock_counts', 'capital',
     ];
@@ -102,6 +102,7 @@ class ReportsController
             'capital' => $service->capital($from, $to),
             'profit' => $service->profit($from, $to, $group),
             'payments' => $service->payments($from, $to, $group),
+            'daily_payments' => $service->dailyCashTransfer($from, $to),
             'cashiers' => $service->salesByCashier($from, $to),
             'drawers' => $service->drawers($from, $to),
             'pos_imports' => $service->posImports($from, $to),

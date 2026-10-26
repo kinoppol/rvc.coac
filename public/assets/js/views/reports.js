@@ -12,6 +12,7 @@ const GROUPS = [
         { key: 'fee', label: 'รายได้ค่าธรรมเนียมของร้าน' },
     ]},
     { label: 'การขายและเงินสด', types: [
+        { key: 'daily_payments', label: 'สรุปยอดขายรายวัน (เงินสด / เงินโอน)' },
         { key: 'cashiers', label: 'ยอดขายตามพนักงาน' },
         { key: 'drawers', label: 'เงินในลิ้นชัก / ปิดยอด' },
         { key: 'after_hours', label: 'ขายนอกเวลาทำการ' },
