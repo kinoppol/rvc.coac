@@ -22,8 +22,9 @@ class WithdrawalRepo
     public function recent(int $limit = 20): array
     {
         $stmt = $this->db->prepare(
-            'SELECT w.*, c.name AS consignor_name FROM withdrawals w
+            'SELECT w.*, c.name AS consignor_name, cu.full_name AS cancelled_by_name FROM withdrawals w
              JOIN consignors c ON c.id = w.consignor_id
+             LEFT JOIN users cu ON cu.id = w.cancelled_by
              ORDER BY w.id DESC LIMIT ?'
         );
         $stmt->bindValue(1, $limit, PDO::PARAM_INT);
@@ -102,6 +103,49 @@ class WithdrawalRepo
         $id = (int) $this->db->lastInsertId();
         $this->audit->log('withdrawals', $id, 'create', null, $this->find($id), $userId, $ip);
         return $id;
+    }
+
+    /**
+     * Admin: cancels a withdrawal with a reason. A paid one goes back into the consignor's
+     * account as a new ledger entry (the original entry stays, so the passbook shows both).
+     */
+    public function cancel(int $id, string $reason, int $userId, ?string $ip): void
+    {
+        $reason = mb_substr(trim($reason), 0, 255);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่ยกเลิก');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM withdrawals WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $old = $stmt->fetch();
+            if (!$old || !in_array($old['status'], ['pending', 'paid'], true)) {
+                throw new \RuntimeException('ไม่พบรายการเบิกเงินที่ยกเลิกได้');
+            }
+            try {
+                $this->db->prepare("UPDATE withdrawals SET status = 'cancelled', cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ? WHERE id = ?")
+                    ->execute([$userId, $reason, $id]);
+            } catch (\PDOException $e) {
+                throw new \RuntimeException('ยังยกเลิกรายการเบิกไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0049) ก่อน');
+            }
+            if ($old['status'] === 'paid') {
+                $this->ledger->append(
+                    (int) $old['consignor_id'],
+                    'withdrawal_cancel',
+                    mb_substr("ยกเลิกการเบิกเงิน: {$reason}", 0, 255),
+                    $old['doc_no'],
+                    (float) $old['amount'],
+                    0,
+                    $userId
+                );
+            }
+            $this->audit->log('withdrawals', $id, 'cancel', $old, $this->find($id), $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
     }
 
     public function approve(int $id, int $approverId, ?string $ip): void

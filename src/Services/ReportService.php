@@ -758,7 +758,7 @@ class ReportService
     {
         $stmt = $this->db->prepare(
             "SELECT DATE(COALESCE(w.paid_at, w.requested_at)) AS date, w.doc_no, c.code AS consignor_code, c.name AS consignor,
-                    w.amount AS paid_value,
+                    IF(w.status = 'cancelled', 0, w.amount) AS paid_value,
                     CASE w.method WHEN 'cash' THEN 'เงินสด' WHEN 'promptpay' THEN 'พร้อมเพย์' ELSE 'โอนเข้าบัญชี' END AS method,
                     CASE w.status WHEN 'paid' THEN 'จ่ายแล้ว' WHEN 'pending' THEN 'รออนุมัติ' ELSE 'ยกเลิก' END AS status
              FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id
@@ -778,14 +778,15 @@ class ReportService
                     COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'sale' THEN l.amount_in END), 0) AS sales_value,
                     COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type IN ('fee', 'listing_fee') THEN l.amount_out
                                       WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'listing_fee_refund' THEN -l.amount_in END), 0) AS fee_value,
-                    COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'withdrawal' THEN l.amount_out END), 0) AS paid_value,
+                    COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'withdrawal' THEN l.amount_out
+                                      WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'withdrawal_cancel' THEN -l.amount_in END), 0) AS paid_value,
                     COALESCE(SUM(CASE WHEN l.entry_date <= ? THEN l.amount_in - l.amount_out END), 0) AS closing_balance
              FROM consignors c LEFT JOIN ledger_entries l ON l.consignor_id = c.id
              GROUP BY c.id, c.code, c.name
              HAVING opening_balance <> 0 OR sales_value <> 0 OR paid_value <> 0 OR closing_balance <> 0
              ORDER BY c.code"
         );
-        $stmt->execute([$from, $from, $to, $from, $to, $from, $to, $from, $to, $to]);
+        $stmt->execute([$from, $from, $to, $from, $to, $from, $to, $from, $to, $from, $to, $to]);
         return $stmt->fetchAll();
     }
 

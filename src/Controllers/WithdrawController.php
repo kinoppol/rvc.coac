@@ -64,6 +64,23 @@ class WithdrawController
         return $this->json($response, ['data' => $repo->find($id)], 201);
     }
 
+    /** Admin only: cancel a withdrawal (pending or paid) with a reason. */
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่ยกเลิกรายการเบิกได้', 403);
+        }
+        $reason = (string) (((array) $request->getParsedBody())['reason'] ?? '');
+        $repo = $this->repo();
+        try {
+            $repo->cancel((int) $args['id'], $reason, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $repo->find((int) $args['id'])]);
+    }
+
     public function approve(Request $request, Response $response, array $args): Response
     {
         $user = $request->getAttribute('user');

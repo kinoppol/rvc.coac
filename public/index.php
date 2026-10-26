@@ -246,6 +246,7 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('withdraw.create'));
     $group->post('/withdrawals/{id}/approve', [WithdrawController::class, 'approve'])
         ->add(new RoleGuard('withdraw.approve'));
+    $group->post('/withdrawals/{id:[0-9]+}/cancel', [WithdrawController::class, 'cancel']);
 
     $group->get('/stockcounts', [StockCountController::class, 'index']);
     $group->get('/stockcounts/{id}', [StockCountController::class, 'show']);

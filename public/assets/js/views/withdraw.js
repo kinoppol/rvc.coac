@@ -1,10 +1,11 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
+import { promptDialog } from '../dialog.js';
 
 const METHOD_LABEL = { cash: 'เงินสดที่เคาน์เตอร์', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
 const STATUS_LABEL = { pending: ['รออนุมัติ', 'warn'], paid: ['จ่ายแล้ว', 'ok'], cancelled: ['ยกเลิก', 'muted'] };
 
-export async function render(container, { permissions }) {
+export async function render(container, { permissions, user }) {
     const options = (await api.get('/consignors/options')).data;
     // No consignor until one is chosen, so money is never paid to someone by accident.
     let consignorId = null;
@@ -15,6 +16,7 @@ export async function render(container, { permissions }) {
     let rows = [];
     let formOpen = false; // the withdrawal form, on a modal
     const canApprove = permissions.includes('withdraw.approve');
+    const isAdmin = user?.role === 'admin';
 
     async function refreshBalance() {
         balance = 0;
@@ -89,8 +91,10 @@ export async function render(container, { permissions }) {
                     <td><div style="font-weight:600">${escapeHtml(r.consignor_name)}</div><div class="muted" style="font-size:11.5px">${fmtDateTime(r.requested_at)}</div></td>
                     <td class="muted">${METHOD_LABEL[r.method] || r.method}</td>
                     <td class="num" style="font-weight:600">${money(r.amount)}</td>
-                    <td><span class="pill ${cls}">${label}</span></td>
-                    <td style="text-align:right">${r.status === 'pending' && canApprove ? `<button type="button" class="btn sm" data-approve="${r.id}">อนุมัติจ่าย</button>` : ''}</td>
+                    <td><span class="pill ${cls}">${label}</span>
+                      ${r.status === 'cancelled' && r.cancel_reason ? `<div class="muted" style="font-size:11.5px;margin-top:4px">เหตุผล: ${escapeHtml(r.cancel_reason)}${r.cancelled_by_name ? ` · โดย ${escapeHtml(r.cancelled_by_name)}` : ''}${r.cancelled_at ? ` · ${fmtDateTime(r.cancelled_at)}` : ''}</div>` : ''}</td>
+                    <td style="text-align:right;white-space:nowrap">${r.status === 'pending' && canApprove ? `<button type="button" class="btn sm" data-approve="${r.id}">อนุมัติจ่าย</button>` : ''}
+                      ${isAdmin && (r.status === 'pending' || r.status === 'paid') ? `<button type="button" class="btn sm secondary" data-cancel="${r.id}">ยกเลิก</button>` : ''}</td>
                   </tr>`;
               }).join('') || '<tr><td colspan="5" class="empty">ยังไม่มีรายการ</td></tr>'}
             </tbody>
@@ -105,6 +109,7 @@ export async function render(container, { permissions }) {
             container.querySelector('#sel-consignor')?.focus();
         });
         container.querySelectorAll('[data-approve]').forEach((btn) => btn.addEventListener('click', () => approve(btn.dataset.approve)));
+        container.querySelectorAll('[data-cancel]').forEach((btn) => btn.addEventListener('click', () => cancel(btn.dataset.cancel)));
         if (!formOpen) return;
         container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => { formOpen = false; error = null; draw(); }));
         container.querySelector('#sel-consignor').addEventListener('change', async (e) => {
@@ -146,6 +151,23 @@ export async function render(container, { permissions }) {
     async function approve(id) {
         try {
             await api.post(`/withdrawals/${id}/approve`);
+            await load();
+        } catch (e) {
+            alertError(e.message);
+        }
+    }
+
+    async function cancel(id) {
+        const r = rows.find((x) => String(x.id) === String(id));
+        const reason = await promptDialog(
+            r.status === 'paid'
+                ? `ยอด ฿${money(r.amount)} จะคืนเข้าบัญชีของ ${r.consignor_name} (สมุดบัญชีจะมีรายการยกเลิกต่อท้าย รายการเบิกเดิมยังอยู่)`
+                : `คำขอเบิก ฿${money(r.amount)} ของ ${r.consignor_name} จะถูกยกเลิก`,
+            { title: `ยกเลิกรายการเบิก ${r.doc_no}?`, okText: 'ยกเลิกรายการเบิก', placeholder: 'เหตุผลที่ยกเลิก (จำเป็น)', required: true, danger: true }
+        );
+        if (reason === null || reason === undefined || !String(reason).trim()) return;
+        try {
+            await api.post(`/withdrawals/${id}/cancel`, { reason: String(reason).trim() });
             await load();
         } catch (e) {
             alertError(e.message);
