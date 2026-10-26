@@ -43,7 +43,8 @@ const GROUP_FN = {
 const METHOD_ICON = { cash: '💵', transfer: '🏦', qr: '📱', card: '💳' };
 // Touch screens: focusing the search box must not pop up the on-screen
 // keyboard every time (a barcode scanner types into it like a keyboard).
-const TOUCH = matchMedia('(pointer: coarse)').matches;
+// Tablets with a mouse/scanner attached may report a fine pointer, so any touch support counts.
+const TOUCH = matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
 /** Placeholder tiles/rows shaped like the product list, shown while it loads. */
 function skeletonHtml(view) {
@@ -157,7 +158,19 @@ export async function render(container, { user } = {}) {
         if (modal || drawerModal || isDialogOpen() || !root.isConnected) return;
         const a = document.activeElement;
         if (a && a !== q && root.contains(a) && a.matches('input, select, textarea')) return;
+        if (a === q || !TOUCH || keyboard) { q.focus({ preventScroll: true }); return; }
+        // Browsers that ignore inputmode="none" still keep the keyboard down for a read-only field.
+        q.readOnly = true;
         q.focus({ preventScroll: true });
+        setTimeout(() => { q.readOnly = false; }, 60);
+    }
+
+    /** After a scan: closes the on-screen keyboard the cashier opened by tapping the search box. */
+    function dropKeyboard() {
+        if (!TOUCH || keyboard || q.inputMode === 'none') return;
+        q.blur();
+        setKeyboard();
+        focusSearch();
     }
 
     function message(text, type = 'ok') {
@@ -583,6 +596,7 @@ export async function render(container, { user } = {}) {
         }
         q.value = '';
         add(p, pack);
+        dropKeyboard();
     }
 
     function normalize(p) {
