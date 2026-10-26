@@ -101,7 +101,7 @@ class InventoryService
                 JOIN receive_documents rd ON rd.id = ri.receive_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1\$s)
+                WHERE ri.product_id IN (%1\$s) AND rd.cancelled_at IS NULL
               UNION ALL
                 SELECT si.product_id, s.created_at, COALESCE(s.business_date, DATE(s.sale_datetime)),
                        IF(EXISTS (SELECT 1 FROM pos_imports pim WHERE pim.sale_id = s.id), 'pos', 'sale'),
@@ -118,7 +118,7 @@ class InventoryService
                 JOIN return_documents rd ON rd.id = ri.return_document_id
                 LEFT JOIN consignors c ON c.id = rd.consignor_id
                 LEFT JOIN users u ON u.id = rd.user_id
-                WHERE ri.product_id IN (%1\$s)
+                WHERE ri.product_id IN (%1\$s) AND rd.cancelled_at IS NULL
               UNION ALL
                 SELECT sci.product_id, sc.approved_at, sc.count_date, 'count', sc.doc_no, NULL, u.full_name, sci.diff_qty,
                        NULL, NULL, NULL, sci.counted_qty, sci.system_qty, 3, sci.id
@@ -528,9 +528,9 @@ class InventoryService
                     return null;
                 }
                 return [
-                    'title' => 'ใบรับฝากสินค้า ' . $d['doc_no'],
+                    'title' => 'ใบรับฝากสินค้า ' . $d['doc_no'] . (!empty($d['cancelled_at']) ? ' (ยกเลิกแล้ว)' : ''),
                     'link' => 'receive',
-                    'note' => sprintf(
+                    'note' => (!empty($d['cancelled_at']) ? 'ยกเลิกเมื่อ ' . $dateTime($d['cancelled_at']) . ' เหตุผล: ' . $d['cancel_reason'] . ' · ' : '') . sprintf(
                         'ผู้ฝาก %s - %s · วันที่รับ %s · รวม %s ชิ้น มูลค่า ฿%s · ค่าทำข้อมูล ฿%s · บันทึกโดย %s',
                         $d['code'], $d['consignor'], $dateTime($d['created_at']), number_format((int) $d['total_qty']),
                         number_format((float) $d['total_value'], 2), number_format((float) $d['listing_fee_total'], 2), $d['full_name'] ?? '-'
@@ -554,9 +554,9 @@ class InventoryService
                     return null;
                 }
                 return [
-                    'title' => 'ใบคืนสินค้าผู้ฝาก ' . $d['doc_no'],
+                    'title' => 'ใบคืนสินค้าผู้ฝาก ' . $d['doc_no'] . (!empty($d['cancelled_at']) ? ' (ยกเลิกแล้ว)' : ''),
                     'link' => 'ret',
-                    'note' => sprintf(
+                    'note' => (!empty($d['cancelled_at']) ? 'ยกเลิกเมื่อ ' . $dateTime($d['cancelled_at']) . ' เหตุผล: ' . $d['cancel_reason'] . ' · ' : '') . sprintf(
                         'ผู้ฝาก %s - %s · ผู้รับคืน %s · วันที่คืน %s · รวม %s ชิ้น · บันทึกโดย %s',
                         $d['code'], $d['consignor'], $d['recipient_name'] ?: '-', $dateTime($d['created_at']),
                         number_format((int) $d['total_qty']), $d['full_name'] ?? '-'

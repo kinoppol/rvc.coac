@@ -142,6 +142,22 @@ class ReceiveController
         return $this->json($response, ['data' => $doc]);
     }
 
+    /** Admin only: cancel a whole receive document (nothing of it sold or returned yet) with a reason. */
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่ยกเลิกการรับฝากได้', 403);
+        }
+        $reason = (string) (((array) $request->getParsedBody())['reason'] ?? '');
+        try {
+            $doc = self::service(Db::connection())->cancel((int) $args['id'], $reason, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $doc]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();

@@ -161,6 +161,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('receive.create'));
     $group->get('/receive/docs/{id:[0-9]+}', [ReceiveController::class, 'document'])
         ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/docs/{id:[0-9]+}/cancel', [ReceiveController::class, 'cancel'])
+        ->add(new RoleGuard('receive.create'));
     $group->put('/receive/items/{id:[0-9]+}', [ReceiveController::class, 'updateItem'])
         ->add(new RoleGuard('receive.create'));
     $group->get('/receive/requests',[ReceiveController::class, 'requests'])
@@ -170,6 +172,12 @@ $app->group('/api', function ($group) {
 
     $group->get('/returns/stock/{id}', [ReturnController::class, 'stockFor']);
     $group->post('/returns', [ReturnController::class, 'store'])
+        ->add(new RoleGuard('return.create'));
+    $group->get('/returns/docs', [ReturnController::class, 'documents'])
+        ->add(new RoleGuard('return.create'));
+    $group->get('/returns/docs/{id:[0-9]+}', [ReturnController::class, 'document'])
+        ->add(new RoleGuard('return.create'));
+    $group->post('/returns/docs/{id:[0-9]+}/cancel', [ReturnController::class, 'cancel'])
         ->add(new RoleGuard('return.create'));
 
     $group->get('/sales/products', [SalesController::class, 'searchProducts']);

@@ -143,7 +143,7 @@ class ReceiveService
     {
         $like = '%' . addcslashes($q, '%_\\') . '%';
         $stmt = $this->db->prepare(
-            "SELECT rd.id, rd.doc_no, rd.created_at, rd.total_qty, rd.total_value, rd.listing_fee_total,
+            "SELECT rd.id, rd.doc_no, rd.created_at, rd.total_qty, rd.total_value, rd.listing_fee_total, rd.cancelled_at, rd.cancel_reason,
                     c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name,
                     (SELECT COUNT(*) FROM receive_items ri WHERE ri.receive_document_id = rd.id) AS items,
                     (SELECT GROUP_CONCAT(p.name ORDER BY ri.id SEPARATOR ', ') FROM receive_items ri JOIN products p ON p.id = ri.product_id
@@ -164,8 +164,9 @@ class ReceiveService
     public function document(int $id): ?array
     {
         $stmt = $this->db->prepare(
-            'SELECT rd.*, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name
+            'SELECT rd.*, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name, cu.full_name AS cancelled_by_name
              FROM receive_documents rd JOIN consignors c ON c.id = rd.consignor_id LEFT JOIN users u ON u.id = rd.user_id
+             LEFT JOIN users cu ON cu.id = rd.cancelled_by
              WHERE rd.id = ?'
         );
         $stmt->execute([$id]);
@@ -186,6 +187,80 @@ class ReceiveService
     }
 
     /**
+     * Admin: cancels a whole receive document with a reason. Only while none of its lots has
+     * been sold, returned or adjusted (every lot still holds exactly what was received). The
+     * lots drop to zero stock (the records stay), and a charged listing fee goes back to the
+     * consignor as a 'listing_fee_refund' ledger entry.
+     */
+    public function cancel(int $docId, string $reason, int $userId, ?string $ip): array
+    {
+        $reason = mb_substr(trim($reason), 0, 255);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่ยกเลิก');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM receive_documents WHERE id = ? FOR UPDATE');
+            $stmt->execute([$docId]);
+            $doc = $stmt->fetch();
+            if (!$doc) {
+                throw new \RuntimeException('ไม่พบใบรับฝาก');
+            }
+            if (!array_key_exists('cancelled_at', $doc)) {
+                throw new \RuntimeException('ยังยกเลิกใบรับฝากไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0050) ก่อน');
+            }
+            if ($doc['cancelled_at'] !== null) {
+                throw new \RuntimeException('ใบรับฝากนี้ถูกยกเลิกไปแล้ว');
+            }
+
+            $stmt = $this->db->prepare(
+                'SELECT ri.qty, ri.listing_fee_charged, p.id AS product_id, p.name, p.qty_sold, p.qty_returned, p.qty_stock, p.listing_fee_refunded
+                 FROM receive_items ri JOIN products p ON p.id = ri.product_id
+                 WHERE ri.receive_document_id = ? FOR UPDATE'
+            );
+            $stmt->execute([$docId]);
+            $lots = $stmt->fetchAll();
+            $refund = 0.0;
+            foreach ($lots as $lot) {
+                if ((int) $lot['qty_sold'] !== 0 || (int) $lot['qty_returned'] !== 0 || (int) $lot['qty_stock'] !== (int) $lot['qty']) {
+                    throw new \RuntimeException("ยกเลิกไม่ได้: \"{$lot['name']}\" มีการขาย คืน หรือปรับยอดไปแล้ว (ให้คืนสินค้าหรือแก้ไขรายการแทน)");
+                }
+                if (!(int) $lot['listing_fee_refunded']) {
+                    $refund += (float) $lot['listing_fee_charged'];
+                }
+            }
+
+            $zero = $this->db->prepare('UPDATE products SET qty_received = 0, qty_stock = 0, listing_fee_refunded = 1, updated_at = NOW() WHERE id = ?');
+            foreach ($lots as $lot) {
+                $zero->execute([$lot['product_id']]);
+            }
+            $this->db->prepare('UPDATE receive_documents SET cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ? WHERE id = ?')
+                ->execute([$userId, $reason, $docId]);
+
+            if ($refund > 0) {
+                $this->ledger->append(
+                    (int) $doc['consignor_id'],
+                    'listing_fee_refund',
+                    mb_substr("คืนค่าทำข้อมูล (ยกเลิกใบรับฝาก {$doc['doc_no']}): {$reason}", 0, 255),
+                    $this->docs->next('LFR', 'ledger_entries', 'ref_no'),
+                    round($refund, 2),
+                    0,
+                    $userId
+                );
+            }
+
+            $this->audit->log('receive_documents', $docId, 'cancel',
+                ['doc_no' => $doc['doc_no'], 'total_qty' => (int) $doc['total_qty'], 'total_value' => (float) $doc['total_value']],
+                ['cancel_reason' => $reason, 'listing_fee_refund' => round($refund, 2)], $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        return $this->document($docId);
+    }
+
+    /**
      * Admin correction of one received line: name, barcode, quantity, prices and dates.
      * The quantity moves the lot's stock by the difference (it cannot drop below what has
      * already left the lot). A new price applies to sales from now on only: the line keeps
@@ -202,6 +277,11 @@ class ReceiveService
             $item = $stmt->fetch();
             if (!$item) {
                 throw new \RuntimeException('ไม่พบรายการรับฝาก');
+            }
+            $stmt = $this->db->prepare('SELECT cancelled_at FROM receive_documents WHERE id = ?');
+            $stmt->execute([$item['receive_document_id']]);
+            if ($stmt->fetchColumn() !== null) {
+                throw new \RuntimeException('ใบรับฝากนี้ถูกยกเลิกแล้ว แก้ไขรายการไม่ได้');
             }
             $productId = (int) $item['product_id'];
             $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');

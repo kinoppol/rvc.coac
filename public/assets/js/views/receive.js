@@ -461,14 +461,14 @@ export async function render(container, { permissions = [], user } = {}) {
           <div class="table-wrap"><table>
             <thead><tr><th>เลขที่</th><th>วันที่รับฝาก</th><th>ผู้ฝากขาย</th><th>สินค้า</th><th class="num">ชิ้น</th><th class="num">มูลค่า (ราคาขาย)</th><th></th></tr></thead>
             <tbody>${docs.map((d) => `
-              <tr>
-                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(d.doc_no)}</td>
+              <tr${d.cancelled_at ? ' style="opacity:.6"' : ''}>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(d.doc_no)}${d.cancelled_at ? '<div><span class="pill muted" style="font-size:11px">ยกเลิกแล้ว</span></div>' : ''}</td>
                 <td style="font-size:12.5px;white-space:nowrap">${fmtDateTime(d.created_at)}</td>
                 <td>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</td>
-                <td style="font-size:12.5px;max-width:320px">${escapeHtml(d.names || '')}<div class="muted">${Number(d.items)} รายการ</div></td>
+                <td style="font-size:12.5px;max-width:320px">${escapeHtml(d.names || '')}<div class="muted">${Number(d.items)} รายการ</div>${d.cancelled_at && d.cancel_reason ? `<div class="muted" style="font-size:11.5px">เหตุผลที่ยกเลิก: ${escapeHtml(d.cancel_reason)}</div>` : ''}</td>
                 <td class="num">${Number(d.total_qty)}</td>
                 <td class="num">${money(d.total_value)}</td>
-                <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin ? 'ดู / แก้ไข' : 'ดู'}</button></td>
+                <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin && !d.cancelled_at ? 'ดู / แก้ไข' : 'ดู'}</button></td>
               </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsQ ? 'ไม่พบใบรับฝากที่ค้นหา' : 'ยังไม่มีรายการรับฝาก'}</td></tr>`}
             </tbody>
           </table></div>
@@ -503,6 +503,9 @@ export async function render(container, { permissions = [], user } = {}) {
         const m = docModal;
         const d = m.doc;
         const ed = m.edit;
+        const canEdit = isAdmin && !d.cancelled_at;
+        // Cancellable while every lot still holds exactly what was received.
+        const canCancel = canEdit && d.items.every((it) => Number(it.qty_sold) === 0 && Number(it.qty_returned) === 0 && Number(it.qty_stock) === Number(it.qty));
         const fee = (it) => Number(it.sale_price) - Number(it.cost_price);
         // Prices as received; a later price change shows underneath (it applies to sales from then on).
         const now = (it, recv, cur) => Math.abs(Number(it[recv]) - Number(it[cur])) >= 0.005
@@ -511,10 +514,11 @@ export async function render(container, { permissions = [], user } = {}) {
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" aria-label="ใบรับฝาก ${escapeHtml(d.doc_no)}" style="width:1100px">
             <div class="modal-head">
-              <h2>ใบรับฝาก ${escapeHtml(d.doc_no)}</h2>
+              <h2>ใบรับฝาก ${escapeHtml(d.doc_no)}${d.cancelled_at ? ' <span class="pill muted">ยกเลิกแล้ว</span>' : ''}</h2>
               <button type="button" class="modal-close" data-doc-close aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
+              ${d.cancelled_at ? `<div class="error-box" style="margin-bottom:12px">ยกเลิกเมื่อ ${fmtDateTime(d.cancelled_at)}${d.cancelled_by_name ? ` โดย ${escapeHtml(d.cancelled_by_name)}` : ''} · เหตุผล: ${escapeHtml(d.cancel_reason || '-')}</div>` : ''}
               <div class="stat-row" style="margin-bottom:14px;font-size:13.5px">
                 <div><div class="muted">ผู้ฝากขาย</div><b>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</b></div>
                 <div><div class="muted">วันที่รับฝาก</div><b>${fmtDateTime(d.created_at)}</b><div class="muted">โดย ${escapeHtml(d.user_name || '-')}</div></div>
@@ -531,17 +535,21 @@ export async function render(container, { permissions = [], user } = {}) {
                     <td class="num">${money(it.sale_price)}${now(it, 'sale_price', 'current_price')}</td>
                     <td class="num">${money(fee(it))}</td>
                     <td style="font-size:12.5px;white-space:nowrap">${it.mfg_date ? fmtDate(it.mfg_date) : '-'}<div class="muted">${it.expiry_date ? fmtDate(it.expiry_date) : 'ไม่ระบุ'}</div></td>
-                    <td style="text-align:right">${isAdmin ? `<button type="button" class="btn sm secondary" data-item-edit="${it.id}" ${ed ? 'disabled' : ''}>แก้ไข</button>` : ''}</td>
+                    <td style="text-align:right">${canEdit ? `<button type="button" class="btn sm secondary" data-item-edit="${it.id}" ${ed ? 'disabled' : ''}>แก้ไข</button>` : ''}</td>
                   </tr>
                   ${ed && ed.id === Number(it.id) ? `<tr><td colspan="8" style="background:var(--surface2)">${editHtml(it, ed)}</td></tr>` : ''}`).join('')}
                 </tbody>
               </table></div>
-              ${isAdmin ? '<div class="muted" style="font-size:12px;margin-top:8px">ผู้ดูแลระบบแก้ไขรายการได้: จำนวนที่แก้จะปรับสต๊อกของล็อตตามส่วนต่าง · ปรับราคา (เช่น ลดราคา) มีผลกับการขายหลังบันทึกเท่านั้น ราคาตอนรับฝาก บิลที่ขายไปแล้ว และยอดในสมุดบัญชีผู้ฝากไม่เปลี่ยน · ค่าทำข้อมูลที่เก็บไปแล้วไม่เปลี่ยน</div>' : ''}
+              ${canEdit ? '<div class="muted" style="font-size:12px;margin-top:8px">ผู้ดูแลระบบแก้ไขรายการได้: จำนวนที่แก้จะปรับสต๊อกของล็อตตามส่วนต่าง · ปรับราคา (เช่น ลดราคา) มีผลกับการขายหลังบันทึกเท่านั้น ราคาตอนรับฝาก บิลที่ขายไปแล้ว และยอดในสมุดบัญชีผู้ฝากไม่เปลี่ยน · ค่าทำข้อมูลที่เก็บไปแล้วไม่เปลี่ยน</div>' : ''}
             </div>
-            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-doc-close>ปิด</button></div>
+            <div class="modal-foot">
+              ${canEdit ? `<button type="button" class="btn danger" id="rc-doc-cancel" ${canCancel && !ed && !m.busy ? '' : 'disabled'} title="${canCancel ? 'ยกเลิกใบรับฝากทั้งใบ' : 'ยกเลิกไม่ได้: มีการขาย คืน หรือปรับยอดไปแล้ว'}">ยกเลิกการรับฝาก</button>` : '<span></span>'}
+              <button type="button" class="btn secondary" data-doc-close>ปิด</button>
+            </div>
           </div>
         </div>`;
         m.el.querySelectorAll('[data-doc-close]').forEach((b) => b.addEventListener('click', closeDoc));
+        m.el.querySelector('#rc-doc-cancel')?.addEventListener('click', cancelDoc);
         m.el.querySelectorAll('[data-item-edit]').forEach((b) => b.addEventListener('click', () => {
             const it = d.items.find((x) => Number(x.id) === Number(b.dataset.itemEdit));
             m.edit = {
@@ -571,6 +579,27 @@ export async function render(container, { permissions = [], user } = {}) {
         });
         m.el.querySelector('#ef-cancel').addEventListener('click', () => { m.edit = null; m.error = null; drawDoc(); });
         m.el.querySelector('#ef-save').addEventListener('click', saveItem);
+    }
+
+    async function cancelDoc() {
+        const m = docModal;
+        const d = m.doc;
+        const fee = Number(d.listing_fee_total);
+        const reason = await promptDialog(
+            `สินค้า ${d.items.length} รายการ (${Number(d.total_qty)} ชิ้น) ของ ${d.consignor_name} จะถูกตัดออกจากสต๊อก${fee > 0 ? ` และคืนค่าทำข้อมูล ฿${money(fee)} เข้าบัญชีผู้ฝาก` : ''} (ใบรับฝากเดิมยังอยู่ แสดงว่ายกเลิกแล้ว)`,
+            { title: `ยกเลิกใบรับฝาก ${d.doc_no}?`, okText: 'ยกเลิกการรับฝาก', placeholder: 'เหตุผลที่ยกเลิก (จำเป็น)', required: true, danger: true }
+        );
+        if (reason === null || reason === undefined || !String(reason).trim() || docModal !== m) return;
+        m.busy = true;
+        drawDoc();
+        try {
+            m.doc = (await api.post(`/receive/docs/${d.id}/cancel`, { reason: String(reason).trim() })).data;
+            loadDocs();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        m.busy = false;
+        drawDoc();
     }
 
     function feeHint(ed) {

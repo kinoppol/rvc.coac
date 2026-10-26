@@ -24,6 +24,41 @@ class ReturnController
         return $this->json($response, ['data' => $repo->inStockForConsignor((int) $args['id'])]);
     }
 
+    private static function service(\PDO $db): ReturnService
+    {
+        $audit = new AuditLogger($db);
+        return new ReturnService($db, new ProductRepo($db, $audit), new DocumentNumberService($db), $audit);
+    }
+
+    /** Return documents already saved (?q= doc no., consignor, recipient or product name). */
+    public function documents(Request $request, Response $response): Response
+    {
+        $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        return $this->json($response, ['data' => self::service(Db::connection())->documents($q)]);
+    }
+
+    public function document(Request $request, Response $response, array $args): Response
+    {
+        $doc = self::service(Db::connection())->document((int) $args['id']);
+        return $doc ? $this->json($response, ['data' => $doc]) : $this->error($response, 'ไม่พบใบคืนสินค้า', 404);
+    }
+
+    /** Admin only: cancel a return with a reason (its goods go back into stock). */
+    public function cancel(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่ยกเลิกการคืนสินค้าได้', 403);
+        }
+        $reason = (string) (((array) $request->getParsedBody())['reason'] ?? '');
+        try {
+            $doc = self::service(Db::connection())->cancel((int) $args['id'], $reason, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $doc]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();
