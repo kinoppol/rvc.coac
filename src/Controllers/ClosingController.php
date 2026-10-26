@@ -92,6 +92,27 @@ class ClosingController
         return $this->json($response, ['data' => $service->report($date)['skips']]);
     }
 
+    /** Whether a purchase of the day was paid from the drawer (body: from_drawer). */
+    public function purchaseDrawer(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        $date = $this->dateParam($args['date']);
+        $user = $request->getAttribute('user');
+        $service = $this->service($db);
+        if ($date === null) {
+            return $this->error($response, 'วันที่ไม่ถูกต้อง', 422);
+        }
+        if (!$this->canManage($db, $user) && !$service->isOnDuty((int) $user['id'], $date)) {
+            return $this->error($response, 'ระบุได้เฉพาะผู้มีเวรสรุปบัญชีวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ', 403);
+        }
+        try {
+            $service->setPurchaseDrawer($date, (int) $args['id'], !empty(((array) $request->getParsedBody())['from_drawer']), (int) $user['id'], $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date)]);
+    }
+
     public function verify(Request $request, Response $response, array $args): Response
     {
         $date = $this->dateParam($args['date']);

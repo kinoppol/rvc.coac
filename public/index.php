@@ -222,6 +222,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}', [ClosingController::class, 'submit'])
         ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}/purchases/{id:[0-9]+}', [ClosingController::class, 'purchaseDrawer'])
+        ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}/skip', [ClosingController::class, 'skip'])
         ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}/verify', [ClosingController::class, 'verify'])

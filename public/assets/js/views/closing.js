@@ -226,6 +226,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             ${line('เงินในลิ้นชักตอนเปิดร้าน', `฿ ${money(dr.opening_cash)}`)}
             ${line('+ ขายได้เป็นเงินสด', `฿ ${money(f.cash_sales)}`)}
             ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก', `฿ ${money(f.cash_out)}`) : ''}
+            ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 6)</span>', `฿ ${money(f.purchase_out)}`) : ''}
             ${line('<b>เงินสดที่ควรมีในลิ้นชัก</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
             ${dr.counted_cash !== null ? `
               ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
@@ -312,9 +313,17 @@ export async function render(container, { user, permissions = [] } = {}) {
               <section class="card card-pad" style="margin-top:14px">
                 <h3 style="margin:0 0 8px">6. การเบิกเงินซื้อสินค้าอื่น ๆ เข้าร้าน</h3>
                 ${m.purchases.rows.length ? `<table class="cl-t"><tbody>
-                  ${m.purchases.rows.map((p) => line(`${escapeHtml(p.supplier_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.funding === 'profit' ? 'จากกำไร' : 'จากงบลงทุน'}</span>`, `฿ ${money(p.total)}`)).join('')}
+                  ${m.purchases.rows.map((p) => `<tr><td>${escapeHtml(p.supplier_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.funding === 'profit' ? 'จากกำไร' : 'จากงบลงทุน'}</span>
+                      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px">
+                        ${p.from_drawer ? '<span class="pill" style="font-size:11.5px">จ่ายจากเงินในลิ้นชักวันนี้</span>' : '<span class="pill ok" style="font-size:11.5px">ไม่ได้ใช้เงินจากลิ้นชักวันนี้</span>'}
+                        ${p.flagged_by ? `<span class="muted" style="font-size:11px">ระบุโดย ${escapeHtml(p.flagged_by)}</span>` : ''}
+                        ${m.can_submit ? `<button type="button" class="btn sm secondary no-print" data-pdrawer="${p.id}" data-on="${p.from_drawer ? 0 : 1}">${p.from_drawer ? 'ไม่ได้ใช้เงินจากลิ้นชัก' : 'จ่ายจากลิ้นชักวันนี้'}</button>` : ''}
+                      </div></td>
+                    <td class="num" style="vertical-align:top;${p.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(p.total)}</td></tr>`).join('')}
                   ${line('<b>รวม</b>', `<b>฿ ${money(m.purchases.total)}</b>`)}
-                </tbody></table>` : '<div class="muted">ไม่มีการซื้อสินค้าเข้าร้านวันนี้</div>'}
+                  ${line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักจากเงินที่ควรมีในลิ้นชัก)</span>', `฿ ${money(m.purchases.from_drawer)}`)}
+                </tbody></table>
+                <div class="muted" style="font-size:12px;margin-top:6px">ปกติถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น (เช่น เงินที่เบิกจากกำไรวันก่อน) กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>` : '<div class="muted">ไม่มีการซื้อสินค้าเข้าร้านวันนี้</div>'}
                 ${stepActions(m, 'purchases', !m.purchases.rows.length, 'ยังไม่มีการบันทึกซื้อสินค้า')}
               </section>
 
@@ -345,7 +354,7 @@ export async function render(container, { user, permissions = [] } = {}) {
               <label class="field">เลขที่ใบเสร็จ / ใบรับเงิน <input data-f="receipt_no" maxlength="60" value="${escapeHtml(m.form.receipt_no)}"></label>
             </div>
             <label class="field" style="margin-top:10px">หมายเหตุ <span class="muted" style="font-weight:400">(จำเป็นถ้ายอดเงินไม่ตรง)</span><textarea data-f="note" rows="2" maxlength="500">${escapeHtml(m.form.note)}</textarea></label>
-            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก หักเงินตั้งต้นที่คงไว้ในลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้ยอดขายเงินสดหักค่าแรงที่จ่ายจากลิ้นชัก)</div>
+            <div class="muted" style="font-size:12px;margin-top:6px">ยอดที่ควรส่ง = เงินที่นับได้ตอนปิดยอดลิ้นชัก หักเงินตั้งต้นที่คงไว้ในลิ้นชัก (ถ้ายังไม่ปิดยอด ใช้ยอดขายเงินสด หักค่าแรงและค่าสินค้าที่จ่ายจากลิ้นชัก)</div>
             ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
             <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
               ${c ? '<button type="button" class="btn secondary" id="cl-cancel">ยกเลิก</button>' : ''}
@@ -392,6 +401,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                 : `<span style="${isDiff(inp.value, a.expected) ? 'color:var(--bad);font-weight:600' : ''}">${signed(Number(inp.value) - a.expected)}</span>`;
         }));
         m.el.querySelectorAll('[data-skip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.skip, true)));
+        m.el.querySelectorAll('[data-pdrawer]').forEach((b) => b.addEventListener('click', () => purchaseDrawer(Number(b.dataset.pdrawer), b.dataset.on === '1')));
         m.el.querySelectorAll('[data-unskip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.unskip, false)));
         m.el.querySelectorAll('a[href^="#/"]').forEach((a) => a.addEventListener('click', closeDay));
         m.el.querySelector('#cl-save')?.addEventListener('click', save);
@@ -419,6 +429,22 @@ export async function render(container, { user, permissions = [] } = {}) {
     }
 
     const docModalGone = (m) => modal !== m;
+
+    /** Paid from today's drawer or with other money: the drawer and the cash to send follow. */
+    async function purchaseDrawer(id, fromDrawer) {
+        const m = modal;
+        try {
+            const r = (await api.post(`/closing/${m.date}/purchases/${id}`, { from_drawer: fromDrawer })).data;
+            if (docModalGone(m)) return;
+            const keepSend = m.editing && Number(m.form.cash_sent) === Number(m.figures.expected_send);
+            Object.assign(m, r);
+            if (keepSend) m.form.cash_sent = String(m.figures.expected_send); // the suggested amount follows
+            load();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        drawDay();
+    }
 
     function printReport() {
         const body = modal.el.querySelector('#cl-report').cloneNode(true);

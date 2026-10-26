@@ -95,8 +95,50 @@ class ClosingService
     }
 
     /**
+     * Goods bought for the store dated that day. Each is paid from the day's drawer unless
+     * marked as paid with other money (from_drawer = 0, e.g. profit taken out earlier).
+     */
+    public function purchasesOf(string $date): array
+    {
+        $sql = "SELECT pd.id, pd.doc_no, pd.supplier_name, pd.receipt_no, pd.total, pd.funding, %s AS from_drawer, %s AS flagged_by
+                FROM purchase_documents pd %s
+                WHERE pd.status = 'active' AND pd.funding <> 'stock' AND COALESCE(pd.receipt_date, DATE(pd.created_at)) = ? ORDER BY pd.id";
+        try {
+            $stmt = $this->db->prepare(sprintf($sql, 'COALESCE(f.from_drawer, 1)', 'u.full_name',
+                'LEFT JOIN closing_purchase_flags f ON f.purchase_id = pd.id LEFT JOIN users u ON u.id = f.user_id'));
+            $stmt->execute([$date]);
+        } catch (\PDOException $e) {
+            try {
+                $stmt = $this->db->prepare(sprintf($sql, '1', 'NULL', '')); // migration 0053 not run yet
+                $stmt->execute([$date]);
+            } catch (\PDOException $e) {
+                return []; // purchases not set up
+            }
+        }
+        return array_map(fn ($r) => ['from_drawer' => (bool) $r['from_drawer']] + $r, $stmt->fetchAll());
+    }
+
+    /** Marks whether a purchase was paid from its day's drawer. */
+    public function setPurchaseDrawer(string $date, int $purchaseId, bool $fromDrawer, int $userId, ?string $ip): void
+    {
+        if (!in_array($purchaseId, array_map(fn ($p) => (int) $p['id'], $this->purchasesOf($date)), true)) {
+            throw new \RuntimeException('ไม่พบรายการซื้อสินค้าของวันนี้');
+        }
+        try {
+            $this->db->prepare(
+                'INSERT INTO closing_purchase_flags (purchase_id, from_drawer, user_id, updated_at) VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE from_drawer = VALUES(from_drawer), user_id = VALUES(user_id), updated_at = NOW()'
+            )->execute([$purchaseId, $fromDrawer ? 1 : 0, $userId]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('ยังระบุไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0053) ก่อน');
+        }
+        $this->audit->log('purchase_documents', $purchaseId, 'update', null, ['closing_date' => $date, 'from_drawer' => $fromDrawer], $userId, $ip);
+    }
+
+    /**
      * The day's figures as the system has them now: sales per payment method, cash paid
-     * out of the drawer, and the cash to hand over (the drawer's float stays in the drawer).
+     * out of the drawer (wages, goods bought), and the cash to hand over (the drawer's
+     * float stays in the drawer).
      */
     public function figures(string $date): array
     {
@@ -106,11 +148,12 @@ class ClosingService
         $transfer = $by(array_filter($s['methods'], fn ($m) => in_array($m['method'], ['transfer', 'qr'], true)));
         $card = $by(array_filter($s['methods'], fn ($m) => $m['method'] === 'card'));
         $cashOut = round((float) $s['cash_out'], 2);
+        $purchaseOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['total'] : 0, $this->purchasesOf($date))), 2);
         $drawer = $s['drawer'];
         $counted = $drawer && $drawer['counted_cash'] !== null ? (float) $drawer['counted_cash'] : null;
         $expected = $counted !== null
             ? round($counted - (float) $drawer['opening_cash'], 2) // what was actually in the drawer at closing, less the float
-            : round($cash - $cashOut, 2);
+            : round($cash - $cashOut - $purchaseOut, 2);
         return [
             'date' => $date,
             'total_sales' => round((float) $s['total']['amount'], 2),
@@ -120,11 +163,12 @@ class ClosingService
             'card_sales' => $card,
             'unknown_sales' => round((float) $s['unknown']['amount'], 2),
             'cash_out' => $cashOut,
+            'purchase_out' => $purchaseOut,
             'methods' => $s['methods'],
             'drawer' => $drawer ? [
                 'opening_cash' => (float) $drawer['opening_cash'],
-                // Cash that should be in the drawer now: the float, plus cash sales, less wages paid from it.
-                'should_have' => round((float) $drawer['opening_cash'] + $cash - $cashOut, 2),
+                // Cash that should be in the drawer now: the float, plus cash sales, less wages and goods paid from it.
+                'should_have' => round((float) $drawer['opening_cash'] + $cash - $cashOut - $purchaseOut, 2),
                 'counted_cash' => $counted,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
                 'cash_diff' => $drawer['cash_diff'] !== null ? (float) $drawer['cash_diff'] : null,
@@ -309,11 +353,7 @@ class ClosingService
         );
         $pending = $q("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS amount FROM withdrawals WHERE status = 'pending'", [])[0]
             ?? ['n' => 0, 'amount' => 0];
-        $purchases = $q(
-            "SELECT doc_no, supplier_name, receipt_no, total, funding FROM purchase_documents
-             WHERE status = 'active' AND funding <> 'stock' AND COALESCE(receipt_date, DATE(created_at)) = ? ORDER BY id",
-            [$date]
-        );
+        $purchases = $this->purchasesOf($date);
         $skips = [];
         foreach ($q('SELECT s.item, s.note, s.created_at, u.full_name AS user_name FROM closing_skips s LEFT JOIN users u ON u.id = s.user_id WHERE s.business_date = ?', [$date]) as $s) {
             $skips[$s['item']] = $s;
@@ -327,7 +367,7 @@ class ClosingService
             'payouts' => ['rows' => $payouts, 'total' => $sum($payouts, 'amount'),
                 'cash' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'cash'), 'amount'),
                 'pending_count' => (int) $pending['n'], 'pending_amount' => round((float) $pending['amount'], 2)],
-            'purchases' => ['rows' => $purchases, 'total' => $sum($purchases, 'total')],
+            'purchases' => ['rows' => $purchases, 'total' => $sum($purchases, 'total'), 'from_drawer' => $f['purchase_out']],
             'skips' => (object) $skips,
         ];
     }
