@@ -757,7 +757,6 @@ class ReportService
                 "SELECT d.business_date AS date, d.opening_cash,
                         (SELECT COALESCE(SUM(sp.amount), 0) FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id
                           WHERE s.business_date = d.business_date AND sp.method = 'cash') AS cash_sales,
-                        (SELECT COALESCE(SUM(w.amount), 0) FROM wage_payments w WHERE w.drawer_date = d.business_date AND w.cancelled_at IS NULL) AS wage_cost,
                         d.counted_cash, d.cash_diff,
                         IF(d.late_open, 'ระบุหลังเริ่มขาย', 'ก่อนขาย') AS open_status,
                         (SELECT COUNT(*) FROM cash_drawer_events e WHERE e.business_date = d.business_date AND e.event = 'skip') AS skip_count,
@@ -773,8 +772,9 @@ class ReportService
             return []; // migrations 0033 / 0034 not run yet
         }
         foreach ($rows as &$r) {
-            $expected = round((float) $r['opening_cash'] + (float) $r['cash_sales'] - (float) $r['wage_cost'], 2);
-            $r = array_slice($r, 0, 4, true) + ['expected_cash' => $expected] + array_slice($r, 4, null, true);
+            // Closing counts the sales only: wages paid from the drawer come out afterwards.
+            $expected = round((float) $r['opening_cash'] + (float) $r['cash_sales'], 2);
+            $r = array_slice($r, 0, 3, true) + ['expected_cash' => $expected] + array_slice($r, 3, null, true);
         }
         return $rows;
     }

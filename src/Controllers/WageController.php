@@ -35,8 +35,8 @@ class WageController
             'staff' => $service->staff(),
             'types' => WageService::TYPES,
             'methods' => WageService::METHODS,
-            // Paying cash out of the drawer needs today's drawer counted and still open.
-            'drawer_open' => $row !== false && $row['closed_at'] === null,
+            // Paying cash out of the drawer needs today's drawer counted (closing it does not matter).
+            'drawer_open' => $row !== false,
         ]]);
     }
 

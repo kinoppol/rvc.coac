@@ -151,8 +151,11 @@ class ClosingService
         $purchaseOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['total'] : 0, $this->purchasesOf($date))), 2);
         $drawer = $s['drawer'];
         $counted = $drawer && $drawer['counted_cash'] !== null ? (float) $drawer['counted_cash'] : null;
-        $expected = $counted !== null
-            ? round($counted - (float) $drawer['opening_cash'], 2) // what was actually in the drawer at closing, less the float
+        // Closing counts the sales only; wages and goods paid from the drawer come out of that count afterwards.
+        $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash, 2) : null;
+        $afterPay = $drawer ? round(($counted ?? $atClose) - $cashOut - $purchaseOut, 2) : null;
+        $expected = $drawer
+            ? round($afterPay - (float) $drawer['opening_cash'], 2) // what is left in the drawer, less the float
             : round($cash - $cashOut - $purchaseOut, 2);
         return [
             'date' => $date,
@@ -167,8 +170,10 @@ class ClosingService
             'methods' => $s['methods'],
             'drawer' => $drawer ? [
                 'opening_cash' => (float) $drawer['opening_cash'],
-                // Cash that should be in the drawer now: the float, plus cash sales, less wages and goods paid from it.
-                'should_have' => round((float) $drawer['opening_cash'] + $cash - $cashOut - $purchaseOut, 2),
+                // Cash that should be in the drawer at closing: the float plus cash sales.
+                'should_have' => $atClose,
+                // Left in the drawer after wages and goods were paid from it (from the count once closed).
+                'after_pay' => $afterPay,
                 'counted_cash' => $counted,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
                 'cash_diff' => $drawer['cash_diff'] !== null ? (float) $drawer['cash_diff'] : null,

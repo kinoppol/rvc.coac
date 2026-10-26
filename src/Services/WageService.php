@@ -65,7 +65,8 @@ class WageService
         $units = isset($d['units']) && $d['units'] !== '' && $type !== 'fixed' ? round((float) $d['units'], 2) : null;
         $rate = isset($d['rate']) && $d['rate'] !== '' && $type !== 'fixed' ? round((float) $d['rate'], 2) : null;
 
-        // Cash out of the drawer: only today's drawer, while it is counted and not yet closed.
+        // Cash out of the drawer: only today's drawer once it is counted, before or after closing (which
+        // counts the sales only). It lowers the cash to hand over in the daily account summary.
         $drawerDate = null;
         if (!empty($d['from_drawer'])) {
             if ($method !== 'cash') {
@@ -79,9 +80,6 @@ class WageService
             $row = $drawer->fetch();
             if (!$row) {
                 throw new \RuntimeException('วันนี้ยังไม่ได้ระบุเงินในลิ้นชัก จึงจ่ายจากลิ้นชักไม่ได้');
-            }
-            if ($row['closed_at'] !== null) {
-                throw new \RuntimeException('ปิดยอดลิ้นชักของวันนี้แล้ว จึงจ่ายจากลิ้นชักไม่ได้');
             }
             $drawerDate = $drawerDay;
         }
@@ -128,10 +126,7 @@ class WageService
         if ($w['drawer_date'] !== null) {
             $this->db->prepare(
                 'INSERT INTO cash_drawer_events (business_date, user_id, subject_user_id, event, amount, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-            )->execute([$w['drawer_date'], $userId, $w['user_id'], 'wage_cancel', $w['amount'], mb_substr("ยกเลิก {$w['doc_no']}: {$reason}", 0, 500), date('Y-m-d H:i:s')]);
-            // A day already closed: its expected cash and difference follow the cancellation.
-            (new CashDrawerService($this->db, $this->audit))->refreshClose((string) $w['drawer_date']);
-        }
+            )->execute([$w['drawer_date'], $userId, $w['user_id'], 'wage_cancel', $w['amount'], mb_substr("ยกเลิก {$w['doc_no']}: {$reason}", 0, 500), date('Y-m-d H:i:s')]);        }
         $this->audit->log('wage_payments', $id, 'cancel', ['cancelled_at' => null], ['cancel_reason' => $reason], $userId, $ip);
     }
 

@@ -168,7 +168,8 @@ class CashDrawerService
         if ($counted < 0) {
             throw new \RuntimeException('จำนวนเงินต้องไม่ติดลบ');
         }
-        $expected = round((float) $drawer['opening_cash'] + $this->cashSales($date) - WageService::drawerOut($this->db, $date), 2);
+        // Closing is the end of selling and the count only: wages and consignor payouts come out afterwards.
+        $expected = round((float) $drawer['opening_cash'] + $this->cashSales($date), 2);
         $diff = round($counted - $expected, 2);
         $note = $note !== null ? mb_substr(trim($note), 0, 500) : null;
         $this->db->prepare(
@@ -297,8 +298,8 @@ class CashDrawerService
             'date' => $date,
             'drawer' => $drawer,
             'cash_sales' => $cashSales,
-            'cash_out' => $cashOut, // wages paid out of the drawer
-            'expected_cash' => $drawer ? round((float) $drawer['opening_cash'] + $cashSales - $cashOut, 2) : null,
+            'cash_out' => $cashOut, // wages paid out of the drawer (after closing, not part of it)
+            'expected_cash' => $drawer ? round((float) $drawer['opening_cash'] + $cashSales, 2) : null,
             'methods' => $methods,
             'unknown' => ['sales' => (int) $other['n'], 'amount' => round((float) $other['amount'], 2)],
             'total' => ['sales' => (int) $other['all_sales'], 'amount' => round((float) $other['all_amount'], 2)],
@@ -385,7 +386,7 @@ class CashDrawerService
         $this->db->prepare(
             'UPDATE cash_drawers SET expected_cash = ROUND(opening_cash + ?, 2), cash_diff = ROUND(counted_cash - opening_cash - ?, 2)
              WHERE business_date = ? AND closed_at IS NOT NULL'
-        )->execute([$net = round($this->cashSales($date) - WageService::drawerOut($this->db, $date), 2), $net, $date]);
+        )->execute([$net = round($this->cashSales($date), 2), $net, $date]);
     }
 
     private function event(string $date, int $userId, string $event, ?float $amount, ?string $detail, ?int $subject = null): void

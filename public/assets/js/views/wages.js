@@ -78,7 +78,7 @@ export async function render(container) {
               <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:13.5px;${d.drawer_open ? 'cursor:pointer' : 'opacity:.6'}">
                 <input type="checkbox" id="w-drawer" ${form.from_drawer && d.drawer_open ? 'checked' : ''} ${d.drawer_open ? '' : 'disabled'}>
                 <span>จ่ายจากเงินในลิ้นชักวันนี้
-                  <span class="muted" style="display:block;font-size:12px">${d.drawer_open ? 'ยอดเงินที่ควรมีในลิ้นชักตอนปิดยอดจะลดลงตามจำนวนนี้' : 'ใช้ไม่ได้: วันนี้ยังไม่ได้ระบุเงินในลิ้นชัก หรือปิดยอดแล้ว'}</span></span>
+                  <span class="muted" style="display:block;font-size:12px">${d.drawer_open ? 'ไม่กระทบการปิดยอดลิ้นชัก แต่เงินสดที่ควรส่งในสรุปบัญชีรายวันจะลดลงตามจำนวนนี้' : 'ใช้ไม่ได้: วันนี้ยังไม่ได้ระบุเงินในลิ้นชัก'}</span></span>
               </label>` : ''}
             ${error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(error)}</div>` : ''}
             <div class="muted" style="font-size:12.5px;margin-top:10px">ค่าแรงบันทึกเป็นต้นทุนของกิจการ หักจากกำไรของร้าน</div>

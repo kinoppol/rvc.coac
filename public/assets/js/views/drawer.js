@@ -53,7 +53,7 @@ export async function render(container, { params = {} } = {}) {
           <div class="kpi"><div class="lbl">เงินสดจากการขาย</div><div class="val">฿ ${money(d.cash_sales)}</div>
             <div class="sub">รับเงินสดสุทธิหลังทอนเงิน</div></div>
           <div class="kpi"><div class="lbl">เงินสดที่ควรมีในลิ้นชัก</div><div class="val">${d.expected_cash !== null ? `฿ ${money(d.expected_cash)}` : '—'}</div>
-            <div class="sub">เงินตั้งต้น + เงินสดจากการขาย${d.cash_out ? ` − จ่ายค่าแรงจากลิ้นชัก ฿${money(d.cash_out)}` : ''}</div></div>
+            <div class="sub">เงินตั้งต้น + เงินสดจากการขาย (ไม่รวมการจ่ายค่าแรง / เงินผู้ฝากขาย)</div></div>
           <div class="kpi"><div class="lbl">ปิดยอด</div>
             ${closed ? `<div class="val">฿ ${money(dr.counted_cash)}</div>
               <div class="sub">${diffHtml(Number(dr.counted_cash) - Number(d.expected_cash))}<br>${escapeHtml(dr.closed_by_name || '-')} · ${escapeHtml(fmtDateTime(dr.closed_at))}
