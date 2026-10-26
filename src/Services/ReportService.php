@@ -28,7 +28,8 @@ class ReportService
         'store_gross_profit' => 'กำไรขั้นต้นสินค้าของร้าน', 'total_income' => 'รายได้รวมของร้าน', 'supply_cost' => 'ค่าวัสดุใช้ในร้าน',
         'wage_cost' => 'ค่าแรง', 'net_profit' => 'กำไรสุทธิ', 'stock_cost_value' => 'มูลค่าทุนคงเหลือ', 'stock_retail_value' => 'มูลค่าตามราคาขาย',
         'consignor_value' => 'มูลค่าที่ผู้ฝากจะได้', 'cash' => 'เงินสด', 'transfer' => 'โอนเงิน', 'qr' => 'QR-Code', 'card' => 'บัตรเครดิต',
-        'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'transfer_all' => 'เงินโอน (โอนเข้าบัญชี + QR-Code)', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
+        'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'transfer_all' => 'เงินโอน (โอนเข้าบัญชี + QR-Code)',
+        'pos_import_value' => 'นำเข้าจาก POS', 'no_method' => 'ไม่ได้บันทึกวิธีชำระ', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
         'expected_cash' => 'เงินที่ควรมี', 'counted_cash' => 'นับได้ตอนปิด', 'cash_diff' => 'ขาด(−)/เกิน(+)', 'open_status' => 'ระบุเงินตั้งต้น',
         'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
         'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
@@ -709,23 +710,39 @@ class ReportService
 
     /**
      * Daily sales split into cash and money transferred (bank transfer + QR-Code), one row
-     * per day that had sales. Card and imported sales (no method recorded) get their own columns.
+     * per day that had sales. Sales imported from the external POS have no payment method
+     * (its report has none), so they get their own column and are part of the day's total.
      */
     public function dailyCashTransfer(string $from, string $to): array
     {
+        $stmt = $this->db->prepare(
+            "SELECT s.business_date AS d, COUNT(*) AS bills, SUM(s.total_value) AS total
+             FROM sales s JOIN pos_imports pi ON pi.sale_id = s.id
+             WHERE s.business_date BETWEEN ? AND ? GROUP BY s.business_date"
+        );
+        $stmt->execute([$from, $to]);
+        $imported = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $imported[self::thaiDate($r['d'])] = $r;
+        }
         $out = [];
         foreach ($this->payments($from, $to, 'day') as $r) {
             if (!$r['bills']) {
                 continue;
             }
-            $row = [
-                'period' => $r['period'], 'bills' => $r['bills'],
-                'cash' => $r['cash'], 'transfer_all' => round($r['transfer'] + $r['qr'], 2),
+            $pos = $imported[$r['period']] ?? null;
+            $posValue = round((float) ($pos['total'] ?? 0), 2);
+            $out[] = [
+                'period' => $r['period'],
+                'bills' => $r['bills'] - (int) ($pos['bills'] ?? 0),
+                'cash' => $r['cash'],
+                'transfer_all' => round($r['transfer'] + $r['qr'], 2),
+                'card' => $r['card'],
+                'pos_import_value' => $posValue,
+                // Sales with no payment recorded that did not come from an import (older data).
+                'no_method' => max(0.0, round($r['unknown_method'] - $posValue, 2)),
+                'total_sales' => $r['total_sales'],
             ];
-            $row['card'] = $r['card'];
-            $row['unknown_method'] = $r['unknown_method'];
-            $row['total_sales'] = $r['total_sales'];
-            $out[] = $row;
         }
         return $out;
     }
