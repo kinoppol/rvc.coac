@@ -175,7 +175,8 @@ class ReceiveService
         }
         $items = $this->db->prepare(
             'SELECT ri.id, ri.product_id, ri.qty, ri.cost_price, ri.sale_price, ri.fee_per_unit, ri.listing_fee_charged,
-                    p.name, p.barcode, p.mfg_date, p.expiry_date, p.qty_sold, p.qty_returned, p.qty_stock
+                    p.name, p.barcode, p.mfg_date, p.expiry_date, p.qty_sold, p.qty_returned, p.qty_stock,
+                    p.cost_price AS current_cost, p.sale_price AS current_price
              FROM receive_items ri JOIN products p ON p.id = ri.product_id
              WHERE ri.receive_document_id = ? ORDER BY ri.id'
         );
@@ -187,7 +188,9 @@ class ReceiveService
     /**
      * Admin correction of one received line: name, barcode, quantity, prices and dates.
      * The quantity moves the lot's stock by the difference (it cannot drop below what has
-     * already left the lot); prices apply to sales from now on; listing fees stay as charged.
+     * already left the lot). A new price applies to sales from now on only: the line keeps
+     * the price it was received at, and past sales keep the price they were sold at.
+     * Listing fees stay as charged.
      * @param array{name?:string, barcode?:string, qty?:int, cost_price?:float, sale_price?:float, mfg_date?:string, expiry_date?:string} $data
      */
     public function updateItem(int $itemId, array $data, int $userId, ?string $ip): array
@@ -261,8 +264,7 @@ class ReceiveService
                 $this->products->setConsignPrice($productId, $cost, (float) $data['sale_price'], $this->fees->priceFor($cost), $userId, $ip);
             }
             $p = $this->products->find($productId);
-            $this->db->prepare('UPDATE receive_items SET qty = ?, cost_price = ?, sale_price = ?, fee_per_unit = ? WHERE id = ?')
-                ->execute([$qty, $p['cost_price'], $p['sale_price'], round((float) $p['sale_price'] - (float) $p['cost_price'], 2), $itemId]);
+            $this->db->prepare('UPDATE receive_items SET qty = ? WHERE id = ?')->execute([$qty, $itemId]);
 
             $docId = (int) $item['receive_document_id'];
             $this->db->prepare(
@@ -273,7 +275,7 @@ class ReceiveService
             )->execute([$docId]);
 
             $this->audit->log('receive_items', $itemId, 'update',
-                ['qty' => (int) $item['qty'], 'cost_price' => (float) $item['cost_price'], 'sale_price' => (float) $item['sale_price'],
+                ['qty' => (int) $item['qty'], 'cost_price' => (float) $product['cost_price'], 'sale_price' => (float) $product['sale_price'],
                  'name' => $product['name'], 'barcode' => $product['barcode'], 'mfg_date' => $product['mfg_date'], 'expiry_date' => $product['expiry_date']],
                 ['qty' => $qty, 'cost_price' => (float) $p['cost_price'], 'sale_price' => (float) $p['sale_price'],
                  'name' => $p['name'], 'barcode' => $p['barcode'], 'mfg_date' => $mfg, 'expiry_date' => $expiry],

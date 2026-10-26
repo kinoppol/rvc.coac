@@ -504,6 +504,9 @@ export async function render(container, { permissions = [], user } = {}) {
         const d = m.doc;
         const ed = m.edit;
         const fee = (it) => Number(it.sale_price) - Number(it.cost_price);
+        // Prices as received; a later price change shows underneath (it applies to sales from then on).
+        const now = (it, recv, cur) => Math.abs(Number(it[recv]) - Number(it[cur])) >= 0.005
+            ? `<div class="pill warn" style="font-size:11px;margin-top:2px" title="ราคาที่ใช้ขายตอนนี้">ตอนนี้ ${money(it[cur])}</div>` : '';
         m.el.innerHTML = `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" aria-label="ใบรับฝาก ${escapeHtml(d.doc_no)}" style="width:1100px">
@@ -518,14 +521,14 @@ export async function render(container, { permissions = [], user } = {}) {
                 <div><div class="muted">รวม</div><b>${Number(d.total_qty)} ชิ้น · ฿ ${money(d.total_value)}</b><div class="muted">ค่าทำข้อมูล ฿${money(d.listing_fee_total)}</div></div>
               </div>
               <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
-                <thead><tr><th>สินค้า</th><th class="num">รับฝาก</th><th class="num">ขาย / คืน / คงเหลือ</th><th class="num">ผู้ฝากได้</th><th class="num">ราคาขาย</th><th class="num">ค่าฝาก</th><th>ผลิต / หมดอายุ</th><th></th></tr></thead>
+                <thead><tr><th>สินค้า</th><th class="num">รับฝาก</th><th class="num">ขาย / คืน / คงเหลือ</th><th class="num">ผู้ฝากได้<div class="muted" style="font-weight:400">ตอนรับฝาก</div></th><th class="num">ราคาขาย<div class="muted" style="font-weight:400">ตอนรับฝาก</div></th><th class="num">ค่าฝาก</th><th>ผลิต / หมดอายุ</th><th></th></tr></thead>
                 <tbody>${d.items.map((it) => `
                   <tr>
                     <td>${escapeHtml(it.name)}${it.barcode ? `<div class="muted" style="font-size:11.5px">บาร์โค้ด ${escapeHtml(it.barcode)}</div>` : ''}</td>
                     <td class="num">${Number(it.qty)}</td>
                     <td class="num">${Number(it.qty_sold)} / ${Number(it.qty_returned)} / <b>${Number(it.qty_stock)}</b></td>
-                    <td class="num">${money(it.cost_price)}</td>
-                    <td class="num">${money(it.sale_price)}</td>
+                    <td class="num">${money(it.cost_price)}${now(it, 'cost_price', 'current_cost')}</td>
+                    <td class="num">${money(it.sale_price)}${now(it, 'sale_price', 'current_price')}</td>
                     <td class="num">${money(fee(it))}</td>
                     <td style="font-size:12.5px;white-space:nowrap">${it.mfg_date ? fmtDate(it.mfg_date) : '-'}<div class="muted">${it.expiry_date ? fmtDate(it.expiry_date) : 'ไม่ระบุ'}</div></td>
                     <td style="text-align:right">${isAdmin ? `<button type="button" class="btn sm secondary" data-item-edit="${it.id}" ${ed ? 'disabled' : ''}>แก้ไข</button>` : ''}</td>
@@ -533,7 +536,7 @@ export async function render(container, { permissions = [], user } = {}) {
                   ${ed && ed.id === Number(it.id) ? `<tr><td colspan="8" style="background:var(--surface2)">${editHtml(it, ed)}</td></tr>` : ''}`).join('')}
                 </tbody>
               </table></div>
-              ${isAdmin ? '<div class="muted" style="font-size:12px;margin-top:8px">ผู้ดูแลระบบแก้ไขรายการได้: จำนวนที่แก้จะปรับสต๊อกของล็อตตามส่วนต่าง · ราคาใหม่มีผลกับการขายหลังบันทึก ยอดที่ขาย/ลงสมุดบัญชีผู้ฝากไปแล้วไม่เปลี่ยน · ค่าทำข้อมูลที่เก็บไปแล้วไม่เปลี่ยน</div>' : ''}
+              ${isAdmin ? '<div class="muted" style="font-size:12px;margin-top:8px">ผู้ดูแลระบบแก้ไขรายการได้: จำนวนที่แก้จะปรับสต๊อกของล็อตตามส่วนต่าง · ปรับราคา (เช่น ลดราคา) มีผลกับการขายหลังบันทึกเท่านั้น ราคาตอนรับฝาก บิลที่ขายไปแล้ว และยอดในสมุดบัญชีผู้ฝากไม่เปลี่ยน · ค่าทำข้อมูลที่เก็บไปแล้วไม่เปลี่ยน</div>' : ''}
             </div>
             <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-doc-close>ปิด</button></div>
           </div>
@@ -543,7 +546,7 @@ export async function render(container, { permissions = [], user } = {}) {
             const it = d.items.find((x) => Number(x.id) === Number(b.dataset.itemEdit));
             m.edit = {
                 id: Number(it.id), name: it.name, barcode: it.barcode || '', qty: String(it.qty),
-                cost_price: String(Number(it.cost_price)), sale_price: String(Number(it.sale_price)),
+                cost_price: String(Number(it.current_cost)), sale_price: String(Number(it.current_price)),
                 mfg_date: it.mfg_date || '', expiry_date: it.expiry_date || '',
             };
             m.error = null;
@@ -586,8 +589,8 @@ export async function render(container, { permissions = [], user } = {}) {
             <label class="field">บาร์โค้ดชิ้น <input data-ef="barcode" value="${escapeHtml(ed.barcode)}"></label>
             <label class="field">จำนวนรับฝาก (ชิ้น) <input data-ef="qty" type="number" min="${Math.max(1, gone)}" value="${escapeHtml(ed.qty)}">
               ${gone > 0 ? `<span class="muted" style="font-size:11.5px;font-weight:400">ขาย/คืน/ปรับไปแล้ว ${gone} ชิ้น</span>` : ''}</label>
-            <label class="field">ผู้ฝากได้/ชิ้น (บาท) <input data-ef="cost_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.cost_price)}"></label>
-            <label class="field">ราคาขาย/ชิ้น (บาท) <input data-ef="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.sale_price)}"></label>
+            <label class="field">ผู้ฝากได้/ชิ้น ตั้งแต่นี้ไป <input data-ef="cost_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.cost_price)}"></label>
+            <label class="field">ราคาขาย/ชิ้น ตั้งแต่นี้ไป <input data-ef="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.sale_price)}"></label>
             <label class="field">วันที่ผลิต <input data-ef="mfg_date" type="date" value="${escapeHtml(ed.mfg_date)}" max="${todayISO()}"></label>
             <label class="field">วันหมดอายุ <input data-ef="expiry_date" type="date" value="${escapeHtml(ed.expiry_date)}"></label>
           </div>

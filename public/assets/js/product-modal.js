@@ -97,6 +97,24 @@ export async function openProductModal(productId, navigate) {
           <div class="muted" style="font-size:11.5px;margin-top:4px">มูลค่าคงเหลือคิดจากต้นทุนเฉลี่ยปัจจุบัน ฿${money(p.cost_price)}/ชิ้น · ต้นทุนขายตามที่บันทึกไว้ในแต่ละบิล</div>`;
     }
 
+    /** When the shelf price changed; bills sold before keep the price they were sold at. */
+    function priceChangesHtml() {
+        const list = d.price_changes || [];
+        if (!list.length) return '';
+        const pair = (a, b, tag = false) => (a !== null && b !== null && Math.abs(a - b) >= 0.005 ? `฿${money(a)} → <b>฿${money(b)}</b>${tag && b < a ? ' <span class="pill ok">ลดราคา</span>' : ''}` : '');
+        return `
+            <details style="margin-top:12px">
+              <summary style="cursor:pointer;font-weight:600;font-size:14px">ประวัติการปรับราคา (${count(list.length)})</summary>
+              <div class="table-wrap" style="margin-top:8px"><table>
+                <thead><tr><th>เมื่อ</th><th>ราคาขาย</th><th>${p.consignor_id != null ? 'ผู้ฝากได้' : 'ต้นทุน'}</th><th>โดย</th></tr></thead>
+                <tbody>${list.map((c) => `<tr><td style="font-size:12.5px;white-space:nowrap">${escapeHtml(fmtDateTime(c.at))}</td>
+                  <td>${pair(c.old_price, c.new_price, true) || '<span class="muted">-</span>'}</td><td>${pair(c.old_cost, c.new_cost) || '<span class="muted">-</span>'}</td>
+                  <td style="font-size:12.5px">${escapeHtml(c.user_name || '-')}</td></tr>`).join('')}</tbody>
+              </table></div>
+              <div class="muted" style="font-size:12px;margin-top:6px">บิลที่ขายก่อนปรับราคายังคงราคาที่ขายจริง (ดูได้ในรายการขายด้านล่าง)</div>
+            </details>`;
+    }
+
     function draw() {
         const photo = p.image_token
             ? `<img class="pm-photo" src="${api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${encodeURIComponent(p.image_token)}`)}" alt="">`
@@ -119,6 +137,7 @@ export async function openProductModal(productId, navigate) {
               </div>
             </div>
             ${summaryHtml()}
+            ${priceChangesHtml()}
             <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
               <div class="tabs" role="group" aria-label="กรองความเคลื่อนไหว">
                 ${GROUPS.map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(d.movements.filter(fn).length)})</button>`).join('')}

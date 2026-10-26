@@ -243,7 +243,40 @@ class InventoryService
             ],
             'totals' => $totals,
             'movements' => $rows,
+            'price_changes' => $this->priceChanges($productId),
         ];
+    }
+
+    /**
+     * Price changes of a product from the audit log, newest first. Each sale keeps the price
+     * it was sold at (sale_items), so these only tell when the shelf price changed.
+     * @return array<int,array{at:string, user_name:?string, old_price:?float, new_price:?float, old_cost:?float, new_cost:?float}>
+     */
+    private function priceChanges(int $productId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT a.created_at, a.old_data, a.new_data, u.full_name
+             FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+             WHERE a.table_name = 'products' AND a.record_id = ? AND a.action = 'update' AND a.new_data LIKE '%price%'
+             ORDER BY a.id DESC LIMIT 50"
+        );
+        $stmt->execute([$productId]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $old = (array) json_decode((string) $r['old_data'], true);
+            $new = (array) json_decode((string) $r['new_data'], true);
+            $num = fn (array $a, string $k) => isset($a[$k]) ? (float) $a[$k] : null;
+            $change = [
+                'at' => $r['created_at'], 'user_name' => $r['full_name'],
+                'old_price' => $num($old, 'sale_price'), 'new_price' => $num($new, 'sale_price'),
+                'old_cost' => $num($old, 'cost_price'), 'new_cost' => $num($new, 'cost_price'),
+            ];
+            $moved = fn ($a, $b) => $a !== null && $b !== null && abs($a - $b) >= 0.005;
+            if ($moved($change['old_price'], $change['new_price']) || $moved($change['old_cost'], $change['new_cost'])) {
+                $out[] = $change;
+            }
+        }
+        return $out;
     }
 
     /**
