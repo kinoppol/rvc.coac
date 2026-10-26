@@ -103,6 +103,45 @@ class ReceiveController
         return $this->json($response, ['ok' => true]);
     }
 
+    private static function service(\PDO $db): ReceiveService
+    {
+        $audit = new AuditLogger($db);
+        $settings = new SettingsService($db);
+        return new ReceiveService(
+            $db, new ProductRepo($db, $audit), new ConsignorRepo($db, $audit), new FeeCalculator($settings),
+            new ListingFeeService($db, $settings), new LedgerService($db), new DocumentNumberService($db), $audit
+        );
+    }
+
+    /** Receive documents already saved (?q= doc no., consignor or product name). */
+    public function documents(Request $request, Response $response): Response
+    {
+        $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        return $this->json($response, ['data' => self::service(Db::connection())->documents($q)]);
+    }
+
+    public function document(Request $request, Response $response, array $args): Response
+    {
+        $doc = self::service(Db::connection())->document((int) $args['id']);
+        return $doc ? $this->json($response, ['data' => $doc]) : $this->error($response, 'ไม่พบใบรับฝาก', 404);
+    }
+
+    /** Admin correction of one received line (name, barcode, qty, prices, dates). */
+    public function updateItem(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขรายการรับฝากได้', 403);
+        }
+        $body = array_intersect_key((array) $request->getParsedBody(), array_flip(['name', 'barcode', 'qty', 'cost_price', 'sale_price', 'mfg_date', 'expiry_date']));
+        try {
+            $doc = self::service(Db::connection())->updateItem((int) $args['id'], $body, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $doc]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();

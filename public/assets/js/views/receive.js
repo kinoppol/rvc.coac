@@ -3,7 +3,8 @@ import { printConsignSlip } from '../print-slip.js';
 import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
-export async function render(container, { permissions = [] } = {}) {
+export async function render(container, { permissions = [], user } = {}) {
+    const isAdmin = user?.role === 'admin';
     const canBackdate = permissions.includes('receive.backdate');
     const options = (await api.get('/consignors/options')).data;
     let receiveDate = todayISO();
@@ -63,9 +64,11 @@ export async function render(container, { permissions = [] } = {}) {
           <button type="button" class="btn" id="btn-open" style="font-size:15px;padding:12px 22px">+ รับฝาก${cart.length ? ` (ค้าง ${cart.length} รายการ)` : ''}</button>
         </div>
         ${requestsCard()}
+        <div id="rc-docs"></div>
         ${formOpen ? formHtml(total) : ''}`;
 
         wire();
+        drawDocs();
     }
 
     /** The receive form, on a modal. */
@@ -422,12 +425,212 @@ export async function render(container, { permissions = [] } = {}) {
             consignorId = null; // the next one starts with no consignor chosen
             await loadRequests();
             draw();
+            loadDocs();
         } catch (e) {
             error = e.message;
             draw();
         }
     }
 
+    // ---------------- Receive documents already saved (admins may correct a line) ----------------
+
+    let docs = [];
+    let docsQ = '';
+    let docsTimer;
+    let docModal = null; // { el, doc, edit: { item id, fields } | null, error, busy }
+
+    async function loadDocs() {
+        try {
+            docs = (await api.get(`/receive/docs?q=${encodeURIComponent(docsQ)}`)).data;
+        } catch (e) {
+            docs = [];
+        }
+        drawDocs();
+    }
+
+    function drawDocs() {
+        const box = container.querySelector('#rc-docs');
+        if (!box) return;
+        const focused = document.activeElement?.id === 'rc-docs-q';
+        box.innerHTML = `
+        <section class="card">
+          <div class="card-head" style="flex-wrap:wrap;gap:10px">
+            <h2>รายการที่รับฝากไว้</h2>
+            <input id="rc-docs-q" type="search" value="${escapeHtml(docsQ)}" placeholder="ค้นหาเลขที่ ผู้ฝาก หรือชื่อสินค้า" style="max-width:280px;flex:1">
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>เลขที่</th><th>วันที่รับฝาก</th><th>ผู้ฝากขาย</th><th>สินค้า</th><th class="num">ชิ้น</th><th class="num">มูลค่า (ราคาขาย)</th><th></th></tr></thead>
+            <tbody>${docs.map((d) => `
+              <tr>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(d.doc_no)}</td>
+                <td style="font-size:12.5px;white-space:nowrap">${fmtDateTime(d.created_at)}</td>
+                <td>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</td>
+                <td style="font-size:12.5px;max-width:320px">${escapeHtml(d.names || '')}<div class="muted">${Number(d.items)} รายการ</div></td>
+                <td class="num">${Number(d.total_qty)}</td>
+                <td class="num">${money(d.total_value)}</td>
+                <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin ? 'ดู / แก้ไข' : 'ดู'}</button></td>
+              </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsQ ? 'ไม่พบใบรับฝากที่ค้นหา' : 'ยังไม่มีรายการรับฝาก'}</td></tr>`}
+            </tbody>
+          </table></div>
+        </section>`;
+        const q = box.querySelector('#rc-docs-q');
+        if (focused) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+        q.addEventListener('input', () => {
+            docsQ = q.value.trim();
+            clearTimeout(docsTimer);
+            docsTimer = setTimeout(loadDocs, 300);
+        });
+        box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => openDoc(Number(b.dataset.doc))));
+    }
+
+    async function openDoc(id) {
+        try {
+            const doc = (await api.get(`/receive/docs/${id}`)).data;
+            docModal = { el: document.createElement('div'), doc, edit: null, error: null, busy: false };
+            document.body.appendChild(docModal.el);
+            drawDoc();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+    }
+
+    function closeDoc() {
+        docModal?.el.remove();
+        docModal = null;
+    }
+
+    function drawDoc() {
+        const m = docModal;
+        const d = m.doc;
+        const ed = m.edit;
+        const fee = (it) => Number(it.sale_price) - Number(it.cost_price);
+        m.el.innerHTML = `
+        <div class="modal-backdrop">
+          <div class="modal" role="dialog" aria-modal="true" aria-label="ใบรับฝาก ${escapeHtml(d.doc_no)}" style="width:1100px">
+            <div class="modal-head">
+              <h2>ใบรับฝาก ${escapeHtml(d.doc_no)}</h2>
+              <button type="button" class="modal-close" data-doc-close aria-label="ปิด">✕</button>
+            </div>
+            <div class="modal-body">
+              <div class="stat-row" style="margin-bottom:14px;font-size:13.5px">
+                <div><div class="muted">ผู้ฝากขาย</div><b>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</b></div>
+                <div><div class="muted">วันที่รับฝาก</div><b>${fmtDateTime(d.created_at)}</b><div class="muted">โดย ${escapeHtml(d.user_name || '-')}</div></div>
+                <div><div class="muted">รวม</div><b>${Number(d.total_qty)} ชิ้น · ฿ ${money(d.total_value)}</b><div class="muted">ค่าทำข้อมูล ฿${money(d.listing_fee_total)}</div></div>
+              </div>
+              <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
+                <thead><tr><th>สินค้า</th><th class="num">รับฝาก</th><th class="num">ขาย / คืน / คงเหลือ</th><th class="num">ผู้ฝากได้</th><th class="num">ราคาขาย</th><th class="num">ค่าฝาก</th><th>ผลิต / หมดอายุ</th><th></th></tr></thead>
+                <tbody>${d.items.map((it) => `
+                  <tr>
+                    <td>${escapeHtml(it.name)}${it.barcode ? `<div class="muted" style="font-size:11.5px">บาร์โค้ด ${escapeHtml(it.barcode)}</div>` : ''}</td>
+                    <td class="num">${Number(it.qty)}</td>
+                    <td class="num">${Number(it.qty_sold)} / ${Number(it.qty_returned)} / <b>${Number(it.qty_stock)}</b></td>
+                    <td class="num">${money(it.cost_price)}</td>
+                    <td class="num">${money(it.sale_price)}</td>
+                    <td class="num">${money(fee(it))}</td>
+                    <td style="font-size:12.5px;white-space:nowrap">${it.mfg_date ? fmtDate(it.mfg_date) : '-'}<div class="muted">${it.expiry_date ? fmtDate(it.expiry_date) : 'ไม่ระบุ'}</div></td>
+                    <td style="text-align:right">${isAdmin ? `<button type="button" class="btn sm secondary" data-item-edit="${it.id}" ${ed ? 'disabled' : ''}>แก้ไข</button>` : ''}</td>
+                  </tr>
+                  ${ed && ed.id === Number(it.id) ? `<tr><td colspan="8" style="background:var(--surface2)">${editHtml(it, ed)}</td></tr>` : ''}`).join('')}
+                </tbody>
+              </table></div>
+              ${isAdmin ? '<div class="muted" style="font-size:12px;margin-top:8px">ผู้ดูแลระบบแก้ไขรายการได้: จำนวนที่แก้จะปรับสต๊อกของล็อตตามส่วนต่าง · ราคาใหม่มีผลกับการขายหลังบันทึก ยอดที่ขาย/ลงสมุดบัญชีผู้ฝากไปแล้วไม่เปลี่ยน · ค่าทำข้อมูลที่เก็บไปแล้วไม่เปลี่ยน</div>' : ''}
+            </div>
+            <div class="modal-foot"><span></span><button type="button" class="btn secondary" data-doc-close>ปิด</button></div>
+          </div>
+        </div>`;
+        m.el.querySelectorAll('[data-doc-close]').forEach((b) => b.addEventListener('click', closeDoc));
+        m.el.querySelectorAll('[data-item-edit]').forEach((b) => b.addEventListener('click', () => {
+            const it = d.items.find((x) => Number(x.id) === Number(b.dataset.itemEdit));
+            m.edit = {
+                id: Number(it.id), name: it.name, barcode: it.barcode || '', qty: String(it.qty),
+                cost_price: String(Number(it.cost_price)), sale_price: String(Number(it.sale_price)),
+                mfg_date: it.mfg_date || '', expiry_date: it.expiry_date || '',
+            };
+            m.error = null;
+            drawDoc();
+            m.el.querySelector('[data-ef="name"]')?.focus();
+        }));
+        if (!ed) return;
+        m.el.querySelectorAll('[data-ef]').forEach((inp) => inp.addEventListener('input', () => {
+            ed[inp.dataset.ef] = inp.value;
+            const hint = m.el.querySelector('#ef-fee');
+            if (hint) hint.textContent = feeHint(ed);
+        }));
+        m.el.querySelector('#ef-calc').addEventListener('click', async () => {
+            try {
+                ed.sale_price = String((await api.post('/receive/quote', { cost_price: Number(ed.cost_price) || 0 })).data.price);
+                m.el.querySelector('[data-ef="sale_price"]').value = ed.sale_price;
+                m.el.querySelector('#ef-fee').textContent = feeHint(ed);
+            } catch (e) {
+                m.error = e.message;
+                drawDoc();
+            }
+        });
+        m.el.querySelector('#ef-cancel').addEventListener('click', () => { m.edit = null; m.error = null; drawDoc(); });
+        m.el.querySelector('#ef-save').addEventListener('click', saveItem);
+    }
+
+    function feeHint(ed) {
+        const cost = Number(ed.cost_price);
+        const price = Number(ed.sale_price);
+        if (ed.cost_price === '' || !(price > 0)) return 'ใส่ราคาให้ครบ';
+        return cost > price ? '⚠️ ผู้ฝากได้มากกว่าราคาขาย' : `ร้านได้ค่าฝาก ฿${money(price - cost)}/ชิ้น`;
+    }
+
+    function editHtml(it, ed) {
+        const m = docModal;
+        const gone = Number(it.qty) - Number(it.qty_stock);
+        return `
+          <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+            <label class="field" style="grid-column:span 2">ชื่อสินค้า <input data-ef="name" value="${escapeHtml(ed.name)}" maxlength="191"></label>
+            <label class="field">บาร์โค้ดชิ้น <input data-ef="barcode" value="${escapeHtml(ed.barcode)}"></label>
+            <label class="field">จำนวนรับฝาก (ชิ้น) <input data-ef="qty" type="number" min="${Math.max(1, gone)}" value="${escapeHtml(ed.qty)}">
+              ${gone > 0 ? `<span class="muted" style="font-size:11.5px;font-weight:400">ขาย/คืน/ปรับไปแล้ว ${gone} ชิ้น</span>` : ''}</label>
+            <label class="field">ผู้ฝากได้/ชิ้น (บาท) <input data-ef="cost_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.cost_price)}"></label>
+            <label class="field">ราคาขาย/ชิ้น (บาท) <input data-ef="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.sale_price)}"></label>
+            <label class="field">วันที่ผลิต <input data-ef="mfg_date" type="date" value="${escapeHtml(ed.mfg_date)}" max="${todayISO()}"></label>
+            <label class="field">วันหมดอายุ <input data-ef="expiry_date" type="date" value="${escapeHtml(ed.expiry_date)}"></label>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:10px">
+            <span class="muted" id="ef-fee" style="font-size:12.5px">${feeHint(ed)}</span>
+            <button type="button" class="btn secondary sm" id="ef-calc">คำนวณราคาขายตามค่าฝากขาย</button>
+            <span style="flex:1"></span>
+            <button type="button" class="btn secondary" id="ef-cancel">ยกเลิก</button>
+            <button type="button" class="btn" id="ef-save" ${m.busy ? 'disabled' : ''}>${m.busy ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}</button>
+          </div>
+          ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}`;
+    }
+
+    async function saveItem() {
+        const m = docModal;
+        const ed = m.edit;
+        const cost = Number(ed.cost_price);
+        const price = Number(ed.sale_price);
+        if (!ed.name.trim()) m.error = 'กรุณากรอกชื่อสินค้า';
+        else if (!(Number(ed.qty) >= 1)) m.error = 'จำนวนต้องอย่างน้อย 1 ชิ้น';
+        else if (ed.cost_price === '' || !(price > 0) || cost < 0 || cost > price) m.error = 'ราคาขายต้องมากกว่า 0 และผู้ฝากได้ต้องอยู่ระหว่าง 0 ถึงราคาขาย';
+        else if (ed.expiry_date && ed.mfg_date && ed.expiry_date < ed.mfg_date) m.error = 'วันหมดอายุต้องไม่ก่อนวันที่ผลิต';
+        else m.error = null;
+        if (m.error) { drawDoc(); return; }
+        m.busy = true;
+        drawDoc();
+        try {
+            m.doc = (await api.put(`/receive/items/${ed.id}`, {
+                name: ed.name.trim(), barcode: ed.barcode.trim(), qty: Number(ed.qty), cost_price: cost, sale_price: price,
+                mfg_date: ed.mfg_date, expiry_date: ed.expiry_date,
+            })).data;
+            m.edit = null;
+            loadDocs();
+        } catch (e) {
+            m.error = e.message;
+        }
+        m.busy = false;
+        drawDoc();
+    }
+
+    window.addEventListener('hashchange', closeDoc, { once: true });
+
     await loadRequests();
     draw();
+    loadDocs();
 }

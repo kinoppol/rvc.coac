@@ -137,4 +137,152 @@ class ReceiveService
             throw $e;
         }
     }
+
+    /** Recent receive documents (newest first), optionally matching a doc no., consignor or product name. */
+    public function documents(string $q = '', int $limit = 50): array
+    {
+        $like = '%' . addcslashes($q, '%_\\') . '%';
+        $stmt = $this->db->prepare(
+            "SELECT rd.id, rd.doc_no, rd.created_at, rd.total_qty, rd.total_value, rd.listing_fee_total,
+                    c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name,
+                    (SELECT COUNT(*) FROM receive_items ri WHERE ri.receive_document_id = rd.id) AS items,
+                    (SELECT GROUP_CONCAT(p.name ORDER BY ri.id SEPARATOR ', ') FROM receive_items ri JOIN products p ON p.id = ri.product_id
+                      WHERE ri.receive_document_id = rd.id) AS names
+             FROM receive_documents rd
+             JOIN consignors c ON c.id = rd.consignor_id
+             LEFT JOIN users u ON u.id = rd.user_id
+             WHERE ? = '' OR rd.doc_no LIKE ? OR c.name LIKE ? OR c.code LIKE ?
+                OR EXISTS (SELECT 1 FROM receive_items ri JOIN products p ON p.id = ri.product_id WHERE ri.receive_document_id = rd.id AND p.name LIKE ?)
+             ORDER BY rd.id DESC
+             LIMIT " . max(1, min(200, $limit))
+        );
+        $stmt->execute([$q, $like, $like, $like, $like]);
+        return $stmt->fetchAll();
+    }
+
+    /** One receive document with its lines and each lot's current figures (sold, returned, in stock). */
+    public function document(int $id): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT rd.*, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name
+             FROM receive_documents rd JOIN consignors c ON c.id = rd.consignor_id LEFT JOIN users u ON u.id = rd.user_id
+             WHERE rd.id = ?'
+        );
+        $stmt->execute([$id]);
+        $doc = $stmt->fetch();
+        if (!$doc) {
+            return null;
+        }
+        $items = $this->db->prepare(
+            'SELECT ri.id, ri.product_id, ri.qty, ri.cost_price, ri.sale_price, ri.fee_per_unit, ri.listing_fee_charged,
+                    p.name, p.barcode, p.mfg_date, p.expiry_date, p.qty_sold, p.qty_returned, p.qty_stock
+             FROM receive_items ri JOIN products p ON p.id = ri.product_id
+             WHERE ri.receive_document_id = ? ORDER BY ri.id'
+        );
+        $items->execute([$id]);
+        $doc['items'] = $items->fetchAll();
+        return $doc;
+    }
+
+    /**
+     * Admin correction of one received line: name, barcode, quantity, prices and dates.
+     * The quantity moves the lot's stock by the difference (it cannot drop below what has
+     * already left the lot); prices apply to sales from now on; listing fees stay as charged.
+     * @param array{name?:string, barcode?:string, qty?:int, cost_price?:float, sale_price?:float, mfg_date?:string, expiry_date?:string} $data
+     */
+    public function updateItem(int $itemId, array $data, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM receive_items WHERE id = ? FOR UPDATE');
+            $stmt->execute([$itemId]);
+            $item = $stmt->fetch();
+            if (!$item) {
+                throw new \RuntimeException('ไม่พบรายการรับฝาก');
+            }
+            $productId = (int) $item['product_id'];
+            $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$productId]);
+            $product = $stmt->fetch();
+
+            $date = function (string $label, mixed $v): ?string {
+                $v = trim((string) $v);
+                if ($v === '') {
+                    return null;
+                }
+                $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $v);
+                if (!$d || $d->format('Y-m-d') !== $v) {
+                    throw new \RuntimeException("{$label}ไม่ถูกต้อง");
+                }
+                return $v;
+            };
+            $mfg = array_key_exists('mfg_date', $data) ? $date('วันที่ผลิต', $data['mfg_date']) : $product['mfg_date'];
+            $expiry = array_key_exists('expiry_date', $data) ? $date('วันหมดอายุ', $data['expiry_date']) : $product['expiry_date'];
+            if ($mfg !== null && $expiry !== null && $expiry < $mfg) {
+                throw new \RuntimeException('วันหมดอายุต้องไม่ก่อนวันที่ผลิต');
+            }
+
+            // Name and piece barcode. Another lot of this consignor may share the barcode;
+            // anyone else's product may not.
+            $name = array_key_exists('name', $data) ? mb_substr(trim(preg_replace('/\s+/u', ' ', (string) $data['name'])), 0, 191) : $product['name'];
+            if ($name === '') {
+                throw new \RuntimeException('กรุณากรอกชื่อสินค้า');
+            }
+            $barcode = array_key_exists('barcode', $data) ? (trim((string) $data['barcode']) ?: null) : $product['barcode'];
+            if ($barcode !== null && $barcode !== $product['barcode']) {
+                $clash = $this->db->prepare(
+                    'SELECT p.name FROM products p WHERE p.barcode = ? AND p.id <> ? AND NOT (p.consignor_id <=> ?)
+                     UNION SELECT p.name FROM product_pack_barcodes b JOIN products p ON p.id = b.product_id WHERE b.barcode = ? LIMIT 1'
+                );
+                $clash->execute([$barcode, $productId, $product['consignor_id'], $barcode]);
+                if (($owner = $clash->fetchColumn()) !== false) {
+                    throw new \RuntimeException("บาร์โค้ด {$barcode} ใช้กับสินค้า \"{$owner}\" อยู่แล้ว");
+                }
+            }
+            $this->db->prepare('UPDATE products SET name = ?, barcode = ? WHERE id = ?')->execute([$name, $barcode, $productId]);
+
+            $qty = array_key_exists('qty', $data) ? (int) $data['qty'] : (int) $item['qty'];
+            if ($qty < 1 || $qty > 100000) {
+                throw new \RuntimeException('จำนวนต้องอย่างน้อย 1 ชิ้น');
+            }
+            $delta = $qty - (int) $item['qty'];
+            if ((int) $product['qty_stock'] + $delta < 0) {
+                $gone = (int) $item['qty'] - (int) $product['qty_stock'];
+                throw new \RuntimeException("ล็อตนี้ขาย/คืน/ปรับยอดไปแล้ว {$gone} ชิ้น จำนวนรับฝากต้องไม่น้อยกว่า {$gone}");
+            }
+            if ($delta !== 0) {
+                $this->db->prepare('UPDATE products SET qty_received = qty_received + ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?')
+                    ->execute([$delta, $delta, $productId]);
+            }
+            $this->db->prepare('UPDATE products SET mfg_date = ?, expiry_date = ? WHERE id = ?')->execute([$mfg, $expiry, $productId]);
+
+            if (isset($data['cost_price'], $data['sale_price'])) {
+                $cost = (float) $data['cost_price'];
+                $this->products->setConsignPrice($productId, $cost, (float) $data['sale_price'], $this->fees->priceFor($cost), $userId, $ip);
+            }
+            $p = $this->products->find($productId);
+            $this->db->prepare('UPDATE receive_items SET qty = ?, cost_price = ?, sale_price = ?, fee_per_unit = ? WHERE id = ?')
+                ->execute([$qty, $p['cost_price'], $p['sale_price'], round((float) $p['sale_price'] - (float) $p['cost_price'], 2), $itemId]);
+
+            $docId = (int) $item['receive_document_id'];
+            $this->db->prepare(
+                'UPDATE receive_documents rd SET
+                    total_qty = (SELECT COALESCE(SUM(qty), 0) FROM receive_items WHERE receive_document_id = rd.id),
+                    total_value = (SELECT COALESCE(SUM(qty * sale_price), 0) FROM receive_items WHERE receive_document_id = rd.id)
+                 WHERE rd.id = ?'
+            )->execute([$docId]);
+
+            $this->audit->log('receive_items', $itemId, 'update',
+                ['qty' => (int) $item['qty'], 'cost_price' => (float) $item['cost_price'], 'sale_price' => (float) $item['sale_price'],
+                 'name' => $product['name'], 'barcode' => $product['barcode'], 'mfg_date' => $product['mfg_date'], 'expiry_date' => $product['expiry_date']],
+                ['qty' => $qty, 'cost_price' => (float) $p['cost_price'], 'sale_price' => (float) $p['sale_price'],
+                 'name' => $p['name'], 'barcode' => $p['barcode'], 'mfg_date' => $mfg, 'expiry_date' => $expiry],
+                $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+        return $this->document($docId);
+    }
 }

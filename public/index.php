@@ -150,6 +150,12 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('receive.create'));
     $group->get('/receive/history', [ReceiveController::class, 'history'])
         ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/docs', [ReceiveController::class, 'documents'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/docs/{id:[0-9]+}', [ReceiveController::class, 'document'])
+        ->add(new RoleGuard('receive.create'));
+    $group->put('/receive/items/{id:[0-9]+}', [ReceiveController::class, 'updateItem'])
+        ->add(new RoleGuard('receive.create'));
     $group->get('/receive/requests',[ReceiveController::class, 'requests'])
         ->add(new RoleGuard('receive.create'));
     $group->post('/receive/requests/{id:[0-9]+}/reject', [ReceiveController::class, 'rejectRequest'])
