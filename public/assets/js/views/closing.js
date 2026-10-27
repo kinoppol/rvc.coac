@@ -234,14 +234,14 @@ export async function render(container, { user, permissions = [] } = {}) {
         const drawerHtml = dr ? `
             ${line('เงินในลิ้นชักตอนเปิดร้าน', `฿ ${money(dr.opening_cash)}`)}
             ${line('+ ขายได้เป็นเงินสด', `฿ ${money(f.cash_sales)}`)}
+            ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.purchase_out)}`) : ''}
             ${line('<b>เงินสดที่ควรมีในลิ้นชักตอนปิดยอด</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
             ${dr.counted_cash !== null ? `
               ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
               ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}
-            ${f.cash_out || f.payout_out || f.purchase_out ? `
+            ${f.cash_out || f.payout_out ? `
               ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 3)</span>', `฿ ${money(f.cash_out)}`) : ''}
               ${f.payout_out ? line('- จ่ายเงินผู้ฝากขายจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 4)</span>', `฿ ${money(f.payout_out)}`) : ''}
-              ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.purchase_out)}`) : ''}
               ${line(`<b>เงินสดคงเหลือในลิ้นชักหลังจ่าย</b>${dr.counted_cash === null ? ' <span class="muted" style="font-size:12px">(ยังไม่ได้นับ)</span>' : ''}`, `<b>฿ ${money(dr.after_pay)}</b>`)}` : ''}
             ${line('- คงไว้ในลิ้นชักเป็นเงินทอนวันถัดไป', `<span id="cl-float-v">฿ ${money(floatOf(m))}</span>`)}
             ${line('<b>เงินสดที่ต้องส่งวิทยาลัย</b> <span class="muted" style="font-size:12px">(ข้อ 7)</span>', `<b id="cl-send-v">฿ ${money(expectedSend(m))}</b>`)}`

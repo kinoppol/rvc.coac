@@ -206,12 +206,13 @@ class ClosingService
         $cashOut = round((float) $s['cash_out'], 2);
         $purchaseOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['total'] : 0, $this->purchasesOf($date))), 2);
         $payoutOut = round(array_sum(array_map(fn ($p) => $p['from_drawer'] ? (float) $p['amount'] : 0, $this->payoutsOf($date))), 2);
-        $out = round($cashOut + $payoutOut + $purchaseOut, 2);
         $drawer = $s['drawer'];
         $counted = $drawer && $drawer['counted_cash'] !== null ? (float) $drawer['counted_cash'] : null;
-        // Closing counts the sales only; wages, consignors and goods paid from the drawer come out of that count afterwards.
-        $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash, 2) : null;
-        $afterPay = $drawer ? round(($counted ?? $atClose) - $out, 2) : null;
+        // Goods bought with drawer money left it during the day, so the count at closing is already short of them;
+        // wages and consignors paid from the drawer come out of that count afterwards.
+        $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash - $purchaseOut, 2) : null;
+        $afterPay = $drawer ? round(($counted ?? $atClose) - $cashOut - $payoutOut, 2) : null;
+        $out = round($cashOut + $payoutOut + $purchaseOut, 2);
         $float = $drawer ? round($floatKept ?? $this->savedFloat($date) ?? (float) $drawer['opening_cash'], 2) : 0.0;
         $expected = $drawer
             ? round($afterPay - $float, 2) // what is left in the drawer, less the change kept for the next day
@@ -231,9 +232,9 @@ class ClosingService
             'methods' => $s['methods'],
             'drawer' => $drawer ? [
                 'opening_cash' => (float) $drawer['opening_cash'],
-                // Cash that should be in the drawer at closing: the float plus cash sales.
+                // Cash that should be in the drawer at closing: the float plus cash sales, less goods bought with it.
                 'should_have' => $atClose,
-                // Left in the drawer after wages, consignors and goods were paid from it (from the count once closed).
+                // Left in the drawer after wages and consignors were paid from it (from the count once closed).
                 'after_pay' => $afterPay,
                 'counted_cash' => $counted,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
