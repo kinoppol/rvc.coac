@@ -279,8 +279,8 @@ $app->group('/api', function ($group) {
     $group->post('/withdrawals/{id:[0-9]+}/cancel', [WithdrawController::class, 'cancel']);
 
     $group->get('/stockcounts', [StockCountController::class, 'index']);
-    $group->get('/stockcounts/{id}', [StockCountController::class, 'show']);
     $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);
+    $group->get('/stockcounts/{id}', [StockCountController::class, 'show']);
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
         ->add(new RoleGuard('stockcount.approve'));
     $group->post('/stockcounts/start', [StockCountController::class, 'start'])
