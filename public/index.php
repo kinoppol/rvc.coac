@@ -280,6 +280,9 @@ $app->group('/api', function ($group) {
 
     $group->get('/stockcounts', [StockCountController::class, 'index']);
     $group->get('/stockcounts/{id}', [StockCountController::class, 'show']);
+    $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);
+    $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
+        ->add(new RoleGuard('stockcount.approve'));
     $group->post('/stockcounts/start', [StockCountController::class, 'start'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id}/counts', [StockCountController::class, 'saveCounts'])

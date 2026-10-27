@@ -120,7 +120,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="actions-row" style="justify-content:space-between">
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
-              <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด และถ่ายรูปสินค้า">📱 เก็บข้อมูลด้วยมือถือ</button>
+              <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด ถ่ายรูปสินค้า และนับสต๊อกทีละรายการเมื่อไม่มีรอบตรวจนับเปิดอยู่">📱 เก็บข้อมูลด้วยมือถือ</button>
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${picked.size ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ">สร้างใบรายการสั่งซื้อ (${picked.size})</button>` : ''}
@@ -159,7 +159,7 @@ export async function render(container, { navigate, permissions, user }) {
         }));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
-            canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
+            canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), canCount: permissions.includes('stockcount.approve'), onClose: load,
         }));
         container.querySelector('#phone-link').addEventListener('click', () => {
             if (link) { link.shown = true; draw(); } else openLink();

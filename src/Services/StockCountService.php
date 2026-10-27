@@ -341,6 +341,57 @@ class StockCountService
         $this->audit->log('stock_counts', $stockCountId, 'cancel', ['status' => $sc['status']], ['status' => 'cancelled'], $userId, $ip);
     }
 
+    /** True while a counting round is open (draft or waiting for approval). */
+    public function hasOpenRound(): bool
+    {
+        return (bool) $this->db->query("SELECT 1 FROM stock_counts WHERE status IN ('draft','submitted') LIMIT 1")->fetchColumn();
+    }
+
+    /**
+     * Count one product on the spot when no round is open: the stock is set at once and the
+     * count is kept as its own approved one-line round, so the stock card shows it like any count.
+     *
+     * @return array{doc_no:string, system_qty:int, counted_qty:int, diff_qty:int}
+     */
+    public function quickCount(int $productId, int $counted, ?string $note, int $userId, ?string $ip): array
+    {
+        if ($counted < 0) {
+            throw new \RuntimeException('จำนวนที่นับต้องไม่ติดลบ');
+        }
+        $this->db->beginTransaction();
+        try {
+            if ($this->hasOpenRound()) {
+                throw new \RuntimeException('มีรอบตรวจนับเปิดอยู่ กรุณานับในรอบนั้นแทน');
+            }
+            $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$productId]);
+            $old = $stmt->fetch();
+            if (!$old) {
+                throw new \RuntimeException('ไม่พบสินค้า');
+            }
+            $system = (int) $old['qty_stock'];
+            $docNo = $this->docs->next('SC', 'stock_counts', 'doc_no');
+            $this->db->prepare(
+                "INSERT INTO stock_counts (doc_no, count_date, status, created_by, created_at, submitted_at, approved_by, approved_at)
+                 VALUES (?, CURDATE(), 'approved', ?, NOW(), NOW(), ?, NOW())"
+            )->execute([$docNo, $userId, $userId]);
+            $countId = (int) $this->db->lastInsertId();
+            $this->db->prepare(
+                'INSERT INTO stock_count_items (stock_count_id, product_id, system_qty, counted_qty, diff_qty, note) VALUES (?, ?, ?, ?, ?, ?)'
+            )->execute([$countId, $productId, $system, $counted, $counted - $system, $note !== null && $note !== '' ? mb_substr($note, 0, 255) : 'นับทันทีด้วยมือถือ']);
+            if ($counted !== $system) {
+                $this->db->prepare('UPDATE products SET qty_stock = ? WHERE id = ?')->execute([$counted, $productId]);
+                $this->audit->log('products', $productId, 'update', $old, ['qty_stock' => $counted, 'stock_count' => $docNo], $userId, $ip);
+            }
+            $this->audit->log('stock_counts', $countId, 'create', null, ['doc_no' => $docNo, 'quick' => true, 'product_id' => $productId, 'system_qty' => $system, 'counted_qty' => $counted], $userId, $ip);
+            $this->db->commit();
+            return ['doc_no' => $docNo, 'system_qty' => $system, 'counted_qty' => $counted, 'diff_qty' => $counted - $system];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
     public function get(int $id): ?array
     {
         $stmt = $this->db->prepare('SELECT * FROM stock_counts WHERE id = ?');

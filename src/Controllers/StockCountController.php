@@ -31,6 +31,30 @@ class StockCountController
         return $this->json($response, ['data' => $this->service()->list()]);
     }
 
+    /** Whether a round is open: the phone counts single items on the spot only when none is. */
+    public function openRound(Request $request, Response $response): Response
+    {
+        return $this->json($response, ['data' => ['open' => $this->service()->hasOpenRound()]]);
+    }
+
+    /** Count one product now (no round open): sets its stock at once and keeps a one-line approved count. */
+    public function quickCount(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        if (!isset($body['counted_qty']) || !is_numeric($body['counted_qty']) || (int) $body['counted_qty'] != $body['counted_qty']) {
+            return $this->error($response, 'กรุณาระบุจำนวนที่นับเป็นจำนวนเต็ม', 422);
+        }
+        try {
+            $result = $this->service()->quickCount((int) $args['id'], (int) $body['counted_qty'], trim((string) ($body['note'] ?? '')), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        $db = Db::connection();
+        $product = (new ProductRepo($db, new AuditLogger($db)))->find((int) $args['id']);
+        return $this->json($response, ['data' => $result + ['qty_stock' => (int) $product['qty_stock']]]);
+    }
+
     public function start(Request $request, Response $response): Response
     {
         $user = $request->getAttribute('user');

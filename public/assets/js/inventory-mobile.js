@@ -13,9 +13,12 @@ function beep(kind = 'scan') {
  * Full-screen data mode for phones, opened from the inventory page: scan (or type) a
  * barcode to see the product — name, stock, price, barcodes, photo — take its photo,
  * or give a barcode the system does not know yet to the product it belongs to.
- * @param {{ canLink: boolean, canPhoto: boolean, onClose?: () => void }} opts
+ * With no counting round open, canCount users can also count a product on the spot:
+ * its stock is set at once (kept as a one-line approved count).
+ * @param {{ canLink: boolean, canPhoto: boolean, canCount?: boolean, onClose?: () => void }} opts
  */
-export function openInventoryMobile({ canLink, canPhoto, onClose }) {
+export function openInventoryMobile({ canLink, canPhoto, canCount = false, onClose }) {
+    let roundOpen = null;  // null = not known yet; true = count in the open round instead
     let product = null;   // the product on screen (from /inventory/lookup)
     let scannedPack = 1;  // pack size of the barcode that found it
     let unknown = null;   // a barcode no product has
@@ -88,7 +91,10 @@ export function openInventoryMobile({ canLink, canPhoto, onClose }) {
                 ${canLink ? '<button type="button" class="mc-chip add" data-act="link">+ ผูกบาร์โค้ดเพิ่ม</button>' : ''}
               </div>
             </div>
-          </div>`;
+          </div>
+          ${canCount ? (roundOpen === false
+            ? '<button type="button" class="mc-btn wide" data-act="count" style="margin-top:10px">🔢 นับสต๊อกสินค้านี้ทันที</button>'
+            : roundOpen ? '<div class="mc-msg info" style="margin-top:10px">มีรอบตรวจนับเปิดอยู่ — นับสินค้าในเมนูตรวจนับสต๊อก</div>' : '') : ''}`;
     }
 
     function addLog(code, text) {
@@ -253,6 +259,59 @@ export function openInventoryMobile({ canLink, canPhoto, onClose }) {
         });
     }
 
+    // ---- counting one product on the spot (no round open) ----
+    function openCountSheet(p) {
+        const step = scannedPack > 1 ? scannedPack : 1;
+        showSheet(`
+          <div class="mc-sheet-box">
+            <div class="mc-sheet-head">${backBtn}<b>นับสต๊อก</b></div>
+            <p style="margin:0 0 4px"><b>${escapeHtml(p.name)}</b></p>
+            <p class="muted" style="margin:0 0 10px">ในระบบคงเหลือ ${count(p.qty_stock)} ชิ้น · นับของจริงแล้วใส่จำนวนที่มีอยู่</p>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button type="button" class="mc-btn" data-step="-${step}" style="flex:0 0 64px">−${step > 1 ? step : ''}</button>
+              <input type="number" class="mc-search" data-el="cnt" min="0" step="1" inputmode="numeric" value="${Math.max(0, Number(p.qty_stock))}" style="flex:1;text-align:center;font-size:24px">
+              <button type="button" class="mc-btn" data-step="${step}" style="flex:0 0 64px">+${step > 1 ? step : ''}</button>
+            </div>
+            <div class="muted" data-el="cdiff" style="margin-top:8px"></div>
+            <input class="mc-search" data-el="cnote" placeholder="หมายเหตุ (ถ้ามี) เช่น ของเสีย / หาย" style="margin-top:10px" autocomplete="off">
+            <div class="error-box" data-el="cerr" hidden style="margin-top:10px"></div>
+            <button type="button" class="mc-btn wide" data-el="csave" style="margin-top:14px">บันทึกยอดนับ ปรับสต๊อกทันที</button>
+          </div>`);
+        const field = sheet.querySelector('[data-el="cnt"]');
+        const diffEl = sheet.querySelector('[data-el="cdiff"]');
+        const showDiff = () => {
+            const d = Math.floor(Number(field.value)) - Number(p.qty_stock);
+            diffEl.textContent = field.value === '' ? '' : d === 0 ? 'ตรงกับในระบบ' : `${d > 0 ? 'เกิน' : 'ขาด'} ${count(Math.abs(d))} ชิ้น จากในระบบ`;
+        };
+        sheet.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
+            field.value = Math.max(0, (Math.floor(Number(field.value)) || 0) + Number(b.dataset.step));
+            showDiff();
+        }));
+        field.addEventListener('input', showDiff);
+        showDiff();
+        setTimeout(() => { field.focus(); field.select(); }, 50);
+        sheet.querySelector('[data-el="csave"]').addEventListener('click', async (ev) => {
+            const err = sheet.querySelector('[data-el="cerr"]');
+            const n = Number(field.value);
+            if (field.value === '' || !Number.isInteger(n) || n < 0) { err.hidden = false; err.textContent = 'กรุณาใส่จำนวนที่นับเป็นจำนวนเต็ม 0 ขึ้นไป'; return; }
+            ev.target.disabled = true;
+            try {
+                const r = (await api.post(`/products/${p.id}/quick-count`, { counted_qty: n, note: sheet.querySelector('[data-el="cnote"]').value.trim() })).data;
+                p.qty_stock = r.qty_stock;
+                beep('count');
+                message = { kind: 'ok', text: `นับ ${p.name} ได้ ${count(n)} ชิ้น${r.diff_qty ? ` (${r.diff_qty > 0 ? 'เกิน' : 'ขาด'} ${count(Math.abs(r.diff_qty))}) ปรับสต๊อกแล้ว` : ' ตรงกับในระบบ'} · ${r.doc_no}` };
+                addLog(r.doc_no, `นับ ${p.name} = ${n}`);
+                closeSheet();
+            } catch (e) {
+                beep('error');
+                ev.target.disabled = false;
+                err.hidden = false;
+                err.textContent = e.message;
+                if (/รอบตรวจนับเปิดอยู่/.test(e.message)) roundOpen = true;
+            }
+        });
+    }
+
     // ---- photo: saved on the product record ----
     $('photo').addEventListener('change', async (e) => {
         const file = e.target.files[0];
@@ -298,7 +357,11 @@ export function openInventoryMobile({ canLink, canPhoto, onClose }) {
         else if (act === 'photo' && canPhoto && product) $('photo').click();
         else if (act === 'link' && product) { linkFor = product; message = null; draw(); if (!stopScan) startCamera(); }
         else if (act === 'unlink') { linkFor = null; draw(); }
+        else if (act === 'count' && product && canCount) openCountSheet(product);
         else if (act === 'find-for-code' && unknown) openSearch(unknown);
     });
     draw();
+    if (canCount) {
+        api.get('/stockcounts/open-round').then((r) => { roundOpen = r.data.open; draw(); }).catch(() => {});
+    }
 }
