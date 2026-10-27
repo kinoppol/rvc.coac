@@ -5,6 +5,7 @@ import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 import { openPoBuilder } from '../po-builder.js';
 import { openInventoryMobile } from '../inventory-mobile.js';
+import { openMobileCount } from './count-mobile.js';
 
 const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
@@ -42,6 +43,8 @@ export async function render(container, { navigate, permissions, user }) {
     let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], consign, consignorId, consignCost, error, busy }
     const canEdit = permissions.includes('purchase.create');
     const canConsign = canEdit && user?.role === 'admin';
+    // Counting on the phone with no round open sets stock at once: approvers only.
+    const canCount = permissions.includes('stockcount.approve');
     // Admin / manager: sales booked with no cost (sold before the first purchase) that can now be costed.
     const canFixCost = ['admin', 'manager'].includes(user?.role);
     // Admin / manager: set the piece sale price of the store's goods in the editor.
@@ -105,6 +108,10 @@ export async function render(container, { navigate, permissions, user }) {
         const canBuy = permissions.includes('purchase.create');
         container.innerHTML = `
         <div id="inv-page" hidden></div>
+        <div class="actions-row" style="margin-bottom:12px">
+          <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด และถ่ายรูปสินค้า">📱 เก็บข้อมูลด้วยมือถือ</button>
+          ${canCount ? '<button type="button" class="btn secondary" id="quick-count" title="ใช้ตัวนับแบบเดียวกับรอบตรวจนับ บันทึกแล้วปรับสต๊อกทีละรายการทันที (เมื่อไม่มีรอบตรวจนับเปิดอยู่)">🔢 นับสต๊อกด้วยมือถือ</button>' : ''}
+        </div>
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">มูลค่าสต๊อก (ต้นทุน)</div><div class="val">฿ ${money(s.stock_cost_value)}</div>
             <div class="sub">${count(s.stock_units)} ชิ้น · ${count(s.items)} รายการ${s.out_of_stock ? ` · หมด ${count(s.out_of_stock)}` : ''}</div></div>
@@ -120,7 +127,6 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="actions-row" style="justify-content:space-between">
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
-              <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด ถ่ายรูปสินค้า และนับสต๊อกทีละรายการเมื่อไม่มีรอบตรวจนับเปิดอยู่">📱 เก็บข้อมูลด้วยมือถือ</button>
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${picked.size ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ">สร้างใบรายการสั่งซื้อ (${picked.size})</button>` : ''}
@@ -159,8 +165,16 @@ export async function render(container, { navigate, permissions, user }) {
         }));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
-            canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), canCount: permissions.includes('stockcount.approve'), onClose: load,
+            canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
         }));
+        container.querySelector('#quick-count')?.addEventListener('click', async () => {
+            const open = (await api.get('/stockcounts/open-round').catch(() => ({ data: { open: false } }))).data.open;
+            if (open) {
+                alertDialog('มีรอบตรวจนับเปิดอยู่ ให้นับสินค้าในเมนูตรวจนับสต๊อก (รอบนั้น) แทน', { title: 'นับในรอบตรวจนับ' });
+                return;
+            }
+            openMobileCount({ quick: true, stockCount: null, items: [], onClose: load });
+        });
         container.querySelector('#phone-link').addEventListener('click', () => {
             if (link) { link.shown = true; draw(); } else openLink();
         });

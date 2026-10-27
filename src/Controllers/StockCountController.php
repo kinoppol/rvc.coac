@@ -46,7 +46,8 @@ class StockCountController
             return $this->error($response, 'กรุณาระบุจำนวนที่นับเป็นจำนวนเต็ม', 422);
         }
         try {
-            $result = $this->service()->quickCount((int) $args['id'], (int) $body['counted_qty'], trim((string) ($body['note'] ?? '')), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $result = $this->service()->quickCount((int) $args['id'], (int) $body['counted_qty'], trim((string) ($body['note'] ?? '')), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                isset($body['photo']) ? (string) $body['photo'] : null);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

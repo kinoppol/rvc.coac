@@ -353,7 +353,7 @@ class StockCountService
      *
      * @return array{doc_no:string, system_qty:int, counted_qty:int, diff_qty:int}
      */
-    public function quickCount(int $productId, int $counted, ?string $note, int $userId, ?string $ip): array
+    public function quickCount(int $productId, int $counted, ?string $note, int $userId, ?string $ip, ?string $photo = null): array
     {
         if ($counted < 0) {
             throw new \RuntimeException('จำนวนที่นับต้องไม่ติดลบ');
@@ -379,6 +379,11 @@ class StockCountService
             $this->db->prepare(
                 'INSERT INTO stock_count_items (stock_count_id, product_id, system_qty, counted_qty, diff_qty, note) VALUES (?, ?, ?, ?, ?, ?)'
             )->execute([$countId, $productId, $system, $counted, $counted - $system, $note !== null && $note !== '' ? mb_substr($note, 0, 255) : 'นับทันทีด้วยมือถือ']);
+            if ($photo !== null && $photo !== '') {
+                $row = (new AttachmentService($this->db))->saveDataUrl($photo, $userId, 'counts');
+                $this->db->prepare('INSERT INTO stock_count_photos (stock_count_id, product_id, token, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, NOW())')
+                    ->execute([$countId, $productId, $row['token'], $note !== null && $note !== '' ? mb_substr($note, 0, 100) : null, $userId]);
+            }
             if ($counted !== $system) {
                 $this->db->prepare('UPDATE products SET qty_stock = ? WHERE id = ?')->execute([$counted, $productId]);
                 $this->audit->log('products', $productId, 'update', $old, ['qty_stock' => $counted, 'stock_count' => $docNo], $userId, $ip);

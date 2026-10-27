@@ -45,7 +45,19 @@ function beep(kind = 'scan') {
  * Full-screen counting mode for phones: scan or key in a barcode, then key in
  * the counted quantity on a large keypad. Saves each product immediately.
  */
-export function openMobileCount({ stockCount, items, onClose }) {
+export function openMobileCount({ stockCount, items, onClose, quick = false }) {
+    // quick: no round open — each save sets the product's stock at once (its own one-line count).
+    const ep = quick ? {
+        lookup: (code) => api.get(`/inventory/lookup?code=${encodeURIComponent(code)}`),
+        search: (q) => api.get(`/inventory/search?q=${encodeURIComponent(q)}`),
+        count: (b) => api.post(`/products/${b.product_id}/quick-count`, { counted_qty: b.counted_qty, photo: b.photo, note: b.photo_note }),
+        barcode: (b) => api.post(`/inventory/${b.product_id}/assign-barcode`, { barcode: b.barcode, pack_size: b.pack_size }),
+    } : {
+        lookup: (code) => api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`),
+        search: (q) => api.get(`/stockcounts/${stockCount.id}/search?q=${encodeURIComponent(q)}`),
+        count: (b) => api.post(`/stockcounts/${stockCount.id}/count`, b),
+        barcode: (b) => api.post(`/stockcounts/${stockCount.id}/barcode`, b),
+    };
     const counted = new Map(items.map((it) => [Number(it.product_id), it.counted_qty === null ? null : Number(it.counted_qty)]));
     let total = items.length;
     let product = null;     // productInfo from the API
@@ -69,7 +81,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
     root.innerHTML = `
       <header class="mc-head">
         <button type="button" class="mc-icon" data-act="close" aria-label="ปิด">✕</button>
-        <div class="mc-title"><b>${escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
+        <div class="mc-title"><b>${quick ? 'นับสต๊อกทันที' : escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
         <button type="button" class="mc-scan" data-act="scan">📷 สแกน</button>
         ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
         <button type="button" class="mc-icon snd-btn" data-act="sound" aria-label="ระดับเสียง" title="ระดับเสียง">${soundButtonLabel()}</button>
@@ -160,7 +172,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
     }
 
     function draw() {
-        $('progress').textContent = `นับแล้ว ${countedN()}/${total}`;
+        $('progress').textContent = quick ? `ปรับสต๊อกทันที · นับแล้ว ${countedN()} รายการ` : `นับแล้ว ${countedN()}/${total}`;
         const cam = $('cam');
         const scan = root.querySelector('.mc-scan');
         scan.classList.toggle('on', !cam.hidden);
@@ -179,7 +191,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
                 </button>
                 <div class="mc-info">
                   <div class="mc-name">${escapeHtml(product.name)}</div>
-                  <div class="mc-sub">${escapeHtml(product.consignor_name)}${product.item ? '' : ' · <b>ไม่อยู่ในรอบนับ (จะเพิ่มให้)</b>'}</div>
+                  <div class="mc-sub">${escapeHtml(product.consignor_name)}${product.item || quick ? '' : ' · <b>ไม่อยู่ในรอบนับ (จะเพิ่มให้)</b>'}</div>
                   <div class="mc-nums">
                     <span>ในระบบ <b>${sys}</b></span>
                     <span>นับแล้ว <b>${got ?? '–'}</b></span>
@@ -256,7 +268,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
         busy = true;
         try {
-            const res = await api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`);
+            const res = await ep.lookup(code);
             beep(res.data.scanned_pack_size > 1 ? 'pack' : 'scan');
             selectProduct(res.data, res.data.scanned_pack_size || 1);
         } catch (e) {
@@ -320,7 +332,8 @@ export function openMobileCount({ stockCount, items, onClose }) {
             return;
         }
         try {
-            const res = await api.post(`/stockcounts/${stockCount.id}/count`, {
+            const sys = product.item ? Number(product.item.system_qty) : Number(product.qty_stock);
+            const res = await ep.count({
                 product_id: product.id, counted_qty: value, photo,
                 photo_note: addTo ? `บวกเพิ่ม ${how}${pieces} → ${value}` : `${how}${value}`,
             });
@@ -328,11 +341,13 @@ export function openMobileCount({ stockCount, items, onClose }) {
             counted.set(Number(product.id), value);
             log.unshift({ name: product.name, qty: how + (addTo ? `${prev} + ${pieces} = ${value}` : value) });
             beep('saved');
-            product = res.data;
+            product = quick ? { ...product, qty_stock: res.data.qty_stock } : res.data;
             mode = 'code';
             input = '';
             resetQty();
-            message = { kind: 'ok', text: `บันทึก ${product.name} = ${value} ชิ้น` };
+            message = { kind: 'ok', text: quick
+                ? `บันทึก ${product.name} = ${value} ชิ้น${value !== sys ? ` (${value > sys ? 'เกิน' : 'ขาด'} ${Math.abs(value - sys)}) ปรับสต๊อกแล้ว` : ' ตรงกับในระบบ'} · ${res.data.doc_no}`
+                : `บันทึก ${product.name} = ${value} ชิ้น` };
         } catch (e) {
             beep('error');
             message = { kind: 'bad', text: e.message };
@@ -350,7 +365,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
         }
         busy = true;
         try {
-            const res = await api.post(`/stockcounts/${stockCount.id}/barcode`, { product_id: p.id, barcode: code, pack_size: size });
+            const res = await ep.barcode({ product_id: p.id, barcode: code, pack_size: size });
             beep('saved');
             linkFor = null;
             closeSheet();
@@ -423,7 +438,7 @@ export function openMobileCount({ stockCount, items, onClose }) {
                 if (!q) return;
                 const my = ++seq;
                 try {
-                    const res = await api.get(`/stockcounts/${stockCount.id}/search?q=${encodeURIComponent(q)}`);
+                    const res = await ep.search(q);
                     if (my !== seq) return;
                     found = res.data;
                     drawResults();
