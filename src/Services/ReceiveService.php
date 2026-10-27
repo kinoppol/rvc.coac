@@ -41,7 +41,21 @@ class ReceiveService
             throw new \RuntimeException('ไม่พบผู้ฝากขาย');
         }
 
-        $plan = $this->listingFees->planForBatch($consignorId, count($items));
+        // A repeat deposit of an item this consignor already lists (same name and price) tops up
+        // that row (the oldest one) instead of opening a duplicate listing and charging its fee again.
+        $find = $this->db->prepare(
+            'SELECT id FROM products WHERE consignor_id = ? AND TRIM(name) = ? AND cost_price = ? ORDER BY id ASC LIMIT 1'
+        );
+        $existing = [];
+        foreach ($items as $i => $item) {
+            $find->execute([$consignorId, trim((string) $item['name']), round((float) $item['cost_price'], 2)]);
+            $id = $find->fetchColumn();
+            if ($id !== false) {
+                $existing[$i] = (int) $id;
+            }
+        }
+
+        $plan = $this->listingFees->planForBatch($consignorId, count($items) - count($existing));
         $beneficiary = $this->fees->roundingBeneficiary();
 
         $this->db->beginTransaction();
@@ -62,15 +76,27 @@ class ReceiveService
             $insItem = $this->db->prepare(
                 'INSERT INTO receive_items
                     (receive_document_id, product_id, cost_price, sale_price, fee_per_unit, qty, listing_fee_charged, is_new_listing)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
             );
 
             $totalQty = 0;
             $totalValue = 0.0;
+            $newIndex = 0;
 
             foreach ($items as $i => $item) {
                 $calc = $this->fees->priceFor((float) $item['cost_price']);
-                $isWaived = $i < $plan['waived_count'];
+                if (isset($existing[$i])) {
+                    $productId = $existing[$i];
+                    $this->products->addStock($productId, (int) $item['qty'], $userId, $ip);
+                    $insItem->execute([
+                        $docId, $productId, $item['cost_price'], $calc['price'], $calc['fee'],
+                        $item['qty'], 0, 0,
+                    ]);
+                    $totalQty += (int) $item['qty'];
+                    $totalValue += $calc['price'] * (int) $item['qty'];
+                    continue;
+                }
+                $isWaived = $newIndex++ < $plan['waived_count'];
                 $listingFeeCharged = $isWaived ? 0.0 : $plan['fee'];
 
                 $productId = $this->products->create([
@@ -94,7 +120,7 @@ class ReceiveService
 
                 $insItem->execute([
                     $docId, $productId, $item['cost_price'], $calc['price'], $calc['fee'],
-                    $item['qty'], $listingFeeCharged,
+                    $item['qty'], $listingFeeCharged, 1,
                 ]);
 
                 $totalQty += (int) $item['qty'];
@@ -113,7 +139,7 @@ class ReceiveService
             if ($plan['charged_total'] > 0) {
                 $refNo = $this->docs->next('LF', 'ledger_entries', 'ref_no');
                 $from = $plan['waived_count'] + 1;
-                $to = count($items);
+                $to = $plan['waived_count'] + $plan['charged_count'];
                 $this->ledger->append(
                     $consignorId,
                     'listing_fee',

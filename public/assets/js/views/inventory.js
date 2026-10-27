@@ -183,6 +183,9 @@ export async function render(container, { navigate, permissions, user }) {
                 alertDialog(err.message, { tone: 'error' });
             }
         }));
+        container.querySelectorAll('[data-merge]').forEach((b) => b.addEventListener('click', () => {
+            mergeInto(res.data.find((x) => String(x.id) === b.dataset.merge));
+        }));
         container.querySelector('#zc-view')?.addEventListener('click', () => openDetailModal(async () => ({
             title: 'ยอดขายที่ต้นทุนเป็น 0',
             note: 'สินค้าเหล่านี้ขายไปก่อนบันทึกใบซื้อครั้งแรก ตอนขายยังไม่มีต้นทุน ระบบจึงบันทึกต้นทุนเป็น 0 ทำให้กำไรสูงเกินจริง ต้นทุนที่จะเติมคิดจากทุน/ชิ้นในใบซื้อแรกของสินค้านั้น',
@@ -410,7 +413,37 @@ export async function render(container, { navigate, permissions, user }) {
         } catch (e) { alertDialog(e.message, { tone: 'error' }); }
     }
 
+    // Duplicate rows of one item (same owner + same name, e.g. a repeat deposit booked as a new
+    // listing): admins can merge them. The oldest row is the usual one to keep.
+    const dupKey = (p) => `${p.consignor_id ?? 'store'}|${String(p.name).trim().replace(/\s+/g, ' ').toLowerCase()}`;
+    function dupsOf(p) {
+        return res.data.filter((x) => dupKey(x) === dupKey(p)).sort((a, b) => Number(a.id) - Number(b.id));
+    }
+    async function mergeInto(p) {
+        const group = dupsOf(p);
+        const others = group.filter((x) => x.id !== p.id);
+        const older = group[0].id === p.id;
+        const prices = new Set(group.map((x) => `${money(x.cost_price)}/${money(x.sale_price)}`));
+        const ok = await confirmDialog(
+            `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว โดยใช้รายการที่${older ? 'เก่ากว่า' : 'ใหม่กว่า'} (รหัส ${p.id}) เป็นหลัก`
+            + ` · ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน เอกสารรับฝาก/ขาย/ตรวจนับ และบาร์โค้ดของรายการ ${others.map((x) => x.id).join(', ')} จะย้ายมาที่รายการหลัก แล้วลบรายการซ้ำทิ้ง`
+            + (p.consignor_id != null ? ' · ค่าทำข้อมูลที่เก็บจากรายการซ้ำจะคืนเข้าบัญชีผู้ฝาก' : '')
+            + (prices.size > 1 ? ` · ราคาไม่เท่ากัน จะใช้ต้นทุน ฿${money(p.cost_price)} ราคาขาย ฿${money(p.sale_price)} ของรายการหลักต่อจากนี้` : '')
+            + (older ? '' : ' · ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก'),
+            { title: 'รวมรายการสินค้าซ้ำ?', okText: 'รวมรายการ', danger: !older }
+        );
+        if (!ok) return;
+        try {
+            const r = (await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id) })).data;
+            await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}`, { title: 'รวมรายการแล้ว' });
+            await load();
+        } catch (err) {
+            alertDialog(err.message, { tone: 'error' });
+        }
+    }
+
     function row(p) {
+        const dups = canConsign ? dupsOf(p) : [];
         const low = Number(p.qty_stock) <= 3;
         // Only the store's own goods are bought from suppliers.
         const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null
@@ -418,7 +451,9 @@ export async function render(container, { navigate, permissions, user }) {
         return `<tr>${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
             ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
-                ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}</td>
+                ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
+            ${dups.length > 1
+                ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อนี้ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}

@@ -312,6 +312,80 @@ class ProductRepo
     }
 
     /**
+     * Merge duplicate product rows into one (the kept row, usually the older one): every
+     * document line, POS mapping and pack barcode is moved to it, quantities are summed and
+     * the duplicates are deleted. A listing fee charged for a duplicate is credited back,
+     * since the item was never a new listing. Call inside a transaction.
+     *
+     * @param int[] $dupIds
+     * @return array{merged:int, refunded:float}
+     */
+    public function merge(int $keepId, array $dupIds, \App\Services\LedgerService $ledger, \App\Services\DocumentNumberService $docs, ?int $userId, ?string $ip): array
+    {
+        $dupIds = array_values(array_unique(array_filter(array_map('intval', $dupIds), fn ($id) => $id > 0 && $id !== $keepId)));
+        if (!$dupIds) {
+            throw new \RuntimeException('กรุณาเลือกรายการที่จะรวมอย่างน้อย 2 รายการ');
+        }
+        $ids = [$keepId, ...$dupIds];
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare("SELECT * FROM products WHERE id IN ($in) FOR UPDATE");
+        $stmt->execute($ids);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rows[(int) $r['id']] = $r;
+        }
+        if (count($rows) !== count($ids)) {
+            throw new \RuntimeException('ไม่พบสินค้าบางรายการ กรุณารีเฟรชหน้า');
+        }
+        $keep = $rows[$keepId];
+        foreach ($dupIds as $id) {
+            if ($rows[$id]['consignor_id'] !== $keep['consignor_id']) {
+                throw new \RuntimeException('รวมได้เฉพาะสินค้าของผู้ฝากขายรายเดียวกัน (หรือสินค้าของร้านด้วยกัน)');
+            }
+        }
+
+        $refunded = 0.0;
+        $barcode = $keep['barcode'];
+        $sum = ['qty_received' => 0, 'qty_sold' => 0, 'qty_returned' => 0, 'qty_stock' => 0];
+        foreach ($dupIds as $id) {
+            $dup = $rows[$id];
+            foreach ($sum as $col => $_) {
+                $sum[$col] += (int) $dup[$col];
+            }
+            if (($barcode === null || $barcode === '') && $dup['barcode'] !== null && $dup['barcode'] !== '') {
+                $barcode = $dup['barcode'];
+            }
+            foreach (['receive_items', 'return_items', 'sale_items', 'purchase_items', 'stock_count_items',
+                      'stock_count_photos', 'pos_item_mappings', 'product_pack_barcodes'] as $table) {
+                $this->db->prepare("UPDATE $table SET product_id = ? WHERE product_id = ?")->execute([$keepId, $id]);
+            }
+            if ($dup['consignor_id'] !== null && $dup['listing_fee_status'] === 'charged'
+                && (float) $dup['listing_fee_amount'] > 0 && !(int) $dup['listing_fee_refunded']) {
+                $ledger->append(
+                    (int) $dup['consignor_id'],
+                    'listing_fee_refund',
+                    'คืนค่าทำข้อมูล (รายการซ้ำ รวมเข้ากับรายการเดิม) - ' . $dup['name'],
+                    $docs->next('LFR', 'ledger_entries', 'ref_no'),
+                    (float) $dup['listing_fee_amount'],
+                    0,
+                    $userId
+                );
+                $refunded += (float) $dup['listing_fee_amount'];
+            }
+            $this->db->prepare('DELETE FROM products WHERE id = ?')->execute([$id]);
+            $this->audit->log('products', $id, 'delete', $dup, ['merged_into' => $keepId], $userId, $ip);
+        }
+
+        $this->db->prepare(
+            'UPDATE products SET qty_received = qty_received + ?, qty_sold = qty_sold + ?, qty_returned = qty_returned + ?,
+                qty_stock = qty_stock + ?, barcode = ?, updated_at = NOW() WHERE id = ?'
+        )->execute([...array_values($sum), $barcode, $keepId]);
+        $this->audit->log('products', $keepId, 'update', $keep, $this->find($keepId) + ['merged_from' => $dupIds], $userId, $ip);
+
+        return ['merged' => count($dupIds), 'refunded' => round($refunded, 2)];
+    }
+
+    /**
      * Sales of a consignment product made while it was still recorded as the store's
      * (before convertToConsignment): move them to the consignor and credit the ledger,
      * the same way a sale of it would today. Call inside a transaction.

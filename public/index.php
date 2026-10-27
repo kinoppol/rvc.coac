@@ -359,6 +359,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/consign',[InventoryController::class, 'convertToConsignment'])
         ->add(new RoleGuard('purchase.create'));
+    $group->post('/inventory/merge', [InventoryController::class, 'merge'])
+        ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/claim-sales', [InventoryController::class, 'claimStoreSales'])
         ->add(new RoleGuard('purchase.create'));
     $group->get('/consignors/{id:[0-9]+}/unclaimed-sales', [InventoryController::class, 'unclaimedSales']);

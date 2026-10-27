@@ -351,6 +351,35 @@ class InventoryController
         return $this->json($response, ['ok' => true, 'claimed' => $claimed]);
     }
 
+    /** Admin only: merge duplicate product rows into the chosen one (default: the oldest). */
+    public function merge(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่รวมรายการสินค้าได้', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        $ids = array_map('intval', (array) ($body['ids'] ?? []));
+        $keepId = (int) ($body['keep_id'] ?? 0);
+        if (!in_array($keepId, $ids, true)) {
+            return $this->error($response, 'กรุณาเลือกรายการหลักที่จะเก็บไว้', 422);
+        }
+        $db = Db::connection();
+        $repo = new ProductRepo($db, new AuditLogger($db));
+        $db->beginTransaction();
+        try {
+            $result = $repo->merge($keepId, $ids, new LedgerService($db), new DocumentNumberService($db), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            if ($e instanceof \RuntimeException) {
+                return $this->error($response, $e->getMessage(), 422);
+            }
+            throw $e;
+        }
+        return $this->json($response, ['ok' => true] + $result);
+    }
+
     /**
      * Admin only: this consignor's products whose sales are still recorded as the store's
      * (sold before the product was changed to consignment), with what the consignor would get.
