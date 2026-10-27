@@ -726,6 +726,40 @@ class PurchaseService
         return array_map(fn ($d) => $d + ['buyer_name' => $names[(int) ($d['buyer_id'] ?? 0)] ?? null], $rows);
     }
 
+    /** Whether the purchase counts as paid from its day's drawer in the daily closing (yes unless flagged otherwise). */
+    private function paidFromDrawer(int $id): bool
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT from_drawer FROM closing_purchase_flags WHERE purchase_id = ?');
+            $stmt->execute([$id]);
+            $flag = $stmt->fetchColumn();
+        } catch (\PDOException $e) {
+            return true; // migration 0053 not run yet
+        }
+        return $flag === false || (bool) $flag;
+    }
+
+    /**
+     * Admin marks whether the purchase was paid from the drawer of the receipt's day
+     * (same flag the daily closing sets). Only a change is written, so an untouched
+     * purchase keeps whoever flagged it before.
+     */
+    public function setFromDrawer(int $id, bool $fromDrawer, int $userId, ?string $ip): void
+    {
+        if ($this->paidFromDrawer($id) === $fromDrawer) {
+            return;
+        }
+        try {
+            $this->db->prepare(
+                'INSERT INTO closing_purchase_flags (purchase_id, from_drawer, user_id, updated_at) VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE from_drawer = VALUES(from_drawer), user_id = VALUES(user_id), updated_at = NOW()'
+            )->execute([$id, $fromDrawer ? 1 : 0, $userId]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('บันทึกใบซื้อแล้ว แต่ยังระบุการใช้เงินในลิ้นชักไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0053) ก่อน');
+        }
+        $this->audit->log('purchase_documents', $id, 'update', ['from_drawer' => !$fromDrawer], ['from_drawer' => $fromDrawer], $userId, $ip);
+    }
+
     /** capital = invested money, profit = the business's profit, stock = leftover goods brought in (admin only, no money spent). */
     public const FUNDING = ['capital', 'profit', 'stock'];
 
@@ -947,6 +981,7 @@ class PurchaseService
         );
         $items->execute([$id]);
         $doc['items'] = $items->fetchAll();
+        $doc['from_drawer'] = $this->paidFromDrawer($id);
         if (($doc['status'] ?? 'active') === 'cancelled') {
             $doc['items'] = json_decode((string) $doc['cancelled_items'], true) ?: [];
             $by = $this->db->prepare('SELECT full_name FROM users WHERE id = ?');

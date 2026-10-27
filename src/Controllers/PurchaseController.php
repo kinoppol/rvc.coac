@@ -123,6 +123,7 @@ class PurchaseController
                 (int) $user['id'],
                 $request->getServerParams()['REMOTE_ADDR'] ?? null
             );
+            $this->saveFromDrawer($body, $user, (int) $result['id'], $request);
         } catch (\RuntimeException $e) {
             if (!empty($body['order']) && $e instanceof \PDOException) {
                 return $this->error($response, 'ยังบันทึกใบสั่งซื้อไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0041 และ 0042) ก่อน', 422);
@@ -147,6 +148,16 @@ class PurchaseController
         return null;
     }
 
+    /** Paid from the drawer of the receipt's day or not (header.from_drawer): set by an admin only. */
+    private function saveFromDrawer(array $body, array $user, int $id, Request $request): void
+    {
+        $header = (array) ($body['header'] ?? []);
+        if (($user['role'] ?? '') !== 'admin' || !isset($header['from_drawer']) || ($header['funding'] ?? '') === 'stock') {
+            return;
+        }
+        self::service()->setFromDrawer($id, (string) $header['from_drawer'] !== '0', (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+    }
+
     public function update(Request $request, Response $response, array $args): Response
     {
         $body = (array) $request->getParsedBody();
@@ -169,6 +180,7 @@ class PurchaseController
                 $request->getServerParams()['REMOTE_ADDR'] ?? null,
                 !empty($body['receive']) // an order: confirm the delivery into stock
             );
+            $this->saveFromDrawer($body, $user, $id, $request);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

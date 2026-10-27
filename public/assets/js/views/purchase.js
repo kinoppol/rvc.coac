@@ -24,7 +24,8 @@ function emptyHeader() {
     // funding: bought with invested money ('capital', counts toward งบลงทุน) or the business's profit ('profit');
     // 'stock' = leftover goods already in the store, brought into stock by an admin (no money spent)
     // buyer_id: the staff member who bought the goods ('' = not given)
-    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital', buyer_id: '' };
+    // from_drawer ('1'/'0'): paid from the drawer of the receipt's day (admin sets it; daily closing counts it).
+    return { supplier_name: '', supplier_tax_id: '', receipt_no: '', receipt_date: '', discount: 0, vat: 0, total: 0, note: '', funding: 'capital', buyer_id: '', from_drawer: '1' };
 }
 function emptyItem() {
     // name = per-piece product name; qty/unit_cost/line_total = as printed (packs); sale_price = per piece
@@ -151,6 +152,7 @@ export async function render(container, { user } = {}) {
             receipt_date: d.receipt_date || '', discount: Number(d.discount) || 0, vat: Number(d.vat) || 0, total: Number(d.total) || 0, note: d.note || '',
             funding: ['profit', 'stock'].includes(d.funding) ? d.funding : 'capital',
             buyer_id: d.buyer_id ? String(d.buyer_id) : '',
+            from_drawer: d.from_drawer === false ? '0' : '1',
         };
         // An order keeps its lines as entered: a line paired with a product stays paired.
         if (ordered) {
@@ -333,6 +335,12 @@ export async function render(container, { user } = {}) {
                 ${buyers.map((u) => `<option value="${u.id}" ${String(u.id) === String(header.buyer_id) ? 'selected' : ''}>${escapeHtml(u.full_name)} (${BUYER_ROLE[u.role] || escapeHtml(u.role)})</option>`).join('')}
               </select>
               <span class="muted" style="font-size:11.5px;font-weight:400">พนักงาน ผู้จัดการ หรือผู้ดูแลระบบที่ไปซื้อของ</span></label>
+            ${isAdmin ? `<label class="field" data-drawer-field ${header.funding === 'stock' ? 'hidden' : ''}>จ่ายจากเงินในลิ้นชัก
+              <select data-h="from_drawer">
+                <option value="1" ${header.from_drawer !== '0' ? 'selected' : ''}>ใช้เงินในลิ้นชักของวันที่ในใบเสร็จ</option>
+                <option value="0" ${header.from_drawer === '0' ? 'selected' : ''}>ไม่ได้ใช้เงินในลิ้นชัก</option>
+              </select>
+              <span class="muted" style="font-size:11.5px;font-weight:400">ใช้เงินในลิ้นชักจะหักจากเงินสดในลิ้นชักในสรุปบัญชีรายวัน</span></label>` : ''}
           </div>
         </section>
 
@@ -824,6 +832,8 @@ export async function render(container, { user } = {}) {
                 }
                 const hint = root.querySelector('[data-funding-hint]');
                 if (hint) hint.textContent = fundingHint();
+                const drawer = root.querySelector('[data-drawer-field]');
+                if (drawer) drawer.hidden = inp.value === 'stock'; // leftover goods cost no money
                 return;
             }
             if (['discount', 'total', 'vat'].includes(inp.dataset.h)) redrawSummary();
