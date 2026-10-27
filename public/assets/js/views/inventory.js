@@ -434,7 +434,7 @@ export async function render(container, { navigate, permissions, user }) {
         );
         if (!ok) return;
         try {
-            const r = (await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id) })).data;
+            const r = await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id) });
             await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}`, { title: 'รวมรายการแล้ว' });
             await load();
         } catch (err) {
