@@ -88,6 +88,25 @@ class ReportService
         return $stmt->fetchAll();
     }
 
+    /** What was sold: one row per product, with its owner (consignor or the store). */
+    public function salesByProduct(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS consignor,
+                    SUM(si.qty) AS qty_sold, SUM(si.qty * si.unit_price) AS total_sales,
+                    SUM(si.fee_amount) AS total_fee, SUM(si.cost_amount) AS consignor_received
+             FROM sale_items si
+             JOIN sales s ON s.id = si.sale_id
+             JOIN products p ON p.id = si.product_id
+             LEFT JOIN consignors c ON c.id = si.consignor_id
+             WHERE s.business_date BETWEEN ? AND ?
+             GROUP BY p.id, p.name, c.id, c.name
+             ORDER BY total_sales DESC"
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
     public function saleDetailForConsignor(int $consignorId, string $from, string $to): array
     {
         $stmt = $this->db->prepare(

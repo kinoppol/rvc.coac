@@ -20,6 +20,7 @@ const GROUPS = [
     ]},
     { label: 'ผู้ฝากขาย', types: [
         { key: 'sales', label: 'สรุปยอดขายของฝากขาย' },
+        { key: 'sales_items', label: 'ยอดขายแยกตามรายการสินค้า' },
         { key: 'detail', label: 'รายละเอียดการขายรายผู้ฝาก' },
         { key: 'receive', label: 'รายการรับของฝากขาย' },
         { key: 'return', label: 'รายการคืนของฝากขาย' },
