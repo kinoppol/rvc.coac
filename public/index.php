@@ -280,12 +280,12 @@ $app->group('/api', function ($group) {
 
     $group->get('/stockcounts', [StockCountController::class, 'index']);
     $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);
-    $group->get('/stockcounts/{id}', [StockCountController::class, 'show']);
+    $group->get('/stockcounts/{id:[0-9]+}', [StockCountController::class, 'show']);
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
         ->add(new RoleGuard('stockcount.approve'));
     $group->post('/stockcounts/start', [StockCountController::class, 'start'])
         ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id}/counts', [StockCountController::class, 'saveCounts'])
+    $group->post('/stockcounts/{id:[0-9]+}/counts', [StockCountController::class, 'saveCounts'])
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
         ->add(new RoleGuard('stockcount.create'));
@@ -303,9 +303,9 @@ $app->group('/api', function ($group) {
     $group->post('/products/{id:[0-9]+}/photo/thumb', [StockCountController::class, 'saveThumb']);
     $group->post('/stockcounts/{id:[0-9]+}/cancel', [StockCountController::class, 'cancel'])
         ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id}/submit', [StockCountController::class, 'submit'])
+    $group->post('/stockcounts/{id:[0-9]+}/submit', [StockCountController::class, 'submit'])
         ->add(new RoleGuard('stockcount.submit'));
-    $group->post('/stockcounts/{id}/approve', [StockCountController::class, 'approve'])
+    $group->post('/stockcounts/{id:[0-9]+}/approve', [StockCountController::class, 'approve'])
         ->add(new RoleGuard('stockcount.approve'));
 
     $group->get('/capital', [CapitalController::class, 'index'])
