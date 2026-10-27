@@ -72,6 +72,32 @@ class ReceiveController
         return $this->json($response, ['data' => $stmt->fetchAll()]);
     }
 
+    /**
+     * For each name on a receive slip: this consignor's existing listing of it (the oldest one),
+     * so the form can offer to top it up / change its price instead of opening a new listing.
+     */
+    public function existing(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $consignorId = (int) ($body['consignor_id'] ?? 0);
+        $names = array_slice(array_unique(array_filter(array_map(fn ($n) => trim((string) $n), (array) ($body['names'] ?? [])))), 0, 500);
+        if (!$consignorId || !$names) {
+            return $this->json($response, ['data' => (object) []]);
+        }
+        $stmt = Db::connection()->prepare(
+            'SELECT id, name, cost_price, sale_price, qty_stock FROM products WHERE consignor_id = ? AND TRIM(name) = ? ORDER BY id ASC'
+        );
+        $out = [];
+        foreach ($names as $name) {
+            $stmt->execute([$consignorId, $name]);
+            $rows = $stmt->fetchAll();
+            if ($rows) {
+                $out[$name] = $rows;
+            }
+        }
+        return $this->json($response, ['data' => (object) $out]);
+    }
+
     /** Consignors' requests waiting to be checked (or recent ones with ?status=all). */
     public function requests(Request $request, Response $response): Response
     {

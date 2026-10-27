@@ -47,7 +47,18 @@ class ReceiveService
             'SELECT id FROM products WHERE consignor_id = ? AND TRIM(name) = ? AND cost_price = ? ORDER BY id ASC LIMIT 1'
         );
         $existing = [];
+        $reprice = []; // item index => true: the staff chose to change the existing listing's price
+        $own = $this->db->prepare('SELECT id FROM products WHERE id = ? AND consignor_id = ? AND TRIM(name) = ?');
         foreach ($items as $i => $item) {
+            if (!empty($item['update_product_id'])) {
+                $own->execute([$item['update_product_id'], $consignorId, trim((string) $item['name'])]);
+                if ($own->fetchColumn() === false) {
+                    throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' (' . $item['name'] . '): ไม่พบสินค้าเดิมที่จะปรับราคา กรุณารีเฟรชหน้า');
+                }
+                $existing[$i] = (int) $item['update_product_id'];
+                $reprice[$i] = true;
+                continue;
+            }
             $find->execute([$consignorId, trim((string) $item['name']), round((float) $item['cost_price'], 2)]);
             $id = $find->fetchColumn();
             if ($id !== false) {
@@ -87,6 +98,9 @@ class ReceiveService
                 $calc = $this->fees->priceFor((float) $item['cost_price']);
                 if (isset($existing[$i])) {
                     $productId = $existing[$i];
+                    if (isset($reprice[$i])) {
+                        $this->products->setConsignPrice($productId, (float) $item['cost_price'], (float) $calc['price'], $calc, $userId, $ip);
+                    }
                     $this->products->addStock($productId, (int) $item['qty'], $userId, $ip);
                     $insItem->execute([
                         $docId, $productId, $item['cost_price'], $calc['price'], $calc['fee'],

@@ -134,7 +134,7 @@ export async function render(container, { permissions = [], user } = {}) {
                 <thead><tr><th>สินค้า</th><th class="num">ราคาผู้ฝาก</th><th class="num">ราคาขาย</th><th class="num">จำนวน</th><th>วันที่ผลิต</th><th></th></tr></thead>
                 <tbody>
                   ${cart.map((it, i) => `
-                    <tr><td>${escapeHtml(it.name)}</td>
+                    <tr><td>${escapeHtml(it.name)}${existingHtml(it, i)}</td>
                         <td class="num"><input type="number" step="0.25" min="0" value="${it.cost_price}" data-cost="${i}" style="width:90px;text-align:right"></td>
                         <td class="num">${money(it.price)}</td>
                         <td class="num"><input type="number" min="1" value="${it.qty}" data-qty="${i}" style="width:70px;text-align:right">
@@ -187,7 +187,7 @@ export async function render(container, { permissions = [], user } = {}) {
             if (cart.length && next !== consignorId) {
                 // Lines typed for one consignor are not moved to another one silently.
                 confirmDialog('รายการที่เพิ่มไว้จะยังอยู่ในใบรับฝาก และจะบันทึกเป็นของผู้ฝากที่เลือกใหม่', { title: 'เปลี่ยนผู้ฝากขาย?', okText: 'เปลี่ยนผู้ฝาก' }).then((ok) => {
-                    if (ok) consignorId = next;
+                    if (ok) { consignorId = next; refreshExisting(); }
                     draw();
                 });
                 return;
@@ -220,6 +220,10 @@ export async function render(container, { permissions = [], user } = {}) {
         container.querySelectorAll('[data-qty]').forEach((inp) => inp.addEventListener('change', () => {
             const qty = Math.floor(Number(inp.value));
             if (qty > 0) cart[Number(inp.dataset.qty)].qty = qty;
+            draw();
+        }));
+        container.querySelectorAll('[data-reprice]').forEach((inp) => inp.addEventListener('change', () => {
+            cart[Number(inp.dataset.reprice)].reprice = inp.checked;
             draw();
         }));
         container.querySelectorAll('[data-mfg]').forEach((inp) => inp.addEventListener('change', () => {
@@ -327,6 +331,31 @@ export async function render(container, { permissions = [], user } = {}) {
         });
     }
 
+    // This consignor's existing listings of the names on the slip: a repeat item tops up the
+    // listing with the same price; at a new price the staff choose to reprice the old listing
+    // (default) or open a new one.
+    const sameCost = (it) => (it.existing || []).find((r) => Math.abs(Number(r.cost_price) - it.cost_price) < 0.005);
+    const repriceTarget = (it) => (it.existing?.length && !sameCost(it) && it.reprice !== false ? it.existing[0] : null);
+    async function refreshExisting() {
+        if (!consignorId || !cart.length) return;
+        const forId = consignorId;
+        const res = await api.post('/receive/existing', { consignor_id: consignorId, names: cart.map((i) => i.name) }).catch(() => null);
+        if (!res || forId !== consignorId) return;
+        cart.forEach((it) => { it.existing = res.data[it.name.trim()] || null; });
+        if (formOpen) draw();
+    }
+    function existingHtml(it, i) {
+        if (!it.existing?.length) return '<div class="muted" style="font-size:11.5px">รายการใหม่</div>';
+        const same = sameCost(it);
+        if (same) return `<div class="muted" style="font-size:11.5px">เติมสต๊อกรายการเดิม (คงเหลือ ${Number(same.qty_stock)})</div>`;
+        const r = it.existing[0];
+        return `<label style="display:flex;gap:6px;align-items:flex-start;font-size:11.5px;margin-top:2px;font-weight:normal">
+            <input type="checkbox" data-reprice="${i}" ${it.reprice !== false ? 'checked' : ''}>
+            <span>${it.reprice !== false
+                ? `ปรับราคาสินค้าเดิม ผู้ฝากได้ ฿${money(r.cost_price)} → ฿${money(it.cost_price)} · ขาย ฿${money(r.sale_price)} → ฿${money(it.price)} (ของเดิมที่เหลือ ${Number(r.qty_stock)} ชิ้นใช้ราคาใหม่ด้วย)`
+                : `สร้างเป็นรายการใหม่ (ราคาเดิม ฿${money(r.cost_price)} ต่างกัน) — ติ๊กเพื่อปรับราคาสินค้าเดิมแทน`}</span></label>`;
+    }
+
     async function loadRequest(id) {
         const r = requests.find((x) => x.id === id);
         if (!r) return;
@@ -348,6 +377,7 @@ export async function render(container, { permissions = [], user } = {}) {
         error = null;
         success = null;
         draw();
+        refreshExisting();
     }
 
     async function rejectRequest(id) {
@@ -406,6 +436,7 @@ export async function render(container, { permissions = [], user } = {}) {
         const res = await api.post('/receive/quote', { cost_price: cost });
         cart.push({ name, cost_price: cost, qty, barcode: barcode || null, mfg_date: mfg, expiry_date: expiry || null, price: res.data.price });
         draw();
+        refreshExisting();
     }
 
     async function submit() {
@@ -415,7 +446,7 @@ export async function render(container, { permissions = [], user } = {}) {
                 consignor_id: consignorId,
                 request_id: loaded?.id ?? null,
                 receive_date: canBackdate ? receiveDate : null,
-                items: cart.map((i) => ({ name: i.name, cost_price: i.cost_price, qty: i.qty, barcode: i.barcode, mfg_date: i.mfg_date, expiry_date: i.expiry_date })),
+                items: cart.map((i) => ({ name: i.name, cost_price: i.cost_price, qty: i.qty, barcode: i.barcode, mfg_date: i.mfg_date, expiry_date: i.expiry_date, update_product_id: repriceTarget(i)?.id ?? null })),
             });
             success = `บันทึกใบรับฝากสำเร็จ: ${result.data.doc_no}${loaded ? ` (จากคำขอ ${loaded.request_no})` : ''}`;
             cart = [];

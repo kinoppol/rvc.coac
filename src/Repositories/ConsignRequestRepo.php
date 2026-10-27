@@ -64,7 +64,7 @@ class ConsignRequestRepo
                 'barcode' => $barcode !== '' ? mb_substr($barcode, 0, 64) : null,
                 'mfg_date' => $mfg,
                 'expiry_date' => $expiry,
-            ];
+            ] + (!empty($it['update_product_id']) ? ['update_product_id' => (int) $it['update_product_id']] : []);
         }
         return $out;
     }
