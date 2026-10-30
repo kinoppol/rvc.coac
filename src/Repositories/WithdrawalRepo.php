@@ -48,12 +48,20 @@ class WithdrawalRepo
     /**
      * Immediately marks the payment as paid and records it in the ledger,
      * matching the mockup's "ทุกครั้งที่จ่ายเงินระบบจะบันทึกลงสมุดให้ทันที".
+     *
+     * Paying more than the balance needs a reason (e.g. goods lost while the shop was
+     * responsible): the account goes negative and later sales pay it back.
      */
-    public function payNow(int $consignorId, float $amount, string $method, int $userId, ?string $ip): int
+    public function payNow(int $consignorId, float $amount, string $method, int $userId, ?string $ip, ?string $overdrawReason = null): int
     {
         $balance = $this->ledger->balanceOf($consignorId);
-        if ($amount <= 0 || $amount > $balance) {
-            throw new \RuntimeException('จำนวนเงินที่เบิกไม่ถูกต้องหรือเกินยอดคงเหลือ');
+        $overdrawReason = mb_substr(trim((string) $overdrawReason), 0, 150);
+        if ($amount <= 0) {
+            throw new \RuntimeException('จำนวนเงินที่เบิกไม่ถูกต้อง');
+        }
+        $overdraw = $amount > $balance;
+        if ($overdraw && $overdrawReason === '') {
+            throw new \RuntimeException('จำนวนเงินที่เบิกเกินยอดคงเหลือ ถ้าร้านต้องรับผิดชอบ (เช่น สินค้าสูญหาย) ให้เลือกเบิกเกินยอดและระบุเหตุผล');
         }
 
         $docNo = $this->docs->next('WD', 'withdrawals', 'doc_no');
@@ -72,10 +80,13 @@ class WithdrawalRepo
                 'bank_transfer' => 'โอนธนาคาร',
                 default => 'เงินสดที่เคาน์เตอร์',
             };
+            $description = $overdraw
+                ? mb_substr("เบิกเงินเกินยอด ({$methodLabel}) คิดบัญชีติดลบ: {$overdrawReason}", 0, 255)
+                : "เบิกเงิน ({$methodLabel})";
             $this->ledger->append(
                 $consignorId,
                 'withdrawal',
-                "เบิกเงิน ({$methodLabel})",
+                $description,
                 $docNo,
                 0,
                 $amount,

@@ -53,7 +53,7 @@ class WithdrawController
         $repo = $this->repo();
         try {
             if ($canApprove) {
-                $id = $repo->payNow($consignorId, $amount, $method, (int) $user['id'], $ip);
+                $id = $repo->payNow($consignorId, $amount, $method, (int) $user['id'], $ip, (string) ($body['overdraw_reason'] ?? ''));
             } else {
                 $id = $repo->requestPending($consignorId, $amount, $method, (int) $user['id'], $ip);
             }

@@ -12,6 +12,9 @@ export async function render(container, { permissions, user }) {
     let balance = 0;
     let amount = '';
     let method = 'cash';
+    // Paying over the balance (the shop is responsible, e.g. lost goods): account goes negative.
+    let overdraw = false;
+    let overdrawReason = '';
     let error = null;
     let rows = [];
     let formOpen = false; // the withdrawal form, on a modal
@@ -32,7 +35,9 @@ export async function render(container, { permissions, user }) {
     }
 
     const over = () => amount !== '' && Number(amount) > balance;
-    const blocked = () => !consignorId || !amount || Number(amount) <= 0 || (over() && canApprove);
+    const overdrawOk = () => overdraw && overdrawReason.trim() !== '';
+    const blocked = () => !consignorId || !amount || Number(amount) <= 0 || (over() && canApprove && !overdrawOk());
+    const negativeAfter = () => money(balance - Number(amount || 0));
 
     function formHtml() {
         return `
@@ -54,7 +59,18 @@ export async function render(container, { permissions, user }) {
               ${[100, 500, 1000].map((n) => `<button type="button" class="btn secondary sm" data-quick="${n}" ${consignorId ? '' : 'disabled'}>${n} บาท</button>`).join('')}
               <button type="button" class="btn secondary sm" data-quick="all" ${consignorId ? '' : 'disabled'}>เบิกทั้งหมด</button>
             </div>
-            <div class="error-box" data-over style="margin-bottom:12px" ${over() ? '' : 'hidden'}>เบิกไม่ได้ จำนวนเงินที่กรอกเกินยอดคงเหลือ</div>
+            <div data-over style="margin-bottom:12px" ${over() ? '' : 'hidden'}>
+              ${canApprove ? `
+                <div class="${overdraw ? 'chip' : 'error-box'}" data-over-msg style="margin-bottom:8px">${overdraw
+                    ? `เบิกเกินยอด บัญชีจะติดลบ <b>&nbsp;฿ <span data-neg>${negativeAfter()}</span></b>&nbsp;หักคืนจากยอดขายครั้งต่อไป`
+                    : 'จำนวนเงินที่กรอกเกินยอดคงเหลือ'}</div>
+                <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:8px">
+                  <input type="checkbox" id="f-overdraw" ${overdraw ? 'checked' : ''} style="margin-top:3px">
+                  <span>ร้านรับผิดชอบ (เช่น สินค้าสูญหาย) ให้เบิกเกินยอดได้ คิดบัญชีติดลบไว้ก่อน</span>
+                </label>
+                ${overdraw ? `<input id="f-overdraw-reason" type="text" maxlength="150" placeholder="เหตุผล (จำเป็น) เช่น สินค้าสูญหาย 3 ชิ้น ร้านชดใช้" value="${escapeHtml(overdrawReason)}" style="width:100%">` : ''}
+              ` : '<div class="error-box">จำนวนเงินที่กรอกเกินยอดคงเหลือ ผู้อนุมัติจะพิจารณาก่อนจ่าย</div>'}
+            </div>
             ${error ? `<div class="error-box" style="margin-bottom:12px">${escapeHtml(error)}</div>` : ''}
             <label class="field">ช่องทางจ่ายเงิน
               <div class="actions-row">
@@ -115,6 +131,8 @@ export async function render(container, { permissions, user }) {
         container.querySelector('#sel-consignor').addEventListener('change', async (e) => {
             consignorId = Number(e.target.value) || null;
             amount = '';
+            overdraw = false;
+            overdrawReason = '';
             error = null;
             await refreshBalance();
             draw();
@@ -124,6 +142,17 @@ export async function render(container, { permissions, user }) {
         container.querySelector('#f-amount').addEventListener('input', (e) => {
             amount = e.target.value;
             container.querySelector('[data-over]').hidden = !over();
+            const neg = container.querySelector('[data-neg]');
+            if (neg) neg.textContent = negativeAfter();
+            container.querySelector('#btn-submit').disabled = blocked();
+        });
+        container.querySelector('#f-overdraw')?.addEventListener('change', (e) => {
+            overdraw = e.target.checked;
+            draw();
+            container.querySelector('#f-overdraw-reason')?.focus();
+        });
+        container.querySelector('#f-overdraw-reason')?.addEventListener('input', (e) => {
+            overdrawReason = e.target.value;
             container.querySelector('#btn-submit').disabled = blocked();
         });
         container.querySelectorAll('[data-quick]').forEach((btn) => btn.addEventListener('click', () => {
@@ -136,8 +165,15 @@ export async function render(container, { permissions, user }) {
 
     async function submit() {
         try {
-            await api.post('/withdrawals', { consignor_id: consignorId, amount: Number(amount), method });
+            await api.post('/withdrawals', {
+                consignor_id: consignorId,
+                amount: Number(amount),
+                method,
+                overdraw_reason: over() && overdraw ? overdrawReason.trim() : '',
+            });
             amount = '';
+            overdraw = false;
+            overdrawReason = '';
             error = null;
             formOpen = false;
             consignorId = null; // the next one starts with no consignor chosen
