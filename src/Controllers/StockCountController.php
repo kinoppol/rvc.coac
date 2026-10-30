@@ -273,6 +273,19 @@ class StockCountController
         return $this->json($response, ['data' => $this->service()->get($id)]);
     }
 
+    /** POST /stockcounts/{id}/reopen — approver sends a submitted round back to draft to keep counting. */
+    public function reopen(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $id = (int) $args['id'];
+        try {
+            $this->service()->reopen($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $this->service()->get($id)]);
+    }
+
     /** POST /stockcounts/{id}/cancel — a submitted round may only be cancelled by an approver. */
     public function cancel(Request $request, Response $response, array $args): Response
     {

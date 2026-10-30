@@ -64,6 +64,11 @@ export async function render(container, { permissions }) {
             <div><b>โหมดนับด้วยมือถือ</b><div class="muted" style="font-size:13px">สแกนบาร์โค้ดด้วยกล้อง ปุ่มกดตัวเลขขนาดใหญ่ ถ่ายภาพสินค้า และค้นหาสินค้าเพื่อผูกบาร์โค้ด — บันทึกทันทีทีละรายการ</div></div>
             <button type="button" class="btn" id="btn-mobile" style="font-size:15px;padding:12px 18px">📱 เปิดโหมดนับด้วยมือถือ</button>
           </section>` : ''}
+        ${current.status === 'submitted' ? `
+          <section class="card card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div><b>ส่งรายงานผลต่างแล้ว รออนุมัติ</b><div class="muted" style="font-size:13px">รอบนี้ล็อกการนับไว้ จึงไม่มีโหมดนับด้วยมือถือและแก้จำนวนไม่ได้ ${canApprove ? 'ถ้ายังนับไม่เสร็จ กด <b>ส่งกลับไปนับต่อ</b> ตัวเลขและรูปที่นับไว้ยังอยู่ครบ' : 'ถ้ายังนับไม่เสร็จ ให้ผู้จัดการร้านกด ส่งกลับไปนับต่อ'}</div></div>
+            ${canApprove ? '<button type="button" class="btn secondary" id="btn-reopen" style="font-size:15px;padding:12px 18px">↩ ส่งกลับไปนับต่อ</button>' : ''}
+          </section>` : ''}
         <section class="card">
           <div class="table-wrap"><table>
             <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th></tr></thead>
@@ -134,6 +139,8 @@ export async function render(container, { permissions }) {
         if (submitBtn) submitBtn.addEventListener('click', () => saveCounts(true));
         const approveBtn = container.querySelector('#btn-approve');
         if (approveBtn) approveBtn.addEventListener('click', approveCount);
+        const reopenBtn = container.querySelector('#btn-reopen');
+        if (reopenBtn) reopenBtn.addEventListener('click', reopenCount);
         const cancelBtn = container.querySelector('#btn-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
     }
@@ -214,6 +221,17 @@ export async function render(container, { permissions }) {
         try {
             await api.post(`/stockcounts/${current.id}/approve`);
             await loadList();
+        } catch (e) {
+            error = e.message;
+            draw();
+        }
+    }
+
+    async function reopenCount() {
+        try {
+            await api.post(`/stockcounts/${current.id}/reopen`);
+            error = null;
+            await loadOne(current.id);
         } catch (e) {
             error = e.message;
             draw();

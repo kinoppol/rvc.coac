@@ -307,6 +307,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.submit'));
     $group->post('/stockcounts/{id:[0-9]+}/approve', [StockCountController::class, 'approve'])
         ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/stockcounts/{id:[0-9]+}/reopen', [StockCountController::class, 'reopen'])
+        ->add(new RoleGuard('stockcount.approve'));
 
     $group->get('/capital', [CapitalController::class, 'index'])
         ->add(new RoleGuard('capital.manage'));

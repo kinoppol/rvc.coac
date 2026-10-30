@@ -322,6 +322,22 @@ class StockCountService
     }
 
     /**
+     * Sends a submitted round back to draft so counting can continue (phone mode,
+     * more lines, fixes). Counts, photos and barcodes recorded so far are kept.
+     */
+    public function reopen(int $stockCountId, int $userId, ?string $ip): void
+    {
+        $sc = $this->get($stockCountId);
+        if (!$sc || $sc['status'] !== 'submitted') {
+            throw new \RuntimeException('ส่งกลับไปนับต่อได้เฉพาะรอบที่ส่งรายงานแล้วและยังไม่อนุมัติ');
+        }
+        $this->db->prepare(
+            "UPDATE stock_counts SET status='draft', submitted_at=NULL WHERE id = ?"
+        )->execute([$stockCountId]);
+        $this->audit->log('stock_counts', $stockCountId, 'update', ['status' => 'submitted'], ['status' => 'draft'], $userId, $ip);
+    }
+
+    /**
      * Cancels a round that has not been approved yet; product stock is not changed.
      * Barcodes and photos linked during the count were already saved on the product
      * records (see StockCountController::assignBarcode/savePhoto) and are kept.
