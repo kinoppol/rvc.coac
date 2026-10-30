@@ -104,14 +104,26 @@ const PAGE_TITLES = {
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน', consignor: 'ผู้ฝากขาย' };
 
 const SIDEBAR_KEY = 'coac.sidebarCollapsed';
+// Phones and portrait tablets: the menu slides in over the page instead of taking width.
+const DRAWER_MQ = window.matchMedia('(max-width: 900px)');
 
 // Remembered per browser; with no saved choice, start collapsed on narrow screens.
 function sidebarCollapsed() {
     let saved = null;
     try { saved = localStorage.getItem(SIDEBAR_KEY); } catch (e) { /* ignore */ }
     if (saved !== null) return saved === '1';
-    return window.matchMedia('(max-width: 900px)').matches;
+    return DRAWER_MQ.matches;
 }
+
+function setDrawer(open) {
+    const shell = document.querySelector('.app-shell');
+    if (!shell) return;
+    shell.classList.toggle('nav-open', open);
+    document.body.classList.toggle('nav-drawer-open', open);
+    document.getElementById('sidebar-toggle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+export function closeDrawer() { setDrawer(false); }
 
 export function renderShell(root, { user, permissions, impersonator = null, badges = {} }) {
     const has = (perm) => permissions.includes(perm);
@@ -145,12 +157,13 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
           </div>
         </div>
       </aside>
+      <div class="nav-backdrop" id="nav-backdrop"></div>
       <div class="main">
         <header class="topbar">
           <button type="button" class="btn-sidebar-toggle" id="sidebar-toggle" title="ย่อ / ขยายเมนู" aria-label="ย่อ / ขยายเมนู">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
           </button>
-          <div>
+          <div class="topbar-titles">
             <div class="crumb" id="topbar-crumb"></div>
             <h1 id="topbar-title"></h1>
           </div>
@@ -181,9 +194,15 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
 
     updateThemeButton();
     document.getElementById('sidebar-toggle').addEventListener('click', () => {
-        const collapsed = root.querySelector('.app-shell').classList.toggle('sidebar-collapsed');
+        const shell = root.querySelector('.app-shell');
+        if (DRAWER_MQ.matches) { setDrawer(!shell.classList.contains('nav-open')); return; }
+        const collapsed = shell.classList.toggle('sidebar-collapsed');
         try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
     });
+    document.getElementById('nav-backdrop').addEventListener('click', closeDrawer);
+    document.getElementById('side-nav').addEventListener('click', (e) => { if (e.target.closest('.nav-btn')) closeDrawer(); });
+    DRAWER_MQ.addEventListener?.('change', closeDrawer);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
     document.getElementById('topbar-date').textContent = fmtNow({
         weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
     });
@@ -193,7 +212,8 @@ export function updateThemeButton() {
     const btn = document.getElementById('theme-toggle');
     if (!btn) return;
     const { icon, label } = themeMeta();
-    btn.innerHTML = `<span>${icon}</span><span>${escapeHtml(label)}</span>`;
+    btn.innerHTML = `<span>${icon}</span><span class="btn-theme-label">${escapeHtml(label)}</span>`;
+    btn.title = label;
 }
 
 export function setActiveNav(routeKey) {

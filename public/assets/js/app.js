@@ -5,6 +5,7 @@ import { escapeHtml, setAppTimeZone } from './util.js';
 import { mountAssistant, unmountAssistant } from './assistant.js';
 import { alertDialog } from './dialog.js';
 import { skPage } from './skeleton.js';
+import { initResponsive } from './responsive.js';
 
 const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
@@ -288,6 +289,8 @@ function onAuthenticated(data) {
 }
 
 window.addEventListener('app:unauthorized', () => { unmountAssistant(); renderLogin('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่'); });
+
+initResponsive();
 
 (async function boot() {
     try {

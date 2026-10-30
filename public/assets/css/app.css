@@ -27,6 +27,9 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+/* No double-tap-zoom wait on taps. */
+button, a, label, select, summary, [role="button"] { touch-action: manipulation; }
 body {
     background: var(--bg); color: var(--text); font-family: Sarabun, "Noto Sans Thai", system-ui, sans-serif;
     font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
@@ -41,7 +44,7 @@ input, select, textarea, button { font-family: inherit; font-size: 14px; }
 
 /* ---------- Auth screen ---------- */
 .auth-wrap { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 100vh; }
-.auth-card { width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 30px; box-shadow: 0 4px 24px rgba(16,24,40,.08); }
+.auth-card { width: 380px; max-width: calc(100vw - 32px); background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 30px; box-shadow: 0 4px 24px rgba(16,24,40,.08); }
 .auth-card h1 { font-size: 19px; margin: 0 0 4px; }
 .qr-login { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .qr-login-img { width: 200px; height: 200px; background: #fff; border-radius: 10px; padding: 6px; border: 1px solid var(--border); }
@@ -83,6 +86,7 @@ input, select, textarea, button { font-family: inherit; font-size: 14px; }
 .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); padding: 13px 26px; display: flex; align-items: center; gap: 16px; }
 .price-preview { border: 1px dashed var(--border); background: var(--surface2); border-radius: 9px; padding: 9px 12px; font-size: 15px; font-weight: 700; min-height: 40px; display: flex; align-items: center; }
 .impersonate-bar { position: sticky; top: 0; z-index: 19; background: #fef3c7; color: #78350f; border-bottom: 1px solid #f59e0b; padding: 8px 26px; font-size: 13px; }
+.topbar-titles { min-width: 0; }
 .topbar .crumb { font-size: 11.5px; color: var(--muted); font-weight: 500; }
 .topbar h1 { margin: 1px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -.2px; }
 .topbar .right { display: flex; align-items: center; gap: 9px; margin-left: auto; }
@@ -105,7 +109,7 @@ input, select, textarea, button { font-family: inherit; font-size: 14px; }
 .hint { display: flex; gap: 12px; align-items: flex-start; background: var(--soft); border: 1px solid var(--priBorder); border-radius: 12px; padding: 13px 16px; font-size: 13.5px; }
 .hint .dot { width: 22px; height: 22px; flex: none; border-radius: 50%; background: var(--pri); color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
 
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(216px,1fr)); gap: 14px; align-content: start; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(216px, 100%),1fr)); gap: 14px; align-content: start; }
 .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 17px 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
 .kpi .lbl { font-size: 12.5px; color: var(--muted); font-weight: 500; }
 .kpi .val { font-size: 27px; font-weight: 700; letter-spacing: -.6px; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
@@ -174,7 +178,7 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .ac-item:hover, .ac-item.active { background: var(--soft); }
 .ac-new { display: block; color: var(--pri); }
 .ac-note { padding: 9px 12px; font-size: 12.5px; color: var(--muted); }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 16px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%),1fr)); gap: 16px; }
 .actions-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
 .pill { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
@@ -204,7 +208,7 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .tab-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .tab-btn.active { background: var(--pri); color: #fff; border-color: var(--pri); }
 
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(180px, 100%),1fr)); gap: 12px; }
 
 /* ---------- Floating AI assistant ---------- */
 .ai-fab { position: fixed; right: 22px; bottom: 22px; z-index: 60; width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--pri), #7c4dff); box-shadow: 0 8px 24px rgba(21,82,209,.35); transition: transform .15s; }
@@ -822,3 +826,117 @@ div.pos-row.out { cursor: not-allowed; }
 .osk .osk-space { flex: 5 1 0; font-size: 14px; color: var(--muted); }
 .osk .osk-enter { flex: 2 1 0; background: var(--pri); border-color: var(--pri); color: #fff; }
 @media (max-height: 700px) { .osk button { height: 40px; font-size: 18px; } .osk { gap: 4px; } }
+
+/* Tables that come without their own scroll box get one (responsive.js). */
+.tbl-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap, .ai-table { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.nav-backdrop { display: none; }
+
+/* ---------- Touch screens (tablets, phones): fingers need bigger targets ---------- */
+@media (pointer: coarse) {
+    .btn { min-height: 44px; }
+    .btn.sm { min-height: 38px; padding: 7px 12px; }
+    .tab-btn { min-height: 44px; padding: 9px 16px; }
+    .nav-btn { min-height: 48px; }
+    .modal-close, .ai-icon-btn, .btn-sidebar-toggle { width: 44px; height: 44px; }
+    .btn-theme { min-height: 44px; }
+    .role-switch { min-height: 32px; font-size: 13px; }
+    .logout-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; }
+    .link-btn { min-height: 36px; }
+    /* 16 px text in fields stops phones from zooming in on focus. */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { font-size: 16px; }
+    .field input, .field select, .report-row select, .report-row input, .pc-select, .search-input { min-height: 44px; }
+    .pc-items input, .pc-summary input, .pc-type, .ai-price { min-height: 40px; }
+    input[type="checkbox"], input[type="radio"] { width: 22px; height: 22px; }
+    .pc-photo-tools button { width: 36px; height: 32px; }
+    .pc-photo-del { width: 34px; height: 32px; }
+    .ai-photo button { width: 26px; height: 26px; line-height: 26px; }
+    .ac-item { padding: 12px 14px; }
+    .ai-suggest button { padding: 11px 13px; }
+    /* Hover colours stick after a tap on touch; show a pressed look instead. */
+    .btn:active, .tab-btn:active, .shortcut-btn:active, .kpi-link:active { filter: brightness(.94); }
+}
+
+/* ---------- Phones and portrait tablets: the menu slides in over the page ---------- */
+@media (max-width: 900px) {
+    .sidebar, .app-shell.sidebar-collapsed .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 75; width: min(290px, 84vw); height: 100%; transform: translateX(-100%); transition: transform .22s ease-out; box-shadow: 0 0 40px rgba(0,0,0,.35); padding-bottom: env(safe-area-inset-bottom); overscroll-behavior: contain; visibility: hidden; }
+    .app-shell.nav-open .sidebar { transform: none; visibility: visible; }
+    .app-shell.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 74; background: rgba(10,18,36,.5); }
+    body.nav-drawer-open { overflow: hidden; }
+    /* Inside the drawer the menu is always shown in full, even if it was collapsed on a wide screen. */
+    .app-shell.sidebar-collapsed .sidebar .brand { padding: 20px 18px 16px; justify-content: flex-start; }
+    .app-shell.sidebar-collapsed .sidebar .brand > div:not(.logo),
+    .app-shell.sidebar-collapsed .sidebar .group-label,
+    .app-shell.sidebar-collapsed .nav-btn > span:not(.badge) { display: block; }
+    .app-shell.sidebar-collapsed .sidebar .footer-widget { display: block; }
+    .app-shell.sidebar-collapsed .sidebar nav { padding: 14px 10px; }
+    .app-shell.sidebar-collapsed .nav-btn { justify-content: flex-start; padding: 10px 12px; }
+    .app-shell.sidebar-collapsed .nav-btn .badge { position: static; font-size: 11px; padding: 1px 7px; }
+    .nav-btn { font-size: 15px; }
+
+    .topbar { padding: 10px 14px; gap: 10px; }
+    .topbar h1 { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .topbar .right { gap: 6px; flex: none; }
+    #topbar-date { display: none; }
+    .impersonate-bar { padding: 8px 14px; }
+    .content { padding: 16px 14px 96px; gap: 14px; }
+    .search-box { min-width: 0; }
+    .modal-foot { flex-wrap: wrap; }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) { .sidebar { transition: none !important; } }
+
+/* ---------- Phones ---------- */
+@media (max-width: 640px) {
+    .topbar .crumb, .btn-theme-label, .user-box .avatar, .user-box .name { display: none; }
+    .topbar h1 { font-size: 15.5px; line-height: 1.3; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .topbar-titles { flex: 1; }
+    .btn-theme { padding: 7px 10px; }
+    .user-box { padding-left: 6px; gap: 4px; }
+    .role-switch { max-width: 92px; }
+    .logout-link { margin-left: 2px; white-space: nowrap; }
+    .content { padding: 12px 10px 96px; gap: 12px; }
+    .card-pad { padding: 14px; }
+    .card-head { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+    .hint { padding: 11px 12px; gap: 10px; }
+    .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .kpi { padding: 13px 12px; }
+    .kpi .val { font-size: 21px; letter-spacing: -.3px; overflow-wrap: anywhere; }
+    .kpi .lbl { font-size: 12px; }
+    .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .shortcuts-grid { gap: 8px; }
+    .shortcut-btn { min-height: 72px; padding: 12px; }
+    table { font-size: 13px; }
+    th { padding: 8px 10px; }
+    td { padding: 9px 10px; }
+    td:not(.pick-col):not(:empty) { min-width: 5.5em; }
+    td.num { white-space: nowrap; }
+    .search-box { width: 100%; max-width: none !important; }
+    .search-input { flex-basis: 100%; max-width: none; }
+    .actions-row { gap: 8px; }
+    .tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn { flex: none; white-space: nowrap; }
+    .report-type select { max-width: none; width: 100%; }
+    .report-row label { flex-wrap: wrap; }
+    .pc-photo, .pc-add { width: 104px; height: 140px; }
+    .pc-summary { padding: 12px 14px; }
+    .pc-pager { padding: 10px 14px; }
+    .st-note { min-width: 160px; }
+
+    /* Windows open as a sheet from the bottom, full width, within reach of a thumb. */
+    .modal-backdrop { padding: 0; align-items: flex-end; }
+    .modal { width: 100% !important; max-width: 100%; max-height: 94vh; max-height: 94dvh; border-radius: 16px 16px 0 0; border-bottom: 0; }
+    .pc-modal { height: 94vh; height: 94dvh; }
+    .modal-head { padding: 12px 14px; }
+    .modal-body { padding: 14px; }
+    .modal-foot { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+    .modal-foot > .btn { flex: 1 1 auto; }
+    /* Short questions (confirm / alert) stay a centred box. */
+    .app-dialog { padding: 16px; align-items: center; }
+    .app-dialog .modal { border-radius: 16px; border-bottom: 1px solid var(--border); }
+    .app-dialog-body { padding: 18px 16px 14px; }
+    .app-dialog-foot .btn { flex: 1; min-width: 0; }
+
+    .auth-card { padding: 22px 18px; }
+    .ai-panel { height: calc(100dvh - 100px); }
+}
