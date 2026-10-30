@@ -551,7 +551,7 @@ body.mc-open > :not(.mc) { display: none !important; }
 .mc-pack-size { width: 100px; font: inherit; font-size: 18px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); }
 
 /* ---------- POS (ขายสินค้า) — sized for touch screens ---------- */
-.pos { display: flex; flex-direction: column; gap: 12px; height: max(420px, calc(100vh - 136px - var(--osk-h, 0px))); height: max(420px, calc(100dvh - 136px - var(--osk-h, 0px))); }
+.pos { display: flex; flex-direction: column; gap: 12px; height: max(420px, calc(100vh - 136px)); height: max(420px, calc(100dvh - 136px)); }
 /* Notice bars (store hours, drawer, short-stock switch, messages) take room only when shown;
    the product grid and cart shrink to fit, so the pay button stays on screen. */
 .pos > div:empty { display: none; }
@@ -815,9 +815,18 @@ div.pos-row.out { cursor: not-allowed; }
 .cnt-photo-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
 .cnt-photo-row label.btn { cursor: pointer; }
 
-/* ---------- On-screen keyboard (osk.js): compact, sits at the bottom, the page makes room above it ---------- */
-.osk { position: fixed; left: 50%; bottom: 0; z-index: 95; transform: translateX(-50%); width: min(100vw, 760px); display: flex; flex-direction: column; gap: 4px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--surface2); border: 1px solid var(--border); border-bottom: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px rgba(16,24,40,.18); user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+/* ---------- On-screen keyboard (osk.js): compact, floats over the page, draggable, see-through ---------- */
+.osk { position: fixed; left: 50%; bottom: 6px; z-index: 95; transform: translateX(-50%); width: min(calc(100vw - 8px), 760px); display: flex; flex-direction: column; gap: 4px; padding: 0 6px calc(6px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--surface2) 80%, transparent); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 10px 32px rgba(16,24,40,.28); user-select: none; -webkit-user-select: none; touch-action: none; transition: opacity .15s; }
 .osk[hidden] { display: none; }
+.osk.moved { transform: none; bottom: auto; right: auto; }
+.osk.dragging { transition: none; box-shadow: 0 16px 40px rgba(16,24,40,.38); }
+.osk-bar { position: relative; display: flex; align-items: center; gap: 6px; height: 32px; margin: 0 -6px; padding: 0 6px; cursor: grab; border-radius: 14px 14px 0 0; }
+.osk.dragging .osk-bar { cursor: grabbing; }
+.osk-bar::after { content: ""; position: absolute; left: 50%; top: 5px; width: 44px; height: 4px; margin-left: -22px; border-radius: 99px; background: var(--muted); opacity: .45; pointer-events: none; }
+.osk-grip { flex: 1; color: var(--muted); font-size: 16px; line-height: 1; padding-left: 4px; }
+.osk-op { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.osk-op-val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+.osk .osk-bar button { flex: none; height: 26px; min-width: 32px; padding: 0 6px; font-size: 13px; border-radius: 7px; }
 .osk-row { display: flex; gap: 4px; }
 .osk button { flex: 1 1 0; min-width: 0; height: 40px; padding: 0 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; font-size: 18px; cursor: pointer; }
 .osk button.down { background: var(--soft); border-color: var(--pri); }
@@ -825,16 +834,13 @@ div.pos-row.out { cursor: not-allowed; }
 .osk .osk-wide.on { background: var(--pri); border-color: var(--pri); color: #fff; }
 .osk .osk-space { flex: 5 1 0; font-size: 13px; color: var(--muted); }
 .osk .osk-enter { flex: 2 1 0; background: var(--pri); border-color: var(--pri); color: #fff; }
-/* Number pad: a small block in the bottom-right corner, the rest of the screen stays free. */
-.osk.osk-num { left: auto; right: 8px; transform: none; width: 264px; border-radius: 14px 14px 0 0; }
+/* Number pad: a small block in the bottom-right corner. */
+.osk.osk-num { left: auto; right: 8px; transform: none; width: 264px; }
+.osk.osk-num.moved { right: auto; }
 .osk-pad { display: grid; grid-template-columns: repeat(3, 1fr) 1.25fr; gap: 5px; }
 .osk-pad button { height: 48px; font-size: 22px; font-weight: 600; }
 .osk-pad .osk-wide { font-size: 14px; }
 @media (max-height: 700px) { .osk button { height: 36px; font-size: 16px; } .osk-pad button { height: 42px; } }
-/* While it is open the page scrolls far enough to show what lies under it; windows end above it. */
-body.osk-open { padding-bottom: var(--osk-h, 0px); }
-body.osk-open .modal-backdrop { bottom: var(--osk-h, 0px); }
-body.osk-open .ai-panel { bottom: calc(var(--osk-h, 0px) + 8px); max-height: calc(100vh - var(--osk-h, 0px) - 16px); max-height: calc(100dvh - var(--osk-h, 0px) - 16px); }
 
 /* Device settings (topbar ⌨): kept in this browser only */
 .btn-device { font-size: 17px; padding: 6px 11px; }

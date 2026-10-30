@@ -1,8 +1,9 @@
 // On-screen keyboard drawn by the page, for tablets where the system keyboard is kept
 // closed (so a barcode scanner can type without it popping up and covering the screen).
 // Thai (Kedmanee) and English layouts, plus a small number pad for number fields; the
-// input keeps focus, so a scanner still works while it is open. Height is published as
-// --osk-h so pages can make room for it.
+// input keeps focus, so a scanner still works while it is open. It floats over the page
+// (nothing moves to make room): drag its top bar to move it off what it covers, and set
+// how see-through it is there. Position and see-through level are kept per device.
 //
 // Device setting (remembered per browser, any user can change it): "use the page's
 // keyboard" — every text and number field then opens this keyboard and the device's
@@ -11,6 +12,9 @@
 
 const LANG_KEY = 'osk.lang';
 const ENABLED_KEY = 'osk.enabled';
+const OPACITY_KEY = 'osk.opacity';
+const POS_KEY = 'osk.pos.'; // + text | num
+const OPACITY_MIN = 0.4;
 const DIGITS = '1234567890'.split('');
 const LAYOUTS = {
     th: {
@@ -41,6 +45,10 @@ let shift = false;
 let repeat = null;
 let lang = (() => { try { return localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'th'; } catch (e) { return 'th'; } })();
 let enabled = (() => { try { return localStorage.getItem(ENABLED_KEY) === '1'; } catch (e) { return false; } })();
+let opacity = (() => {
+    try { const v = parseFloat(localStorage.getItem(OPACITY_KEY)); return v >= OPACITY_MIN && v <= 1 ? v : 0.92; } catch (e) { return 0.92; }
+})();
+let drag = null;
 
 export const isKeyboardOpen = () => !!box && !box.hidden;
 export const keyboardEnabled = () => enabled;
@@ -55,8 +63,8 @@ export function openKeyboard(input, options = {}) {
     draw();
     box.hidden = false;
     document.body.classList.add('osk-open');
+    place();
     sizeChanged();
-    requestAnimationFrame(reveal);
 }
 
 export function closeKeyboard() {
@@ -169,16 +177,54 @@ function restore(f) {
 }
 
 function sizeChanged() {
-    document.documentElement.style.setProperty('--osk-h', isKeyboardOpen() ? `${box.offsetHeight}px` : '0px');
     window.dispatchEvent(new Event('resize'));
 }
 
-// The field being typed into stays in sight above the keyboard.
-function reveal() {
-    if (!target || !isKeyboardOpen()) return;
-    const r = target.getBoundingClientRect();
-    const bottom = window.innerHeight - box.offsetHeight - 8;
-    if (r.bottom > bottom || r.top < 0) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+const posKey = () => POS_KEY + (opts.numeric ? 'num' : 'text');
+
+// Where the user last dragged this kind of keyboard (text / number pad), kept on screen.
+function place() {
+    let pos = null;
+    try { pos = JSON.parse(localStorage.getItem(posKey())); } catch (e) { /* none saved */ }
+    box.style.opacity = opacity;
+    if (!pos) {
+        box.style.left = box.style.top = '';
+        box.classList.remove('moved');
+        return;
+    }
+    box.classList.add('moved');
+    moveTo(pos.x, pos.y);
+}
+
+function moveTo(x, y) {
+    const maxX = Math.max(0, window.innerWidth - box.offsetWidth);
+    const maxY = Math.max(0, window.innerHeight - box.offsetHeight);
+    box.style.left = `${Math.min(Math.max(0, x), maxX)}px`;
+    box.style.top = `${Math.min(Math.max(0, y), maxY)}px`;
+}
+
+function setOpacity(v) {
+    opacity = Math.round(Math.min(1, Math.max(OPACITY_MIN, v)) * 100) / 100;
+    try { localStorage.setItem(OPACITY_KEY, String(opacity)); } catch (e) { /* private mode */ }
+    box.style.opacity = opacity;
+    const lbl = box.querySelector('.osk-op-val');
+    if (lbl) lbl.textContent = `${Math.round(opacity * 100)}%`;
+}
+
+function startDrag(e) {
+    const r = box.getBoundingClientRect();
+    drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+    box.classList.add('moved', 'dragging');
+    box.setPointerCapture?.(e.pointerId);
+    moveTo(r.left, r.top);
+}
+
+function endDrag() {
+    if (!drag) return;
+    drag = null;
+    box.classList.remove('dragging');
+    const r = box.getBoundingClientRect();
+    try { localStorage.setItem(posKey(), JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top) })); } catch (e) { /* private mode */ }
 }
 
 // A typed value is only "changed" (for forms that recalculate on change) once the keyboard leaves the field.
@@ -199,16 +245,24 @@ function build() {
     box.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         const k = e.target.closest('[data-k]');
-        if (!k) return;
+        if (!k) {
+            if (e.target.closest('[data-drag]')) startDrag(e);
+            return;
+        }
         k.classList.add('down');
         press(k.dataset.k, k.dataset.ch);
         if (k.dataset.k === 'bs') repeat = setTimeout(function again() { press('bs'); repeat = setTimeout(again, 60); }, 450);
     });
-    const up = () => { stopRepeat(); box.querySelectorAll('.down').forEach((k) => k.classList.remove('down')); };
+    box.addEventListener('pointermove', (e) => {
+        if (drag && e.pointerId === drag.id) moveTo(e.clientX - drag.dx, e.clientY - drag.dy);
+    });
+    const up = () => { endDrag(); stopRepeat(); box.querySelectorAll('.down').forEach((k) => k.classList.remove('down')); };
     box.addEventListener('pointerup', up);
-    box.addEventListener('pointerleave', up);
+    box.addEventListener('pointerleave', () => { if (!drag) up(); });
     box.addEventListener('pointercancel', up);
     box.addEventListener('contextmenu', (e) => e.preventDefault());
+    // A rotated tablet or smaller window must not leave the keyboard off screen.
+    window.addEventListener('resize', () => { if (isKeyboardOpen() && box.classList.contains('moved')) moveTo(box.offsetLeft, box.offsetTop); });
     document.body.appendChild(box);
 }
 
@@ -225,10 +279,22 @@ const key = (ch) => {
 const fn = (k, label, cls = '', aria = '') =>
     `<button type="button" tabindex="-1" data-k="${k}" class="osk-wide ${cls}"${aria ? ` aria-label="${aria}"` : ''}>${label}</button>`;
 
+// Top bar: drag anywhere on it to move the keyboard; - / + set how see-through it is; ↺ puts it back.
+const bar = () => `
+  <div class="osk-bar" data-drag title="ลากเพื่อย้ายแป้นพิมพ์">
+    <span class="osk-grip" aria-hidden="true">⠿</span>
+    <span class="osk-op">
+      <button type="button" tabindex="-1" data-k="op-" aria-label="โปร่งใสขึ้น">◐−</button>
+      <span class="osk-op-val">${Math.round(opacity * 100)}%</span>
+      <button type="button" tabindex="-1" data-k="op+" aria-label="ทึบขึ้น">+</button>
+    </span>
+    <button type="button" tabindex="-1" data-k="home" aria-label="กลับตำแหน่งเดิม" title="กลับตำแหน่งเดิม">↺</button>
+  </div>`;
+
 function draw() {
     box.classList.toggle('osk-num', !!opts.numeric);
     if (opts.numeric) {
-        box.innerHTML = `
+        box.innerHTML = `${bar()}
           <div class="osk-pad">
             ${['7', '8', '9'].map(key).join('')}${fn('bs', '⌫', '', 'ลบ')}
             ${['4', '5', '6'].map(key).join('')}${fn('clear', 'ล้าง')}
@@ -241,7 +307,7 @@ function draw() {
     const rows = layout.rows.map(([lo, hi]) => [...(shift ? hi : lo)]);
     const last = rows.length - 1;
     const shiftKey = fn('shift', '⇧', shift ? 'on' : '', 'Shift');
-    box.innerHTML = `
+    box.innerHTML = `${bar()}
       <div class="osk-row">${DIGITS.map(key).join('')}${fn('bs', '⌫', '', 'ลบ')}</div>
       ${rows.map((r, i) => `<div class="osk-row">
         ${i === last ? shiftKey : ''}${r.map(key).join('')}${i === last ? shiftKey : ''}
@@ -293,6 +359,12 @@ function nextField() {
 }
 
 function press(k, ch) {
+    if (k === 'op-' || k === 'op+') { setOpacity(opacity + (k === 'op+' ? 0.1 : -0.1)); return; }
+    if (k === 'home') {
+        try { localStorage.removeItem(posKey()); } catch (e) { /* private mode */ }
+        place();
+        return;
+    }
     if (!target || !target.isConnected) { closeKeyboard(); return; }
     if (document.activeElement !== target) target.focus({ preventScroll: true });
     if (k === 'ch') {
@@ -313,7 +385,7 @@ function press(k, ch) {
         shift = false;
         try { localStorage.setItem(LANG_KEY, lang); } catch (e) { /* private mode */ }
         draw();
-        sizeChanged();
+        if (box.classList.contains('moved')) moveTo(box.offsetLeft, box.offsetTop);
     } else if (k === 'enter') {
         if (target.matches('textarea')) { insert('\n'); emitInput(); return; }
         const handled = !target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
