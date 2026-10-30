@@ -1,5 +1,6 @@
 import { escapeHtml, fmtNow } from './util.js';
-import { currentTheme, cycleTheme, themeMeta } from './theme.js';
+import { currentTheme, cycleTheme, themeMeta, setTheme, THEMES } from './theme.js';
+import { keyboardEnabled, setKeyboardEnabled } from './osk.js';
 
 const svg = (inner) => `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 
@@ -170,6 +171,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
           <div class="right">
             <div class="chip" id="topbar-date"></div>
             <button type="button" class="btn-theme" id="theme-toggle"></button>
+            <button type="button" class="btn-theme btn-device" id="device-btn" title="ตั้งค่าเครื่องนี้ (แป้นพิมพ์บนจอ)" aria-label="ตั้งค่าเครื่องนี้" aria-haspopup="true">⌨</button>
             <div class="user-box">
               <div class="avatar">${escapeHtml(initials)}</div>
               <div>
@@ -203,9 +205,66 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
     document.getElementById('side-nav').addEventListener('click', (e) => { if (e.target.closest('.nav-btn')) closeDrawer(); });
     DRAWER_MQ.addEventListener?.('change', closeDrawer);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+    document.getElementById('device-btn').addEventListener('click', (e) => toggleDevicePanel(e.currentTarget));
+    markDeviceButton();
     document.getElementById('topbar-date').textContent = fmtNow({
         weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
     });
+}
+
+function markDeviceButton() {
+    document.getElementById('device-btn')?.classList.toggle('on', keyboardEnabled());
+}
+
+// Settings kept in this browser only, for whoever signs in on this device: the page's
+// own keyboard (instead of the tablet's) and the colour theme.
+let devicePanel = null;
+function closeDevicePanel() {
+    devicePanel?.remove();
+    devicePanel = null;
+    document.removeEventListener('pointerdown', outsideDevicePanel, true);
+}
+function outsideDevicePanel(e) {
+    if (devicePanel && !devicePanel.contains(e.target) && !e.target.closest('#device-btn')) closeDevicePanel();
+}
+function toggleDevicePanel(anchor) {
+    if (devicePanel) { closeDevicePanel(); return; }
+    devicePanel = document.createElement('div');
+    devicePanel.className = 'dev-panel';
+    devicePanel.setAttribute('role', 'dialog');
+    devicePanel.setAttribute('aria-label', 'ตั้งค่าเครื่องนี้');
+    const draw = () => {
+        devicePanel.innerHTML = `
+          <div class="dev-title">ตั้งค่าเครื่องนี้</div>
+          <label class="pos-switch dev-switch">
+            <input type="checkbox" data-dev-kb ${keyboardEnabled() ? 'checked' : ''}><span></span>
+            <div>ใช้แป้นพิมพ์บนจอของระบบ<small class="muted">ปิดแป้นพิมพ์ของแท็บเล็ต/มือถือ ช่องข้อความเปิดแป้นพิมพ์เล็ก ช่องตัวเลขเปิดแป้นตัวเลข</small></div>
+          </label>
+          <div class="dev-sub">ธีมหน้าจอ</div>
+          <div class="dev-themes">${THEMES.map((t) => {
+              const m = themeMeta(t);
+              return `<button type="button" data-dev-theme="${t}" class="${t === currentTheme() ? 'on' : ''}">${m.icon} ${escapeHtml(m.label)}</button>`;
+          }).join('')}</div>
+          <div class="dev-note">จดจำไว้เฉพาะเครื่องนี้ ไม่มีผลกับเครื่องอื่น</div>`;
+    };
+    draw();
+    devicePanel.addEventListener('change', (e) => {
+        if (!e.target.matches('[data-dev-kb]')) return;
+        setKeyboardEnabled(e.target.checked);
+        markDeviceButton();
+    });
+    devicePanel.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-dev-theme]');
+        if (!b) return;
+        setTheme(b.dataset.devTheme);
+        updateThemeButton();
+        draw();
+    });
+    document.body.appendChild(devicePanel);
+    const r = anchor.getBoundingClientRect();
+    devicePanel.style.top = `${r.bottom + 8}px`;
+    devicePanel.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+    document.addEventListener('pointerdown', outsideDevicePanel, true);
 }
 
 export function updateThemeButton() {

@@ -815,17 +815,39 @@ div.pos-row.out { cursor: not-allowed; }
 .cnt-photo-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
 .cnt-photo-row label.btn { cursor: pointer; }
 
-/* ---------- On-screen keyboard (osk.js) for tablets ---------- */
-.osk { position: fixed; left: 0; right: 0; bottom: 0; z-index: 70; display: flex; flex-direction: column; gap: 6px; padding: 8px max(8px, calc((100vw - 1000px) / 2)) calc(8px + env(safe-area-inset-bottom)); background: var(--surface2); border-top: 1px solid var(--border); box-shadow: 0 -8px 24px rgba(16,24,40,.18); user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+/* ---------- On-screen keyboard (osk.js): compact, sits at the bottom, the page makes room above it ---------- */
+.osk { position: fixed; left: 50%; bottom: 0; z-index: 95; transform: translateX(-50%); width: min(100vw, 760px); display: flex; flex-direction: column; gap: 4px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--surface2); border: 1px solid var(--border); border-bottom: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px rgba(16,24,40,.18); user-select: none; -webkit-user-select: none; touch-action: manipulation; }
 .osk[hidden] { display: none; }
-.osk-row { display: flex; gap: 5px; }
-.osk button { flex: 1 1 0; min-width: 0; height: 46px; padding: 0 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 20px; cursor: pointer; }
+.osk-row { display: flex; gap: 4px; }
+.osk button { flex: 1 1 0; min-width: 0; height: 40px; padding: 0 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; font-size: 18px; cursor: pointer; }
 .osk button.down { background: var(--soft); border-color: var(--pri); }
-.osk .osk-wide { flex: 1.5 1 0; font-size: 15px; font-weight: 600; background: var(--hover); }
+.osk .osk-wide { flex: 1.5 1 0; font-size: 14px; font-weight: 600; background: var(--hover); }
 .osk .osk-wide.on { background: var(--pri); border-color: var(--pri); color: #fff; }
-.osk .osk-space { flex: 5 1 0; font-size: 14px; color: var(--muted); }
+.osk .osk-space { flex: 5 1 0; font-size: 13px; color: var(--muted); }
 .osk .osk-enter { flex: 2 1 0; background: var(--pri); border-color: var(--pri); color: #fff; }
-@media (max-height: 700px) { .osk button { height: 40px; font-size: 18px; } .osk { gap: 4px; } }
+/* Number pad: a small block in the bottom-right corner, the rest of the screen stays free. */
+.osk.osk-num { left: auto; right: 8px; transform: none; width: 264px; border-radius: 14px 14px 0 0; }
+.osk-pad { display: grid; grid-template-columns: repeat(3, 1fr) 1.25fr; gap: 5px; }
+.osk-pad button { height: 48px; font-size: 22px; font-weight: 600; }
+.osk-pad .osk-wide { font-size: 14px; }
+@media (max-height: 700px) { .osk button { height: 36px; font-size: 16px; } .osk-pad button { height: 42px; } }
+/* While it is open the page scrolls far enough to show what lies under it; windows end above it. */
+body.osk-open { padding-bottom: var(--osk-h, 0px); }
+body.osk-open .modal-backdrop { bottom: var(--osk-h, 0px); }
+body.osk-open .ai-panel { bottom: calc(var(--osk-h, 0px) + 8px); max-height: calc(100vh - var(--osk-h, 0px) - 16px); max-height: calc(100dvh - var(--osk-h, 0px) - 16px); }
+
+/* Device settings (topbar ⌨): kept in this browser only */
+.btn-device { font-size: 17px; padding: 6px 11px; }
+.btn-device.on { background: var(--soft); border-color: var(--pri); color: var(--pri); }
+.dev-panel { position: fixed; z-index: 90; width: min(340px, calc(100vw - 16px)); padding: 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 16px 40px rgba(16,24,40,.25); display: flex; flex-direction: column; gap: 8px; }
+.dev-title { font-weight: 700; font-size: 15px; }
+.dev-switch { margin-top: 0; align-items: flex-start; font-size: 14px; }
+.dev-switch small { display: block; margin-top: 2px; }
+.dev-sub { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-top: 4px; }
+.dev-themes { display: flex; gap: 6px; flex-wrap: wrap; }
+.dev-themes button { flex: 1 1 auto; min-height: 40px; padding: 6px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.dev-themes button.on { border-color: var(--pri); background: var(--soft); color: var(--pri); font-weight: 600; }
+.dev-note { font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; }
 
 /* Tables that come without their own scroll box get one (responsive.js). */
 .tbl-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -887,7 +909,7 @@ div.pos-row.out { cursor: not-allowed; }
 
 /* ---------- Phones ---------- */
 @media (max-width: 640px) {
-    .topbar .crumb, .btn-theme-label, .user-box .avatar, .user-box .name { display: none; }
+    .topbar .crumb, .btn-theme-label, .user-box .avatar, .user-box .name, #theme-toggle { display: none; }
     .topbar h1 { font-size: 15.5px; line-height: 1.3; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
     .topbar-titles { flex: 1; }
     .btn-theme { padding: 7px 10px; }

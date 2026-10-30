@@ -3,7 +3,7 @@ import { money, escapeHtml, fmtDate } from '../util.js';
 import { confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
-import { openKeyboard, closeKeyboard, isKeyboardOpen } from '../osk.js';
+import { openKeyboard, closeKeyboard, isKeyboardOpen, keyboardEnabled } from '../osk.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -46,7 +46,7 @@ const METHOD_ICON = { cash: '💵', transfer: '🏦', qr: '📱', card: '💳' }
 // keyboard every time (a barcode scanner types into it like a keyboard); the page's
 // own keyboard (osk.js) opens instead when the cashier taps the box or ⌨.
 // Tablets with a mouse/scanner attached may report a fine pointer, so any touch support counts.
-const TOUCH = matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+const IS_TOUCH = matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
 /** Placeholder tiles/rows shaped like the product list, shown while it loads. */
 function skeletonHtml(view) {
@@ -82,6 +82,8 @@ export async function render(container, { user } = {}) {
     let view = pref('view', 'grid');
     let sort = pref('sort', 'popular');
     let group = pref('group', 'all');
+    // Also on any device set to use the page's keyboard (the button beside the theme switch).
+    const TOUCH = IS_TOUCH || keyboardEnabled();
     const keyboard = !TOUCH; // system keyboard allowed in the search box
     let options = { payment_methods: [{ key: 'cash', label: 'เงินสด' }], payment_mixed: false, sell_out_of_stock: false, sell_out_of_stock_always: false };
     // Admin switch: sell products whose recorded stock is below 1 (stock goes negative).
@@ -109,7 +111,7 @@ export async function render(container, { user } = {}) {
         <div class="pos-bar card">
           <label class="pos-search">
             <span aria-hidden="true">🔍</span>
-            <input data-el="q" placeholder="สแกนบาร์โค้ด หรือพิมพ์ชื่อสินค้า" autocomplete="off" enterkeyhint="search" spellcheck="false">
+            <input data-el="q" data-osk="manual" placeholder="สแกนบาร์โค้ด หรือพิมพ์ชื่อสินค้า" autocomplete="off" enterkeyhint="search" spellcheck="false">
             <button type="button" class="pos-icon-btn" data-act="clear-q" aria-label="ล้างคำค้น" hidden>✕</button>
           </label>
           ${TOUCH ? '<button type="button" class="pos-tool" data-act="kb" aria-label="แป้นพิมพ์บนจอ" title="แป้นพิมพ์บนจอ">⌨</button>' : ''}

@@ -20,6 +20,13 @@ export function initTheme() {
     applyTheme(currentTheme());
 }
 
+export function setTheme(theme) {
+    localStorage.setItem(KEY, theme);
+    applyTheme(theme);
+}
+
+export const THEMES = ORDER;
+
 export function cycleTheme() {
     const cur = currentTheme();
     const next = ORDER[(ORDER.indexOf(cur) + 1) % ORDER.length];
