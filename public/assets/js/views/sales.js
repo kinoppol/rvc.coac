@@ -102,6 +102,13 @@ export async function render(container, { user } = {}) {
     // Products matching the search that cannot be sold (stock below 1, switch off).
     let outHints = { term: '', items: [] };
     let outTimer;
+    // Search box: a barcode scanner types a burst of keys; the product list redraws only after
+    // a short pause so a fast scan is never slowed (or keys lost) by redrawing on every key.
+    let drawTimer;
+    let lastKeyAt = 0;
+    let burst = 0;
+    let firstLoad = null; // the opening product load; a scan that comes before it waits for it
+    let loaded = false;
 
     const life = new AbortController();
     const on = (target, type, fn, capture = false) => target.addEventListener(type, fn, { signal: life.signal, capture });
@@ -129,6 +136,14 @@ export async function render(container, { user } = {}) {
         <div data-el="drawerbar"></div>
         <div data-el="shortbar"></div>
         <div data-el="msg"></div>
+        <div class="pos-seek" data-el="seek" role="status" aria-live="polite">
+          <div class="pos-seek-card">
+            <div class="pos-seek-scan" aria-hidden="true"><i></i></div>
+            <div class="pos-seek-title">กำลังค้นหาสินค้า<span class="pos-seek-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></div>
+            <div class="pos-seek-term" data-el="seek-term"></div>
+            <div class="pos-seek-bar" aria-hidden="true"><i></i></div>
+          </div>
+        </div>
         <div class="pos-main">
           <section class="pos-products card" data-el="products" aria-busy="true">${skeletonHtml(view)}</section>
           <aside class="pos-cart card">
@@ -169,6 +184,15 @@ export async function render(container, { user } = {}) {
         q.readOnly = true;
         q.focus({ preventScroll: true });
         setTimeout(() => { q.readOnly = false; }, 60);
+    }
+
+    // Covers the screen while a search is under way, so the cashier sees the scan arrived and waits.
+    function seeking(term) {
+        const box = el('seek');
+        if (term == null) { box.classList.remove('on'); return; }
+        el('seek-term').textContent = term;
+        el('seek-term').hidden = !term;
+        box.classList.add('on');
     }
 
     function message(text, type = 'ok') {
@@ -565,8 +589,21 @@ export async function render(container, { user } = {}) {
 
     /** Enter in the search box: a scanned barcode, or the only product matching the text. */
     async function submitSearch() {
+        clearTimeout(drawTimer);
         const code = q.value.trim();
-        if (!code) return;
+        if (!code) { seeking(null); return; }
+        message('');
+        seeking(code);
+        try {
+            await findAndAdd(code);
+        } finally {
+            seeking(null);
+        }
+    }
+
+    async function findAndAdd(code) {
+        // Scanned while the product list is still loading: wait for it rather than miss.
+        if (!loaded && firstLoad) await firstLoad.catch(() => {});
         // A pack barcode with a whole-pack price sells the pack.
         const byCode = (list) => {
             for (const x of list) {
@@ -588,6 +625,7 @@ export async function render(container, { user } = {}) {
             if (p && !products.some((x) => x.id === p.id)) products.push(p);
         }
         if (!p) {
+            drawProducts();
             play('error');
             message(/^\d{4,}$/.test(code) ? `ไม่พบสินค้าบาร์โค้ด ${code} (หรือสินค้าหมด)` : `พบสินค้าหลายรายการ แตะเลือกสินค้าที่ต้องการ`, 'error');
             if (/^\d{4,}$/.test(code)) q.select();
@@ -608,6 +646,7 @@ export async function render(container, { user } = {}) {
         try {
             const res = await api.get(`/sales/products?all=1&sort=popular${allowShort() ? '&short=1' : ''}`);
             products = res.data.map(normalize);
+            loaded = true;
         } catch (e) {
             message(e.message, 'error');
             redraw();
@@ -849,11 +888,26 @@ export async function render(container, { user } = {}) {
 
     // ---------- Events ----------
 
-    on(q, 'input', () => { message(''); drawProducts(); });
+    on(q, 'input', () => {
+        message('');
+        const now = performance.now();
+        burst = now - lastKeyAt < 35 ? burst + 1 : 0;
+        lastKeyAt = now;
+        clearTimeout(drawTimer);
+        if (burst >= 3) {
+            // Keys this fast come from a scanner: show the search screen and wait for its Enter.
+            seeking(q.value.trim());
+            drawTimer = setTimeout(() => { seeking(null); drawProducts(); }, 400);
+            return;
+        }
+        drawTimer = setTimeout(drawProducts, q.value ? 120 : 0);
+    });
     on(q, 'keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); submitSearch(); }
-        else if (e.key === 'Escape') { q.value = ''; drawProducts(); }
+        else if (e.key === 'Escape') { clearTimeout(drawTimer); q.value = ''; drawProducts(); }
     });
+    // A tap on the search screen puts it away (e.g. a slow network).
+    on(el('seek'), 'pointerdown', () => seeking(null));
     // Tapping the search box itself means the cashier wants to type.
     on(q, 'pointerdown', showKeyboard);
     on(q, 'blur', () => { if (TOUCH) setTimeout(setKeyboard, 0); });
@@ -1001,8 +1055,8 @@ export async function render(container, { user } = {}) {
         if (o.payment_methods?.length) options = o;
         if ('drawer' in o) setDrawer(o.drawer);
     }).catch(() => {});
-    await loadOptions();
-    await loadProducts();
+    firstLoad = loadOptions().then(loadProducts);
+    await firstLoad;
     focusSearch();
     checkDrawer();
     // Asks again when a skip runs out, and keeps its countdown moving.
