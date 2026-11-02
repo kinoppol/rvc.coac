@@ -562,7 +562,10 @@ export async function render(container, { user, permissions = [] } = {}) {
     /* ---- Items 3 and 4 paid right on the report: a wage, a consignor payout, a waiting withdrawal ---- */
 
     const newWage = () => ({ user_id: '', wage_type: 'day', units: '', rate: '', amount: '', method: 'cash', from_drawer: true, note: '', touched: false });
-    const newPayout = () => ({ consignor_id: '', amount: '', method: 'cash', from_drawer: true, overdraw: false, reason: '' });
+    const newPayout = () => ({
+        consignor_id: '', period: 'today', from: '', to: '', data: null, loading: false, picked: new Set(),
+        amount: '', touched: false, reason: '', method: 'cash', from_drawer: true, stock: {},
+    });
 
     async function loadPayOptions(m) {
         try {
@@ -617,37 +620,107 @@ export async function render(container, { user, permissions = [] } = {}) {
         </div>`;
     }
 
-    const payoutOver = (m) => {
-        const c = m.opts?.consignors.find((x) => String(x.id) === String(m.pf?.consignor_id));
-        return c && m.pf.amount !== '' && Number(m.pf.amount) > Number(c.balance) ? c : null;
+    /** Monday of the week the report's day falls in (ISO). */
+    const weekStart = (iso) => {
+        const d = new Date(iso + 'T00:00:00');
+        d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     };
+    const pfRange = (m) => {
+        const p = m.pf;
+        if (p.period === 'week') return [weekStart(m.date), m.date];
+        if (p.period === 'custom') return [p.from || m.date, p.to || m.date];
+        return [m.date, m.date];
+    };
+    // The consignor's share of the chosen products' unpaid sales: the amount to pay unless typed in.
+    const pfSales = (m) => Math.round((m.pf.data?.sales || []).filter((x) => m.pf.picked.has(x.product_id)).reduce((t, x) => t + x.share, 0) * 100) / 100;
+    const pfAmount = (m) => (m.pf.touched ? Number(m.pf.amount) : pfSales(m));
+
+    /** Loads the unpaid sales of the chosen consignor and period; all products start ticked. */
+    async function loadPayoutSales(m) {
+        const p = m.pf;
+        if (!p.consignor_id) { p.data = null; drawDay(); return; }
+        const [from, to] = pfRange(m);
+        p.loading = true;
+        drawDay();
+        try {
+            const d = (await api.get(`/closing/${m.date}/payout-sales?${new URLSearchParams({ consignor_id: p.consignor_id, from, to })}`)).data;
+            if (docModalGone(m) || m.pf !== p) return;
+            p.data = d;
+            p.picked = new Set(d.sales.map((x) => x.product_id));
+            if (!p.touched) p.amount = String(pfSales(m));
+        } catch (e) {
+            m.payError = { kind: 'payouts', msg: e.message };
+        }
+        p.loading = false;
+        drawDay();
+    }
+
+    /** Difference from the sales, the reason it needs, and the balance after: redrawn as the amount is typed. */
+    function payoutDiffHtml(m) {
+        const p = m.pf;
+        const d = p.data;
+        if (!d) return '';
+        const amount = pfAmount(m);
+        const diff = Math.round((amount - pfSales(m)) * 100) / 100;
+        const after = Math.round((d.balance - amount) * 100) / 100;
+        return `
+          ${Math.abs(diff) >= 0.005 ? `<div class="chip" style="margin-top:6px">ต่างจากยอดขาย <b>&nbsp;${signed(diff)}</b></div>
+            <input data-pf="reason" maxlength="150" placeholder="เหตุผลที่จ่ายต่างจากยอดขาย (จำเป็น) เช่น สินค้าสูญหาย 2 ชิ้น ร้านรับผิดชอบ" value="${escapeHtml(p.reason)}" style="width:100%;margin-top:6px">` : ''}
+          <div class="muted" style="font-size:12px;margin-top:6px">ยอดคงเหลือในบัญชีผู้ฝาก ฿${money(d.balance)} → หลังจ่าย
+            <b style="${after < 0 ? 'color:var(--bad)' : ''}">${after < 0 ? '-' : ''}฿${money(Math.abs(after))}</b>${after < 0 ? ' (ติดลบ หักคืนจากยอดขายครั้งต่อไป)' : ''}</div>`;
+    }
 
     function payoutFormHtml(m) {
         const o = m.opts;
         if (!m.can_submit || !o || !o.can_payout) return '';
         if (!m.pf) return '<button type="button" class="btn sm no-print" data-pay-open="payouts" style="margin-top:10px">+ จ่ายเงินผู้ฝากขาย</button>';
         const p = m.pf;
-        const c = o.consignors.find((x) => String(x.id) === String(p.consignor_id));
-        const over = payoutOver(m);
+        const d = p.data;
+        const [from, to] = pfRange(m);
+        const periods = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['custom', 'กำหนดเอง']];
+        const salesHtml = !p.consignor_id ? '' : p.loading ? '<div class="muted" style="margin-top:8px">กำลังโหลดรายการขาย...</div>' : !d ? '' : `
+          ${d.ready ? '' : '<div class="error-box" style="margin-top:8px;font-size:12.5px">ยังแยกรายการที่เบิกแล้วไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0057) ก่อน</div>'}
+          <div style="font-weight:600;font-size:13px;margin-top:10px">รายการขายที่ยังไม่ได้เบิก ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`}</div>
+          ${d.sales.length ? `<table class="cl-t" style="font-size:13px"><tbody>
+            ${d.sales.map((x) => `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
+                <input type="checkbox" data-pf-pick="${x.product_id}" ${p.picked.has(x.product_id) ? 'checked' : ''} style="margin-top:3px">
+                <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ขาย ${x.qty} ชิ้น ฿${money(x.sales)}</span></span></label></td>
+              <td class="num" style="white-space:nowrap">฿ ${money(x.share)}</td></tr>`).join('')}
+            <tr><td><b>ส่วนของผู้ฝาก (รายการที่เลือก)</b></td><td class="num"><b>฿ ${money(pfSales(m))}</b></td></tr>
+          </tbody></table>` : '<div class="muted" style="font-size:12.5px;margin-top:4px">ไม่มีรายการขายที่ยังไม่ได้เบิกในช่วงนี้</div>'}`;
+        const stockHtml = !d || !d.stock.length ? '' : `
+          <details style="margin-top:10px" ${Object.values(p.stock).some((x) => x.on) ? 'open' : ''}>
+            <summary style="cursor:pointer;font-weight:600;font-size:13px">ปรับยอดคงเหลือสินค้า (เช่น สินค้าสูญหาย)</summary>
+            <table class="cl-t" style="font-size:13px"><tbody>
+            ${d.stock.map((x) => {
+                const st = p.stock[x.id] || { on: false, qty: '0' };
+                return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
+                    <input type="checkbox" data-pf-stock="${x.id}" ${st.on ? 'checked' : ''} style="margin-top:3px">
+                    <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ในระบบเหลือ ${x.qty_stock} ชิ้น</span></span></label></td>
+                  <td class="num" style="white-space:nowrap">เหลือ <input type="number" min="0" step="1" data-pf-stock-qty="${x.id}" value="${escapeHtml(st.qty)}" ${st.on ? '' : 'disabled'} style="width:70px;text-align:right"> ชิ้น</td></tr>`;
+            }).join('')}
+            </tbody></table>
+          </details>`;
         return `
         <div class="no-print cl-pay" style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
           <div style="font-weight:600;margin-bottom:8px">จ่ายเงินให้ผู้ฝากขาย</div>
           <label class="field" style="margin-bottom:8px">ผู้ฝากขาย *
             <select data-pf="consignor_id"><option value="">— เลือกผู้ฝากขาย —</option>
               ${o.consignors.map((x) => `<option value="${x.id}" ${String(x.id) === String(p.consignor_id) ? 'selected' : ''}>${escapeHtml(x.code)} - ${escapeHtml(x.name)} (฿${money(x.balance)})</option>`).join('')}</select></label>
-          ${c ? `<div class="chip" style="margin-bottom:8px">ยอดที่เบิกได้: <b>&nbsp;฿ ${money(c.balance)}</b></div>` : ''}
-          <label class="field">จำนวนเงิน (บาท) *
-            <div style="display:flex;gap:6px"><input data-pf="amount" type="number" min="0" step="0.25" value="${escapeHtml(p.amount)}" ${c ? '' : 'disabled'} style="flex:1;min-width:0">
-              <button type="button" class="btn sm secondary" data-pf-all ${c && Number(c.balance) > 0 ? '' : 'disabled'}>ทั้งหมด</button></div></label>
-          <div data-pf-over style="margin-top:8px" ${over ? '' : 'hidden'}>
-            ${o.can_overdraw ? `
-              <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:13px">
-                <input type="checkbox" data-pf="overdraw" ${p.overdraw ? 'checked' : ''} style="margin-top:3px">
-                <span>เกินยอดคงเหลือ — ร้านรับผิดชอบ (เช่น สินค้าสูญหาย) ให้เบิกเกินยอดได้ คิดบัญชีติดลบไว้ก่อน</span></label>
-              ${p.overdraw ? `<input data-pf="reason" maxlength="150" placeholder="เหตุผล (จำเป็น)" value="${escapeHtml(p.reason)}" style="width:100%;margin-top:6px">` : ''}`
-              : '<div class="error-box">จำนวนเงินเกินยอดคงเหลือ</div>'}
+          <div style="font-size:13px;font-weight:600">จ่ายตามรายการขายวันที่</div>
+          <div class="actions-row" style="margin-top:4px">
+            ${periods.map(([k, v]) => `<button type="button" class="tab-btn ${p.period === k ? 'active' : ''}" data-pf-period="${k}">${v}</button>`).join('')}
           </div>
-          <div class="actions-row" style="margin-top:8px">
+          ${p.period === 'custom' ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:13px">
+            ตั้งแต่ <input type="date" data-pf-date="from" value="${escapeHtml(from)}" max="${m.date}"> ถึง <input type="date" data-pf-date="to" value="${escapeHtml(to)}" max="${m.date}"></div>` : ''}
+          ${salesHtml}
+          <label class="field" style="margin-top:10px">จำนวนเงินที่จ่าย (บาท) *
+            <input data-pf="amount" type="number" step="0.25" value="${escapeHtml(p.touched ? p.amount : String(pfSales(m)))}" ${d ? '' : 'disabled'}>
+            <span class="muted" style="font-size:11.5px;font-weight:400">ตามรายการขายที่เลือกโดยอัตโนมัติ · แก้เป็นยอดอื่นได้พร้อมระบุเหตุผล${p.touched ? ' · <a href="#" data-pf-reset>ใช้ยอดตามรายการขาย</a>' : ''}</span></label>
+          <div data-pf-diff>${payoutDiffHtml(m)}</div>
+          ${stockHtml}
+          <div class="actions-row" style="margin-top:10px">
             ${Object.entries(PAY_METHOD).map(([k, v]) => `<button type="button" class="tab-btn ${p.method === k ? 'active' : ''}" data-pf-method="${k}">${v}</button>`).join('')}
           </div>
           ${p.method === 'cash' ? `
@@ -658,7 +731,7 @@ export async function render(container, { user, permissions = [] } = {}) {
           ${m.payError?.kind === 'payouts' ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.payError.msg)}</div>` : ''}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
             <button type="button" class="btn sm secondary" data-pay-close="payouts">ยกเลิก</button>
-            <button type="button" class="btn sm" data-pay-save="payouts" ${m.payBusy ? 'disabled' : ''}>${m.payBusy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายเงิน'}</button>
+            <button type="button" class="btn sm" data-pay-save="payouts" ${m.payBusy || !d ? 'disabled' : ''}>${m.payBusy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายเงิน'}</button>
           </div>
         </div>`;
     }
@@ -711,32 +784,48 @@ export async function render(container, { user, permissions = [] } = {}) {
             });
         });
 
-        m.el.querySelectorAll('[data-pf]').forEach((inp) => {
-            const k = inp.dataset.pf;
-            if (inp.type === 'checkbox') {
-                return inp.addEventListener('change', () => {
-                    m.pf[k] = inp.checked;
-                    if (k === 'overdraw') { drawDay(); $('[data-pf="reason"]')?.focus(); }
-                });
-            }
-            if (inp.tagName === 'SELECT') {
-                return inp.addEventListener('change', () => {
-                    Object.assign(m.pf, { consignor_id: inp.value, amount: '', overdraw: false, reason: '' });
-                    drawDay();
-                    $('[data-pf="amount"]')?.focus();
-                });
-            }
-            inp.addEventListener('input', () => {
-                m.pf[k] = inp.value;
-                if (k === 'amount') $('[data-pf-over]').hidden = !payoutOver(m);
-            });
+        if (!m.pf) return;
+        const pf = m.pf;
+        const redrawDiff = () => { const el = $('[data-pf-diff]'); if (el) { el.innerHTML = payoutDiffHtml(m); wireReason(); } };
+        const wireReason = () => $('[data-pf="reason"]')?.addEventListener('input', (e) => { pf.reason = e.target.value; });
+        wireReason();
+        $('[data-pf="consignor_id"]')?.addEventListener('change', (e) => {
+            Object.assign(pf, { consignor_id: e.target.value, data: null, amount: '', touched: false, reason: '', stock: {} });
+            m.payError = null;
+            loadPayoutSales(m);
         });
-        $('[data-pf-all]')?.addEventListener('click', () => {
-            const c = m.opts.consignors.find((x) => String(x.id) === String(m.pf.consignor_id));
-            m.pf.amount = String(Number(c.balance));
+        $('[data-pf="from_drawer"]')?.addEventListener('change', (e) => { pf.from_drawer = e.target.checked; });
+        $('[data-pf="amount"]')?.addEventListener('input', (e) => {
+            pf.amount = e.target.value;
+            pf.touched = e.target.value !== '';
+            redrawDiff();
+        });
+        $('[data-pf-reset]')?.addEventListener('click', (e) => { e.preventDefault(); pf.touched = false; pf.reason = ''; drawDay(); });
+        m.el.querySelectorAll('[data-pf-period]').forEach((b) => b.addEventListener('click', () => {
+            pf.period = b.dataset.pfPeriod;
+            if (pf.period === 'custom' && !pf.from) [pf.from, pf.to] = [weekStart(m.date), m.date];
+            loadPayoutSales(m);
+        }));
+        m.el.querySelectorAll('[data-pf-date]').forEach((inp) => inp.addEventListener('change', () => {
+            if (!inp.value) return;
+            pf[inp.dataset.pfDate] = inp.value;
+            loadPayoutSales(m);
+        }));
+        m.el.querySelectorAll('[data-pf-pick]').forEach((cb) => cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.pfPick);
+            if (cb.checked) pf.picked.add(id); else pf.picked.delete(id);
             drawDay();
-        });
-        m.el.querySelectorAll('[data-pf-method]').forEach((b) => b.addEventListener('click', () => { m.pf.method = b.dataset.pfMethod; drawDay(); }));
+        }));
+        m.el.querySelectorAll('[data-pf-stock]').forEach((cb) => cb.addEventListener('change', () => {
+            const id = cb.dataset.pfStock;
+            pf.stock[id] = { qty: '0', ...pf.stock[id], on: cb.checked };
+            drawDay();
+        }));
+        m.el.querySelectorAll('[data-pf-stock-qty]').forEach((inp) => inp.addEventListener('input', () => {
+            const id = inp.dataset.pfStockQty;
+            pf.stock[id] = { on: true, ...pf.stock[id], qty: inp.value };
+        }));
+        m.el.querySelectorAll('[data-pf-method]').forEach((b) => b.addEventListener('click', () => { pf.method = b.dataset.pfMethod; drawDay(); }));
     }
 
     /** Takes a fresh report after a payment: the drawer and the cash to send follow, the day list too. */
@@ -785,18 +874,32 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     async function payPayout(m) {
         const p = m.pf;
+        const d = p.data;
         const c = m.opts.consignors.find((x) => String(x.id) === String(p.consignor_id));
-        const amount = Number(p.amount);
-        const over = payoutOver(m);
+        const amount = Math.round(pfAmount(m) * 100) / 100;
+        const sales = pfSales(m);
+        const differs = Math.abs(amount - sales) >= 0.005;
         const fail = (msg) => { m.payError = { kind: 'payouts', msg }; drawDay(); };
-        if (!c) return fail('กรุณาเลือกผู้ฝากขาย');
-        if (!(amount > 0)) return fail('กรุณาระบุจำนวนเงิน');
-        if (over && !(m.opts.can_overdraw && p.overdraw && p.reason.trim())) {
-            return fail(m.opts.can_overdraw ? 'จำนวนเงินเกินยอดคงเหลือ: ติ๊กให้เบิกเกินยอดและระบุเหตุผล' : 'จำนวนเงินเกินยอดคงเหลือ');
+        if (!c || !d) return fail('กรุณาเลือกผู้ฝากขาย');
+        if (!(amount > 0)) return fail('จำนวนเงินที่จ่ายต้องมากกว่า 0');
+        if (differs && !p.reason.trim()) return fail('ยอดที่จ่ายไม่ตรงกับยอดขาย กรุณาระบุเหตุผล');
+        const stock = [];
+        for (const [id, st] of Object.entries(p.stock)) {
+            if (!st.on) continue;
+            const qty = Number(st.qty);
+            if (st.qty === '' || !Number.isInteger(qty) || qty < 0) return fail('จำนวนคงเหลือที่ปรับต้องเป็นจำนวนเต็มไม่ติดลบ');
+            stock.push({ product_id: Number(id), qty });
         }
+        const [from, to] = pfRange(m);
+        const after = d.balance - amount;
         const fromDrawer = p.method === 'cash' && p.from_drawer;
+        const names = (id) => d.stock.find((x) => String(x.id) === String(id))?.name || id;
         const ok = await confirmDialog(
-            `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})${over ? ` บัญชีจะติดลบ ฿${money(amount - Number(c.balance))}` : ''}`,
+            `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})`
+            + ` · รายการขาย ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`} ฿${money(sales)}`
+            + (differs ? ` · ต่างจากยอดขาย ${signed(amount - sales)}: ${p.reason.trim()}` : '')
+            + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}` : '')
+            + (stock.length ? ` · ปรับคงเหลือ ${stock.map((x) => `${names(x.product_id)} เป็น ${x.qty} ชิ้น`).join(', ')}` : ''),
             { title: 'ยืนยันการจ่ายเงินผู้ฝากขาย?', okText: 'บันทึก' }
         );
         if (!ok || docModalGone(m)) return;
@@ -805,7 +908,8 @@ export async function render(container, { user, permissions = [] } = {}) {
         drawDay();
         try {
             const res = await api.post(`/closing/${m.date}/payouts`, {
-                consignor_id: c.id, amount, method: p.method, from_drawer: fromDrawer, overdraw_reason: over ? p.reason.trim() : '',
+                consignor_id: c.id, from, to, product_ids: [...p.picked], amount, reason: differs ? p.reason.trim() : '',
+                stock, method: p.method, from_drawer: fromDrawer,
             });
             if (docModalGone(m)) return;
             m.payBusy = false;

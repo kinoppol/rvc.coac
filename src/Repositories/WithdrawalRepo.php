@@ -54,6 +54,23 @@ class WithdrawalRepo
      */
     public function payNow(int $consignorId, float $amount, string $method, int $userId, ?string $ip, ?string $overdrawReason = null): int
     {
+        $this->db->beginTransaction();
+        try {
+            $id = $this->insertPaid($consignorId, $amount, $method, $userId, $ip, $overdrawReason);
+            $this->db->commit();
+            return $id;
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * payNow inside the caller's transaction; $note goes after the passbook line (e.g. the
+     * sales period it pays for).
+     */
+    public function insertPaid(int $consignorId, float $amount, string $method, int $userId, ?string $ip, ?string $overdrawReason = null, ?string $note = null): int
+    {
         $balance = $this->ledger->balanceOf($consignorId);
         $overdrawReason = mb_substr(trim((string) $overdrawReason), 0, 150);
         if ($amount <= 0) {
@@ -66,41 +83,37 @@ class WithdrawalRepo
 
         $docNo = $this->docs->next('WD', 'withdrawals', 'doc_no');
 
-        $this->db->beginTransaction();
-        try {
-            $ins = $this->db->prepare(
-                "INSERT INTO withdrawals (doc_no, consignor_id, amount, method, status, requested_by, approved_by, requested_at, paid_at)
-                 VALUES (?, ?, ?, ?, 'paid', ?, ?, NOW(), NOW())"
-            );
-            $ins->execute([$docNo, $consignorId, $amount, $method, $userId, $userId]);
-            $id = (int) $this->db->lastInsertId();
+        $ins = $this->db->prepare(
+            "INSERT INTO withdrawals (doc_no, consignor_id, amount, method, status, requested_by, approved_by, requested_at, paid_at)
+             VALUES (?, ?, ?, ?, 'paid', ?, ?, NOW(), NOW())"
+        );
+        $ins->execute([$docNo, $consignorId, $amount, $method, $userId, $userId]);
+        $id = (int) $this->db->lastInsertId();
 
-            $methodLabel = match ($method) {
-                'promptpay' => 'พร้อมเพย์',
-                'bank_transfer' => 'โอนธนาคาร',
-                default => 'เงินสดที่เคาน์เตอร์',
-            };
-            $description = $overdraw
-                ? mb_substr("เบิกเงินเกินยอด ({$methodLabel}) คิดบัญชีติดลบ: {$overdrawReason}", 0, 255)
-                : "เบิกเงิน ({$methodLabel})";
-            $this->ledger->append(
-                $consignorId,
-                'withdrawal',
-                $description,
-                $docNo,
-                0,
-                $amount,
-                $userId
-            );
-
-            $this->audit->log('withdrawals', $id, 'create', null, $this->find($id), $userId, $ip);
-
-            $this->db->commit();
-            return $id;
-        } catch (\Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
+        $methodLabel = match ($method) {
+            'promptpay' => 'พร้อมเพย์',
+            'bank_transfer' => 'โอนธนาคาร',
+            default => 'เงินสดที่เคาน์เตอร์',
+        };
+        $description = $overdraw
+            ? mb_substr("เบิกเงินเกินยอด ({$methodLabel}) คิดบัญชีติดลบ: {$overdrawReason}", 0, 255)
+            : "เบิกเงิน ({$methodLabel})";
+        if ($note !== null && $note !== '') {
+            $description = mb_substr("{$description} · {$note}", 0, 255);
         }
+        $this->ledger->append(
+            $consignorId,
+            'withdrawal',
+            $description,
+            $docNo,
+            0,
+            $amount,
+            $userId
+        );
+
+        $this->audit->log('withdrawals', $id, 'create', null, $this->find($id), $userId, $ip);
+
+        return $id;
     }
 
     public function requestPending(int $consignorId, float $amount, string $method, int $userId, ?string $ip): int
@@ -139,6 +152,10 @@ class WithdrawalRepo
                     ->execute([$userId, $reason, $id]);
             } catch (\PDOException $e) {
                 throw new \RuntimeException('ยังยกเลิกรายการเบิกไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0049) ก่อน');
+            }
+            if (\App\Support\Db::hasColumn($this->db, 'sale_items', 'withdrawal_id')) {
+                // The sales it paid for can be paid out again.
+                $this->db->prepare('UPDATE sale_items SET withdrawal_id = NULL WHERE withdrawal_id = ?')->execute([$id]);
             }
             if ($old['status'] === 'paid') {
                 $this->ledger->append(

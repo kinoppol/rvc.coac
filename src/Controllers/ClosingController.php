@@ -8,6 +8,7 @@ use App\Repositories\UserRepo;
 use App\Repositories\WithdrawalRepo;
 use App\Services\AuditLogger;
 use App\Services\ClosingService;
+use App\Services\ConsignorPayoutService;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
 use App\Services\WageService;
@@ -236,13 +237,20 @@ class ClosingController
         if (!$consignorId || $amount <= 0) {
             return $this->error($response, 'กรุณาเลือกผู้ฝากขายและระบุจำนวนเงิน', 422);
         }
-        $reason = (string) ($body['overdraw_reason'] ?? '');
-        if ($reason !== '' && !(new UserRepo($db))->hasPermission((string) $user['role'], 'withdraw.approve')) {
-            $reason = ''; // paying over the balance needs a withdrawal approver
-        }
         $service = $this->service($db);
         try {
-            $id = $this->withdrawals($db)->payNow($consignorId, $amount, $method, (int) $user['id'], $this->ip($request), $reason);
+            // For the sales not paid out yet in a period; a different amount needs a reason
+            // (over the balance too: the store answers for lost goods, the account goes negative).
+            $from = $this->dateParam($body['from'] ?? '') ?? $date;
+            $to = $this->dateParam($body['to'] ?? '') ?? $date;
+            if ($from > $to || $to > $date) {
+                throw new \RuntimeException('ช่วงวันที่ของรายการขายไม่ถูกต้อง');
+            }
+            $id = $this->payouts($db)->pay([
+                'consignor_id' => $consignorId, 'from' => $from, 'to' => $to, 'amount' => $amount, 'method' => $method,
+                'product_ids' => (array) ($body['product_ids'] ?? []), 'reason' => (string) ($body['reason'] ?? ''),
+                'stock' => (array) ($body['stock'] ?? []),
+            ], (int) $user['id'], $this->ip($request));
             if ($method === 'cash' && isset($body['from_drawer']) && empty($body['from_drawer'])) {
                 $service->setPayoutDrawer($date, $id, false, (int) $user['id'], $this->ip($request));
             }
@@ -250,6 +258,28 @@ class ClosingController
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $service->report($date), 'withdrawal' => $this->withdrawals($db)->find($id)], 201);
+    }
+
+    /** A consignor's sales not paid out yet in a period (?consignor_id=&from=&to=), for the payout form (item 4). */
+    public function payoutSales(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args, true);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $q = $request->getQueryParams();
+        $from = $this->dateParam($q['from'] ?? '') ?? $date;
+        $to = $this->dateParam($q['to'] ?? '') ?? $date;
+        if ($from > $to || $to > $date) {
+            return $this->error($response, 'ช่วงวันที่ไม่ถูกต้อง', 422);
+        }
+        return $this->json($response, ['data' => $this->payouts($db)->unpaid((int) ($q['consignor_id'] ?? 0), $from, $to)]);
+    }
+
+    private function payouts(\PDO $db): ConsignorPayoutService
+    {
+        return new ConsignorPayoutService($db, new AuditLogger($db), new DocumentNumberService($db));
     }
 
     /** Pays a withdrawal that was waiting for approval, from today's report (item 4). */
