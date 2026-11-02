@@ -812,6 +812,8 @@ div.pos-row.out { cursor: not-allowed; }
 
 /* Purchase list: filters and pages */
 .pc-filters .search-input { flex: 1 1 280px; }
+.cnt-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+td[data-save-cell] { white-space: nowrap; }
 .pc-filters select, .pc-filters input[type="date"] { height: 38px; }
 .pc-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 18px; border-top: 1px solid var(--border); font-size: 13px; }
 .pc-pager select { margin-left: 4px; }

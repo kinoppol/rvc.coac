@@ -10,8 +10,9 @@
 // own keyboard stays closed. Fields marked data-osk="manual" (the POS search box)
 // open it themselves; data-osk="off" never opens it.
 //
-// Without that setting, a double tap on a number field opens the number pad straight away
-// (the device keyboard goes down while it is open, and comes back for the field afterwards).
+// Without that setting, a double tap (or double click) on any field opens it straight away:
+// the number pad on a number field, the Thai/English keyboard on a text field. The device
+// keyboard goes down while it is open, and comes back for the field afterwards.
 
 const LANG_KEY = 'osk.lang';
 const ENABLED_KEY = 'osk.enabled';
@@ -52,7 +53,7 @@ let opacity = (() => {
     try { const v = parseFloat(localStorage.getItem(OPACITY_KEY)); return v >= OPACITY_MIN && v <= 1 ? v : 0.92; } catch (e) { return 0.92; }
 })();
 let drag = null;
-let lastTap = null; // { field, at, x, y } of the last touch on a number field
+let lastTap = null; // { field, at, x, y } of the last press on a field
 const DOUBLE_TAP_MS = 400;
 
 export const isKeyboardOpen = () => !!box && !box.hidden;
@@ -132,10 +133,10 @@ export function initKeyboard() {
             return;
         }
         if (!isKeyboardOpen() || f === target) return;
-        // A pad opened by double tap follows on to other number fields (also one the page redrew).
-        if (opts.tap && numberField(f)) {
+        // A keyboard opened by double tap follows on to other fields (also one the page redrew).
+        if (opts.tap && eligible(f)) {
             suppress(f);
-            openKeyboard(f, { tap: true, numeric: true });
+            openKeyboard(f, { tap: true, numeric: isNumeric(f) });
             return;
         }
         // Typing into another field (e.g. a quantity box) hands over to that field's own keyboard.
@@ -171,13 +172,10 @@ function openFor(f) {
     openKeyboard(f, { global: true, numeric: isNumeric(f) });
 }
 
-const numberField = (el) => eligible(el) && isNumeric(el);
-
-// Two touches on the same number field in quick succession open the number pad there.
+// Two presses on the same field in quick succession open the keyboard there.
 function doubleTap(e) {
-    if (e.pointerType === 'mouse') return;
-    const f = e.target.closest?.('input');
-    if (!numberField(f)) { lastTap = null; return; }
+    const f = e.target.closest?.('input, textarea');
+    if (!eligible(f)) { lastTap = null; return; }
     const now = performance.now();
     const t = lastTap;
     lastTap = { field: f, at: now, x: e.clientX, y: e.clientY };
@@ -189,7 +187,7 @@ function doubleTap(e) {
     // Focus again so a device keyboard already up from the first tap goes down.
     if (document.activeElement === f) f.blur();
     f.focus({ preventScroll: true });
-    openKeyboard(f, { tap: true, numeric: true });
+    openKeyboard(f, { tap: true, numeric: isNumeric(f) });
     const end = f.value.length;
     try { f.setSelectionRange(end, end); } catch (err) { /* no caret */ }
 }
@@ -201,7 +199,7 @@ function relocate() {
     if (!attrs.length) return null;
     const sel = target.tagName.toLowerCase() + attrs.map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join('');
     const f = document.querySelector(sel);
-    return f && (opts.global ? eligible(f) : numberField(f)) ? f : null;
+    return f && eligible(f) ? f : null;
 }
 
 // Keeps the device keyboard down for this field. A number field becomes a text field while
@@ -449,8 +447,7 @@ function press(k, ch) {
     } else if (k === 'enter') {
         if (target.matches('textarea')) { insert('\n'); emitInput(); return; }
         const handled = !target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
-        if (!handled && opts.global) nextField();
-        else if (!handled && opts.tap) closeKeyboard();
+        if (!handled && (opts.global || opts.tap)) nextField();
     } else if (k === 'close') {
         closeKeyboard();
     }

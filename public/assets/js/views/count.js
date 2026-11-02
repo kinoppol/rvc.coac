@@ -4,10 +4,21 @@ import { openMobileCount, COUNT_PHOTO_SIZE } from './count-mobile.js';
 import { attachmentUrl, fileToDataUrl, thumbDataUrl } from '../images.js';
 import { confirmDialog } from '../dialog.js';
 
+// Which lines the table shows, besides the search words.
+const SHOWS = [
+    ['all', 'ทั้งหมด'],
+    ['todo', 'ยังไม่นับ'],
+    ['done', 'นับแล้ว'],
+    ['diff', 'มีผลต่าง'],
+    ['unsaved', 'ยังไม่บันทึก'],
+];
+
 export async function render(container, { permissions }) {
     let current = null;
     let items = [];
     let error = null;
+    let query = '';
+    let show = 'all';
     const canApprove = permissions.includes('stockcount.approve');
     const canCreate = permissions.includes('stockcount.create');
 
@@ -70,24 +81,33 @@ export async function render(container, { permissions }) {
             ${canApprove ? '<button type="button" class="btn secondary" id="btn-reopen" style="font-size:15px;padding:12px 18px">↩ ส่งกลับไปนับต่อ</button>' : ''}
           </section>` : ''}
         <section class="card">
+          <div class="card-pad cnt-filter">
+            <input type="search" id="cnt-q" class="search-input" placeholder="🔍 ค้นหาชื่อสินค้า ผู้ฝาก หรือบาร์โค้ด" value="${escapeHtml(query)}" autocomplete="off">
+            <div class="tabs" role="group" aria-label="แสดงรายการ">
+              ${SHOWS.map(([k, label]) => `<button type="button" class="tab-btn${show === k ? ' active' : ''}" data-show="${k}">${label}</button>`).join('')}
+            </div>
+            <span class="muted" data-k="shown" style="font-size:13px"></span>
+          </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th></tr></thead>
+            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th>${current.status === 'draft' ? '<th></th>' : ''}</tr></thead>
             <tbody>
               ${items.map((it, i) => {
                   const diff = diffOf(it);
-                  return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}">
+                  return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}" ${matches(it) ? '' : 'hidden'}>
                     <td>${escapeHtml(it.name)}</td><td class="muted">${escapeHtml(it.consignor_name)}</td>
                     <td class="num">${it.system_qty}</td>
                     <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}>
                       ${current.status === 'draft' ? `<button type="button" class="btn secondary sm" data-zero="${i}" title="ขายหมดแล้ว ไม่มีของให้นับ: บันทึกว่านับได้ 0" ${counted(it) === 0 ? 'hidden' : ''}>หมด (0)</button>` : ''}</td>
                     <td data-diff>${diffHtml(diff)}</td>
                     <td class="cnt-photos">${photosHtml(it, i)}</td>
+                    ${current.status === 'draft' ? `<td data-save-cell>${saveHtml(it, i)}</td>` : ''}
                   </tr>`;
               }).join('')}
             </tbody>
           </table></div>
+          <div class="empty" data-k="none" hidden>ไม่พบรายการที่ตรงกับการค้นหา</div>
         </section>
-        <p class="muted" style="font-size:12px">ทุกรายการที่นับควรมีรูปประกอบการนับ (โหมดนับด้วยมือถือบังคับถ่ายรูปทุกครั้งที่บันทึก) · รูปย่อให้ดูเต็มจอได้ชัด และลบอัตโนมัติเมื่อครบ 30 วัน<br>กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
+        <p class="muted" style="font-size:12px">ทุกรายการที่นับควรมีรูปประกอบการนับ (โหมดนับด้วยมือถือบังคับถ่ายรูปทุกครั้งที่บันทึก) · รูปย่อให้ดูเต็มจอได้ชัด และลบอัตโนมัติเมื่อครบ 30 วัน<br>กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · กด <b>บันทึก</b> ท้ายแถว (หรือ Enter) เพื่อบันทึกทีละรายการแล้วไปช่องถัดไป · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
         <div class="actions-row">
           ${current.status === 'draft' ? `
             <button type="button" class="btn secondary" id="btn-save">บันทึกร่างไว้ก่อน</button>
@@ -116,7 +136,27 @@ export async function render(container, { permissions }) {
             if (zb) zb.hidden = counted(items[i]) === 0;
             const sb = container.querySelector('#btn-submit');
             if (sb) sb.disabled = !t.diffCount;
+            const cell = tr.querySelector('[data-save-cell]');
+            if (cell) cell.innerHTML = saveHtml(items[i], i);
         }));
+        // Enter (or ตกลง on the on-screen pad) saves the line and goes on to the next one shown.
+        container.querySelectorAll('[data-idx]').forEach((inp) => inp.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            saveRow(Number(inp.dataset.idx), true);
+        }));
+        container.querySelector('tbody').addEventListener('click', (e) => {
+            const b = e.target.closest('[data-save]');
+            if (b) saveRow(Number(b.dataset.save), false);
+        });
+        const q = container.querySelector('#cnt-q');
+        q.addEventListener('input', () => { query = q.value; applyFilter(); });
+        container.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
+            show = b.dataset.show;
+            container.querySelectorAll('[data-show]').forEach((x) => x.classList.toggle('active', x === b));
+            applyFilter();
+        }));
+        applyFilter();
         // Sold out: nothing on the shelf to scan, so record a count of 0 in one click.
         container.querySelectorAll('[data-zero]').forEach((b) => b.addEventListener('click', () => {
             const inp = container.querySelector(`[data-idx="${b.dataset.zero}"]`);
@@ -143,6 +183,68 @@ export async function render(container, { permissions }) {
         if (reopenBtn) reopenBtn.addEventListener('click', reopenCount);
         const cancelBtn = container.querySelector('#btn-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
+    }
+
+    /** Search words (name, consignor, barcode) and the chosen tab. */
+    function matches(it) {
+        const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const text = [it.name, it.consignor_name, it.barcode].join(' ').toLowerCase();
+        if (!words.every((w) => text.includes(w))) return false;
+        if (show === 'todo') return counted(it) === null;
+        if (show === 'done') return counted(it) !== null;
+        if (show === 'diff') return !!diffOf(it);
+        if (show === 'unsaved') return dirty(it);
+        return true;
+    }
+
+    // Rows are shown or hidden in place, so numbers typed but not saved stay in their boxes.
+    function applyFilter() {
+        let n = 0;
+        container.querySelectorAll('tr[data-tr]').forEach((tr) => {
+            const ok = matches(items[Number(tr.dataset.tr)]);
+            tr.hidden = !ok;
+            if (ok) n++;
+        });
+        const lbl = container.querySelector('[data-k="shown"]');
+        if (lbl) lbl.textContent = n === items.length ? `${n} รายการ` : `แสดง ${n} จาก ${items.length} รายการ`;
+        const none = container.querySelector('[data-k="none"]');
+        if (none) none.hidden = n > 0;
+    }
+
+    const savedCount = (it) => (it.counted_qty === null || it.counted_qty === undefined ? null : Number(it.counted_qty));
+    /** Typed here and not saved yet. */
+    const dirty = (it) => it._pendingCounted !== undefined && counted(it) !== savedCount(it);
+
+    function saveHtml(it, i) {
+        if (dirty(it)) return `<button type="button" class="btn sm" data-save="${i}">บันทึก</button>`;
+        return savedCount(it) !== null
+            ? '<span class="pill ok" title="บันทึกจำนวนนี้แล้ว">✓ บันทึกแล้ว</span>'
+            : `<button type="button" class="btn secondary sm" data-save="${i}" disabled>บันทึก</button>`;
+    }
+
+    /** Saves one line only; numbers typed in other lines stay on screen unsaved. */
+    async function saveRow(i, next) {
+        const it = items[i];
+        if (dirty(it)) {
+            const b = container.querySelector(`[data-save="${i}"]`);
+            if (b) { b.disabled = true; b.textContent = 'กำลังบันทึก…'; }
+            try {
+                await api.post(`/stockcounts/${current.id}/counts`, { items: [{ item_id: it.id, counted_qty: counted(it) }] });
+                const res = await api.get(`/stockcounts/${current.id}`);
+                const pending = new Map(items.filter((x) => x !== it && x._pendingCounted !== undefined).map((x) => [x.id, x._pendingCounted]));
+                current = res.data.stock_count;
+                items = res.data.items.map((x) => (pending.has(x.id) ? { ...x, _pendingCounted: pending.get(x.id) } : x));
+                error = null;
+            } catch (e) {
+                error = e.message;
+            }
+            draw();
+            i = items.findIndex((x) => x.id === it.id);
+        }
+        if (!next || i < 0) return;
+        const boxes = [...container.querySelectorAll('[data-idx]')].filter((b) => !b.closest('tr').hidden && !b.disabled);
+        const after = boxes.find((b) => Number(b.dataset.idx) > i);
+        if (after) { after.focus(); after.select?.(); }
     }
 
     /** Counting photos of a line (open full size), and a button to add one while the round is open. */
