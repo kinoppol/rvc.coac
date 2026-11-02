@@ -139,7 +139,7 @@ export async function render(container, { navigate, permissions, user }) {
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
-          <div class="table-wrap"><table>
+          <div class="table-wrap sticky-page"><table>
             <thead><tr>${headHtml()}</tr></thead>
             <tbody>${shown.map(row).join('')
                 || `<tr><td colspan="${canEdit ? 13 : 12}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
