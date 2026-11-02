@@ -1,5 +1,11 @@
 RewriteEngine On
 
+# Only the front controller and the installer are PHP pages. Any other PHP file under
+# public/ (e.g. a web shell dropped by an attacker) is turned away instead of run.
+RewriteRule ^(?!(index|install)\.php$).*\.(php\d?|phtml|phar|pht|phps|inc)$ - [F,L,NC]
+# Dotfiles (.htaccess, .user.ini, .env ...) are never served.
+RewriteRule (^|/)\.(?!well-known/) - [F,L]
+
 # Let real files (css/js/img/install.php) be served directly.
 RewriteCond %{REQUEST_FILENAME} -f
 RewriteRule ^ - [L]

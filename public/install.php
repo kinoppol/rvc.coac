@@ -16,6 +16,7 @@ require $root . '/vendor/autoload.php';
 use App\Support\Config;
 use App\Support\Db;
 use App\Support\MigrationRunner;
+use App\Support\RepairUnlock;
 
 session_start();
 
@@ -142,6 +143,10 @@ if ($alreadyInstalled && !$repairMode && $step !== 'do-repair') {
         $dbError = $e->getMessage();
     }
     $req = checkRequirements($root);
+    // Details of a failed connection are for whoever may repair, not for every visitor.
+    if (!RepairUnlock::active()) {
+        $dbError = $dbError !== null ? 'ดูรายละเอียดได้เมื่อเปิดโหมดซ่อมแซม' : null;
+    }
     renderLayout('ระบบติดตั้งแล้ว', function () use ($dbOk, $dbError, $pendingCount, $req) {
         ?>
         <div class="card">
@@ -169,6 +174,26 @@ if ($alreadyInstalled && !$repairMode && $step !== 'do-repair') {
                 "ซ่อมแซม / ตั้งค่าใหม่" จะพาไปยังขั้นตอนติดตั้งอีกครั้งเพื่อแก้ไขการตั้งค่าฐานข้อมูลหรือรัน migration ที่ค้างอยู่
                 <b>จะไม่ลบข้อมูลที่มีอยู่</b> (migration runner จะข้ามรายการที่รันไปแล้วเสมอ)
             </p>
+        </div>
+        <?php
+    });
+    exit;
+}
+
+// ---- Guard: repairing an installed system can reset the admin password and the database
+// settings, so it needs repair unlocked (see RepairUnlock) — otherwise anyone could take over.
+if ($alreadyInstalled && !RepairUnlock::active()) {
+    http_response_code(403);
+    renderLayout('โหมดซ่อมแซมถูกล็อก', function () {
+        ?>
+        <div class="card">
+            <h1>🔒 โหมดซ่อมแซมถูกล็อก</h1>
+            <p>ระบบติดตั้งแล้ว การซ่อมแซม / ตั้งค่าใหม่ (ตั้งรหัสผ่านผู้ดูแลระบบ แก้การเชื่อมต่อฐานข้อมูล) เปิดได้เฉพาะผู้มีสิทธิ์</p>
+            <ul>
+                <li>ผู้ดูแลระบบ: เข้าสู่ระบบ ไปที่เมนู <b>ตรวจสอบความปลอดภัย</b> แล้วกด <b>เปิดโหมดซ่อมแซม <?= RepairUnlock::MINUTES ?> นาที</b></li>
+                <li>ลืมรหัสผ่านผู้ดูแลระบบ: ผู้ดูแลเซิร์ฟเวอร์สร้างไฟล์ว่าง <code>storage/repair-unlock.txt</code> (ใช้ได้ 24 ชั่วโมง) แล้วเปิดหน้านี้ใหม่</li>
+            </ul>
+            <div class="actions"><a class="btn" href="./">เข้าสู่ระบบ</a></div>
         </div>
         <?php
     });
@@ -216,7 +241,8 @@ if ($step === 'db') {
             'port' => trim($_POST['port'] ?? '3306'),
             'database' => trim($_POST['database'] ?? ''),
             'username' => trim($_POST['username'] ?? ''),
-            'password' => (string) ($_POST['password'] ?? ''),
+            // Left blank while repairing: keep the saved password (it is never sent back to the page).
+            'password' => (string) ($_POST['password'] ?? '') === '' && $alreadyInstalled ? (string) $existing['password'] : (string) ($_POST['password'] ?? ''),
             'charset' => 'utf8mb4',
         ];
         try {
@@ -251,7 +277,7 @@ if ($step === 'db') {
                 <label>Port <input name="port" value="<?= h((string) $existing['port']) ?>" required></label>
                 <label>ชื่อฐานข้อมูล <input name="database" value="<?= h((string) $existing['database']) ?>" required></label>
                 <label>ผู้ใช้ฐานข้อมูล <input name="username" value="<?= h((string) $existing['username']) ?>" required></label>
-                <label>รหัสผ่าน <input type="password" name="password" value="<?= h((string) $existing['password']) ?>"></label>
+                <label>รหัสผ่าน <input type="password" name="password" value="" placeholder="<?= Config::isInstalled() ? 'เว้นว่าง = ใช้รหัสผ่านเดิม' : '' ?>" autocomplete="new-password"></label>
                 <div class="actions">
                     <button class="btn" type="submit">ทดสอบการเชื่อมต่อและถัดไป →</button>
                 </div>

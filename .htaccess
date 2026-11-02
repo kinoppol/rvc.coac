@@ -3,3 +3,11 @@ RewriteEngine On
 # RVC-ONE sign-in: the redirect_uri registered at RVC-ONE is <project>/auth/callback
 # (no /public), so hand /auth/* to the app's front controller.
 RewriteRule ^auth/(login|callback)/?$ public/index.php [QSA,L]
+
+# The project root is reachable from the web, but only index.php (a redirect) and public/
+# are meant to be: source code, settings, logs, uploads, Git history and Composer files
+# would show how the system works or hand out its database password. Turned away here
+# (see also the .htaccess in each of those folders, and Settings > ตรวจสอบความปลอดภัย).
+RewriteRule ^(\.git|\.github|\.claude|config|storage|src|migrations|vendor|bin|project)(/|$) - [F,L]
+RewriteRule ^(composer\.(json|lock|phar)|README\.md|package(-lock)?\.json)$ - [F,L,NC]
+RewriteRule (^|/)\.(?!well-known/) - [F,L]

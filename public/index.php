@@ -16,6 +16,7 @@ use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
 use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
+use App\Controllers\SecurityController;
 use App\Controllers\MyConsignorController;
 use App\Controllers\OaAdminController;
 use App\Controllers\PerfController;
@@ -421,6 +422,14 @@ $app->group('/api', function ($group) {
     $group->post('/admin/migrations/run', [MigrationsController::class, 'run'])
         ->add(new RoleGuard('migrations.manage'));
     $group->post('/admin/migrations/rollback', [MigrationsController::class, 'rollback'])
+        ->add(new RoleGuard('migrations.manage'));
+
+    // ตรวจสอบความปลอดภัย (web shells, exposed files, installer lock) — admins only.
+    $group->get('/admin/security/scan', [SecurityController::class, 'scan'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/security/baseline', [SecurityController::class, 'baseline'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/security/repair', [SecurityController::class, 'repair'])
         ->add(new RoleGuard('migrations.manage'));
 
     $group->get('/admin/audit-logs', [AuditController::class, 'index'])

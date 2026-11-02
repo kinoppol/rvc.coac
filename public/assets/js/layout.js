@@ -31,6 +31,7 @@ const ICONS = {
     ai: svg('<path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"></path><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"></path>'),
     aiusage: svg('<path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path>'),
     migrations: svg('<ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14a9 3 0 0 0 18 0V5"></path><path d="M3 12a9 3 0 0 0 18 0"></path>'),
+    security: svg('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path>'),
     audit: svg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path>'),
 };
 
@@ -67,6 +68,7 @@ const PAGES = [
         { key: 'ai', label: 'ตั้งค่าผู้ช่วย AI', perm: 'ai.manage' },
         { key: 'aiusage', label: 'การใช้งานผู้ช่วย AI', perm: 'ai.usage' },
         { key: 'migrations', label: 'จัดการฐานข้อมูล (Migrations)', perm: 'migrations.manage' },
+        { key: 'security', label: 'ตรวจสอบความปลอดภัย', perm: 'migrations.manage' },
         { key: 'audit', label: 'ประวัติการแก้ไข', perm: 'audit.view' },
     ]},
 ];
@@ -99,6 +101,7 @@ const PAGE_TITLES = {
     ai: ['รายงานและระบบ', 'ตั้งค่าผู้ช่วย AI'],
     aiusage: ['รายงานและระบบ', 'การใช้งานและค่าใช้จ่ายผู้ช่วย AI'],
     migrations: ['รายงานและระบบ', 'จัดการฐานข้อมูล (Migrations)'],
+    security: ['รายงานและระบบ', 'ตรวจสอบความปลอดภัย / ค้นหา web shell'],
     audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
 };
 

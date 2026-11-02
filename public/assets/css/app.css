@@ -1032,3 +1032,17 @@ body.tablet-mode input:not([type="checkbox"]):not([type="radio"]):not([type="ran
 body.tablet-mode input[type="checkbox"], body.tablet-mode input[type="radio"] { width: 22px; height: 22px; }
 body.tablet-mode .kpi .value { font-size: 26px; }
 @media (prefers-reduced-motion: reduce) { body.tablet-mode .sidebar { transition: none !important; } }
+
+/* ตรวจสอบความปลอดภัย */
+.sec-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; font-size: 13px; }
+.sec-check { padding: 12px 0; border-top: 1px solid var(--border); }
+.sec-check:first-of-type { border-top: 0; padding-top: 0; }
+.sec-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sec-detail { font-size: 13px; margin: 6px 0 0; }
+.sec-check details { margin-top: 8px; }
+.sec-check summary { cursor: pointer; font-size: 13px; color: var(--accent, inherit); }
+.sec-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 420px; overflow: auto; }
+.sec-item { padding: 7px 10px; border-radius: 8px; background: var(--surface-2, rgba(127,127,127,.06)); margin-bottom: 6px; font-size: 12.5px; }
+.sec-file { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+.sec-code { display: block; margin-top: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--bad); }
+.sec-note { font-size: 12px; margin-top: 2px; }
