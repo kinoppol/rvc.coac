@@ -344,6 +344,9 @@ class ProductRepo
             }
         }
 
+        // Before the documents move over: which row was bought / received last.
+        $latest = $rows[$this->latestCostRow($rows)];
+
         $refunded = 0.0;
         $barcode = $keep['barcode'];
         $sum = ['qty_received' => 0, 'qty_sold' => 0, 'qty_returned' => 0, 'qty_stock' => 0];
@@ -380,9 +383,53 @@ class ProductRepo
             'UPDATE products SET qty_received = qty_received + ?, qty_sold = qty_sold + ?, qty_returned = qty_returned + ?,
                 qty_stock = qty_stock + ?, barcode = ?, updated_at = NOW() WHERE id = ?'
         )->execute([...array_values($sum), $barcode, $keepId]);
-        $this->audit->log('products', $keepId, 'update', $keep, $this->find($keepId) + ['merged_from' => $dupIds], $userId, $ip);
+
+        // Cost goes on from the most recently bought / received row (suppliers' prices change).
+        // Past costs stay where they were recorded: each sale line keeps its own cost of goods
+        // sold, and each purchase / receipt line its unit cost (all now on the kept row).
+        $price = $keep['consignor_id'] === null
+            ? ['cost_price' => $latest['cost_price']]
+            // A consignor's price set belongs together: what they get, the fee and the shelf price.
+            : array_intersect_key($latest, array_flip(['cost_price', 'fee_per_unit', 'round_per_unit', 'rounding_beneficiary', 'sale_price']));
+        $set = implode(', ', array_map(fn ($c) => "$c = ?", array_keys($price)));
+        $this->db->prepare("UPDATE products SET $set WHERE id = ?")->execute([...array_values($price), $keepId]);
+
+        $this->audit->log('products', $keepId, 'update', $keep, $this->find($keepId) + [
+            'merged_from' => $dupIds,
+            'cost_from' => (int) $latest['id'],
+            'cost_history' => array_map(fn ($r) => ['id' => (int) $r['id'], 'cost_price' => $r['cost_price'], 'sale_price' => $r['sale_price']], array_values($rows)),
+        ], $userId, $ip);
 
         return ['merged' => count($dupIds), 'refunded' => round($refunded, 2)];
+    }
+
+    /**
+     * Of rows being merged, the one bought / received last (store goods: the latest purchase
+     * receipt date; consignment: the day the lot was listed), the newer row on a tie. The
+     * inventory page picks the same row to show the cost that will be used.
+     *
+     * @param array<int, array> $rows id => product row
+     */
+    private function latestCostRow(array $rows): int
+    {
+        $stmt = $this->db->prepare(
+            'SELECT MAX(pd.receipt_date) FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id WHERE pi.product_id = ?'
+        );
+        $best = null;
+        $bestKey = '';
+        foreach ($rows as $id => $r) {
+            if ($r['consignor_id'] === null) {
+                $stmt->execute([$id]);
+                $day = (string) ($stmt->fetchColumn() ?: '');
+            } else {
+                $day = substr((string) $r['created_at'], 0, 10);
+            }
+            $key = $day . '|' . str_pad((string) $id, 12, '0', STR_PAD_LEFT);
+            if ($key > $bestKey) {
+                [$best, $bestKey] = [(int) $id, $key];
+            }
+        }
+        return $best;
     }
 
     /**
