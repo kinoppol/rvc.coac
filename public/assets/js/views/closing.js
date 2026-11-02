@@ -299,9 +299,22 @@ export async function render(container, { user, permissions = [] } = {}) {
                 <section class="card card-pad">
                   <h3 style="margin:0 0 8px">3. การจ่ายค่าแรง</h3>
                   ${m.wages.rows.length ? `<table class="cl-t"><tbody>
-                    ${m.wages.rows.map((w) => line(`${escapeHtml(w.employee_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${w.drawer_date === m.date ? 'จ่ายจากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, `฿ ${money(w.amount)}`)).join('')}
+                    ${m.wages.rows.map((w) => {
+                        const fromDrawer = w.drawer_date === m.date;
+                        const otherDay = w.drawer_date && !fromDrawer;
+                        return `<tr><td>${escapeHtml(w.employee_name || '-')} <span class="muted" style="font-size:11.5px">${escapeHtml(w.doc_no)} · ${w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>
+                      ${w.method === 'cash' ? `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px">
+                        ${fromDrawer ? '<span class="pill" style="font-size:11.5px">จ่ายจากเงินในลิ้นชักวันนี้</span>'
+                            : otherDay ? `<span class="pill" style="font-size:11.5px">จ่ายจากลิ้นชักวันที่ ${fmtDate(w.drawer_date)}</span>`
+                            : '<span class="pill ok" style="font-size:11.5px">ไม่ได้ใช้เงินจากลิ้นชักวันนี้</span>'}
+                        ${m.can_submit && !otherDay && (fromDrawer || dr) ? `<button type="button" class="btn sm secondary no-print" data-wgdrawer="${w.id}" data-on="${fromDrawer ? 0 : 1}">${fromDrawer ? 'ไม่ได้ใช้เงินจากลิ้นชัก' : 'จ่ายจากลิ้นชักวันนี้'}</button>` : ''}
+                      </div>` : ''}</td>
+                      <td class="num" style="vertical-align:top;${w.method !== 'cash' || fromDrawer ? '' : 'color:var(--muted)'}">฿ ${money(w.amount)}</td></tr>`;
+                    }).join('')}
                     ${line('<b>รวม</b>', `<b>฿ ${money(m.wages.total)}</b>`)}
-                  </tbody></table>` : '<div class="muted">ไม่มีการจ่ายค่าแรงวันนี้</div>'}
+                    ${m.wages.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 6)</span>', `฿ ${money(m.wages.from_drawer)}`) : ''}
+                  </tbody></table>
+                  ${m.wages.rows.some((w) => w.method === 'cash') ? '<div class="muted" style="font-size:12px;margin-top:6px">ค่าแรงที่จ่ายเงินสดจากเงินในลิ้นชัก กด <b>จ่ายจากลิ้นชักวันนี้</b> เพื่อหักจากเงินสดที่ต้องส่ง</div>' : ''}` : '<div class="muted">ไม่มีการจ่ายค่าแรงวันนี้</div>'}
                   ${stepActions(m, 'wages', !m.wages.rows.length, 'ยังไม่มีการจ่ายค่าแรง')}
                 </section>
 
@@ -438,6 +451,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         }));
         m.el.querySelectorAll('[data-skip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.skip, true)));
         m.el.querySelectorAll('[data-pdrawer]').forEach((b) => b.addEventListener('click', () => setDrawer('purchases', Number(b.dataset.pdrawer), b.dataset.on === '1')));
+        m.el.querySelectorAll('[data-wgdrawer]').forEach((b) => b.addEventListener('click', () => setDrawer('wages', Number(b.dataset.wgdrawer), b.dataset.on === '1')));
         m.el.querySelectorAll('[data-wdrawer]').forEach((b) => b.addEventListener('click', () => setDrawer('payouts', Number(b.dataset.wdrawer), b.dataset.on === '1')));
         m.el.querySelectorAll('[data-unskip]').forEach((b) => b.addEventListener('click', () => skip(b.dataset.unskip, false)));
         m.el.querySelectorAll('a[href^="#/"]').forEach((a) => a.addEventListener('click', closeDay));
@@ -467,7 +481,7 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     const docModalGone = (m) => modal !== m;
 
-    /** A purchase / consignor payout paid from today's drawer or with other money: the drawer and the cash to send follow. */
+    /** A purchase / consignor payout / wage paid from today's drawer or with other money: the drawer and the cash to send follow. */
     async function setDrawer(kind, id, fromDrawer) {
         const m = modal;
         try {

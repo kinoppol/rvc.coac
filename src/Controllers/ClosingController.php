@@ -104,6 +104,12 @@ class ClosingController
         return $this->drawerFlag($request, $response, $args, 'setPayoutDrawer');
     }
 
+    /** Whether a wage paid in cash that day came out of the drawer (body: from_drawer). */
+    public function wageDrawer(Request $request, Response $response, array $args): Response
+    {
+        return $this->drawerFlag($request, $response, $args, 'setWageDrawer');
+    }
+
     private function drawerFlag(Request $request, Response $response, array $args, string $setter): Response
     {
         $db = Db::connection();

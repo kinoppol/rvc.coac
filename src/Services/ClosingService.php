@@ -178,6 +178,52 @@ class ClosingService
         $this->audit->log('withdrawals', $withdrawalId, 'update', null, ['closing_date' => $date, 'from_drawer' => $fromDrawer], $userId, $ip);
     }
 
+    /**
+     * Marks whether a wage paid in cash that day came out of that day's drawer (sets or clears
+     * its drawer_date; the drawer log records the change).
+     */
+    public function setWageDrawer(string $date, int $wageId, bool $fromDrawer, int $userId, ?string $ip): void
+    {
+        $stmt = $this->db->prepare(
+            "SELECT w.*, u.full_name AS employee_name FROM wage_payments w LEFT JOIN users u ON u.id = w.user_id
+             WHERE w.id = ? AND w.cancelled_at IS NULL AND w.method = 'cash' AND (w.pay_date = ? OR w.drawer_date = ?)"
+        );
+        $stmt->execute([$wageId, $date, $date]);
+        $w = $stmt->fetch();
+        if (!$w) {
+            throw new \RuntimeException('ไม่พบรายการจ่ายค่าแรงเป็นเงินสดของวันนี้');
+        }
+        if ($w['drawer_date'] !== null && $w['drawer_date'] !== $date) {
+            throw new \RuntimeException("{$w['doc_no']} จ่ายจากลิ้นชักของวันอื่นแล้ว");
+        }
+        if ($fromDrawer === ($w['drawer_date'] === $date)) {
+            return;
+        }
+        if ($fromDrawer) {
+            $drawer = $this->db->prepare('SELECT 1 FROM cash_drawers WHERE business_date = ?');
+            $drawer->execute([$date]);
+            if (!$drawer->fetchColumn()) {
+                throw new \RuntimeException('วันนี้ไม่ได้ระบุเงินในลิ้นชัก จึงจ่ายจากลิ้นชักไม่ได้');
+            }
+        }
+        $this->db->beginTransaction();
+        try {
+            $this->db->prepare('UPDATE wage_payments SET drawer_date = ? WHERE id = ?')->execute([$fromDrawer ? $date : null, $wageId]);
+            $this->db->prepare(
+                'INSERT INTO cash_drawer_events (business_date, user_id, subject_user_id, event, amount, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            )->execute([
+                $date, $userId, $w['user_id'], $fromDrawer ? 'wage_out' : 'wage_cancel', $w['amount'],
+                mb_substr($fromDrawer ? "{$w['doc_no']} จ่ายค่าแรง {$w['employee_name']} (ระบุในสรุปบัญชี)" : "{$w['doc_no']} ไม่ได้จ่ายจากลิ้นชัก (ระบุในสรุปบัญชี)", 0, 500),
+                date('Y-m-d H:i:s'),
+            ]);
+            $this->audit->log('wage_payments', $wageId, 'update', ['drawer_date' => $w['drawer_date']], ['closing_date' => $date, 'drawer_date' => $fromDrawer ? $date : null], $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
     /** The change left in the drawer for the next day, as saved with the day's summary (null = not set). */
     private function savedFloat(string $date): ?float
     {
@@ -420,7 +466,7 @@ class ClosingService
             }
         };
         $wages = $q(
-            "SELECT w.doc_no, w.amount, w.method, w.drawer_date, w.note, u.full_name AS employee_name FROM wage_payments w
+            "SELECT w.id, w.doc_no, w.amount, w.method, w.drawer_date, w.note, u.full_name AS employee_name FROM wage_payments w
              LEFT JOIN users u ON u.id = w.user_id
              WHERE w.cancelled_at IS NULL AND (w.pay_date = ? OR w.drawer_date = ?) ORDER BY w.id",
             [$date, $date]
