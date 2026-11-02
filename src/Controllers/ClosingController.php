@@ -96,6 +96,25 @@ class ClosingController
         return $this->json($response, ['data' => $service->report($date)['skips']]);
     }
 
+    /** Corrects the day's opening cash (body: amount, reason), or takes the correction back (amount null). */
+    public function opening(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $body = (array) $request->getParsedBody();
+        $amount = isset($body['amount']) && $body['amount'] !== '' && $body['amount'] !== null ? (float) $body['amount'] : null;
+        $service = $this->service($db);
+        try {
+            $service->adjustOpening($date, $amount, (string) ($body['reason'] ?? ''), (int) $request->getAttribute('user')['id'], $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date)]);
+    }
+
     /** Whether a purchase of the day was paid from the drawer (body: from_drawer). */
     public function purchaseDrawer(Request $request, Response $response, array $args): Response
     {

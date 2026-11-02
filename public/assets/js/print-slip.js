@@ -419,7 +419,8 @@ export function printClosingReport(r, { weekday, status, send }) {
         ${row(`รวมยอดขาย (${f.sales_count} บิล)`, n(f.total_sales), 'total')}`);
 
     const drawer = section('6. เงินสดในลิ้นชัก', dr ? `
-        ${row('เงินในลิ้นชักตอนเปิดร้าน', n(dr.opening_cash))}
+        ${dr.opening_adjust ? row('เงินในลิ้นชักตอนเปิดร้าน ที่พนักงานนับ', n(dr.opening_counted)) : ''}
+        ${row(dr.opening_adjust ? `เงินในลิ้นชักตอนเปิดร้าน (ผู้สรุปบัญชีแก้: ${escapeHtml(dr.opening_adjust.reason || '-')})` : 'เงินในลิ้นชักตอนเปิดร้าน', n(dr.opening_cash))}
         ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
         ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 5)', n(f.purchase_out))}
         ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
