@@ -29,7 +29,7 @@
 html, body { margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
 /* No double-tap-zoom wait on taps. */
-button, a, label, select, summary, [role="button"] { touch-action: manipulation; }
+button, a, label, select, summary, [role="button"], input, textarea { touch-action: manipulation; }
 body {
     background: var(--bg); color: var(--text); font-family: Sarabun, "Noto Sans Thai", system-ui, sans-serif;
     font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;

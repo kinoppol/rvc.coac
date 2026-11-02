@@ -9,6 +9,9 @@
 // keyboard" — every text and number field then opens this keyboard and the device's
 // own keyboard stays closed. Fields marked data-osk="manual" (the POS search box)
 // open it themselves; data-osk="off" never opens it.
+//
+// Without that setting, a double tap on a number field opens the number pad straight away
+// (the device keyboard goes down while it is open, and comes back for the field afterwards).
 
 const LANG_KEY = 'osk.lang';
 const ENABLED_KEY = 'osk.enabled';
@@ -49,13 +52,18 @@ let opacity = (() => {
     try { const v = parseFloat(localStorage.getItem(OPACITY_KEY)); return v >= OPACITY_MIN && v <= 1 ? v : 0.92; } catch (e) { return 0.92; }
 })();
 let drag = null;
+let lastTap = null; // { field, at, x, y } of the last touch on a number field
+const DOUBLE_TAP_MS = 400;
 
 export const isKeyboardOpen = () => !!box && !box.hidden;
 export const keyboardEnabled = () => enabled;
 
 /** Opens the keyboard typing into `input`. opts.numeric shows the number pad; opts.onClose runs when it closes. */
 export function openKeyboard(input, options = {}) {
-    if (target && target !== input) changed();
+    if (target && target !== input) {
+        changed();
+        if (opts.tap && !enabled && target.isConnected) restore(target);
+    }
     if (target !== input) startValue = input.value;
     target = input;
     opts = options;
@@ -74,6 +82,7 @@ export function closeKeyboard() {
     document.body.classList.remove('osk-open');
     changed();
     sizeChanged();
+    if (opts.tap && !enabled && target?.isConnected) restore(target);
     const done = opts.onClose;
     target = null;
     opts = {};
@@ -102,7 +111,7 @@ export function setKeyboardEnabled(on) {
 export function initKeyboard() {
     // Before the tap focuses the field: tell the browser not to raise its own keyboard.
     document.addEventListener('pointerdown', (e) => {
-        if (!enabled) return;
+        if (!enabled) { doubleTap(e); return; }
         const f = e.target.closest?.('input, textarea');
         if (!eligible(f)) return;
         suppress(f);
@@ -122,8 +131,15 @@ export function initKeyboard() {
             if (f !== target || !isKeyboardOpen()) openFor(f);
             return;
         }
+        if (!isKeyboardOpen() || f === target) return;
+        // A pad opened by double tap follows on to other number fields (also one the page redrew).
+        if (opts.tap && numberField(f)) {
+            suppress(f);
+            openKeyboard(f, { tap: true, numeric: true });
+            return;
+        }
         // Typing into another field (e.g. a quantity box) hands over to that field's own keyboard.
-        if (isKeyboardOpen() && f !== target && f.matches?.('input, textarea, select')) closeKeyboard();
+        if (f.matches?.('input, textarea, select')) closeKeyboard();
     });
     document.addEventListener('focusout', () => {
         if (!opts.global) return;
@@ -153,6 +169,39 @@ function isNumeric(el) {
 
 function openFor(f) {
     openKeyboard(f, { global: true, numeric: isNumeric(f) });
+}
+
+const numberField = (el) => eligible(el) && isNumeric(el);
+
+// Two touches on the same number field in quick succession open the number pad there.
+function doubleTap(e) {
+    if (e.pointerType === 'mouse') return;
+    const f = e.target.closest?.('input');
+    if (!numberField(f)) { lastTap = null; return; }
+    const now = performance.now();
+    const t = lastTap;
+    lastTap = { field: f, at: now, x: e.clientX, y: e.clientY };
+    if (!t || t.field !== f || now - t.at > DOUBLE_TAP_MS || Math.hypot(e.clientX - t.x, e.clientY - t.y) > 40) return;
+    lastTap = null;
+    if (isKeyboardOpen() && target === f) return;
+    e.preventDefault();
+    suppress(f);
+    // Focus again so a device keyboard already up from the first tap goes down.
+    if (document.activeElement === f) f.blur();
+    f.focus({ preventScroll: true });
+    openKeyboard(f, { tap: true, numeric: true });
+    const end = f.value.length;
+    try { f.setSelectionRange(end, end); } catch (err) { /* no caret */ }
+}
+
+// The page may have redrawn the field the keyboard typed into (e.g. after a button changed
+// its value): carry on in the field that took its place, found by the same attributes.
+function relocate() {
+    const attrs = [...target.attributes].filter((a) => (a.name.startsWith('data-') && !a.name.startsWith('data-osk')) || a.name === 'name' || a.name === 'id');
+    if (!attrs.length) return null;
+    const sel = target.tagName.toLowerCase() + attrs.map((a) => `[${a.name}="${CSS.escape(a.value)}"]`).join('');
+    const f = document.querySelector(sel);
+    return f && (opts.global ? eligible(f) : numberField(f)) ? f : null;
 }
 
 // Keeps the device keyboard down for this field. A number field becomes a text field while
@@ -365,6 +414,17 @@ function press(k, ch) {
         place();
         return;
     }
+    if (target && !target.isConnected) {
+        const f = relocate();
+        if (f) {
+            if (opts.tap) suppress(f);
+            startValue = f.value;
+            target = f;
+            f.focus({ preventScroll: true });
+            const end = f.value.length;
+            try { f.setSelectionRange(end, end); } catch (e) { /* no caret */ }
+        }
+    }
     if (!target || !target.isConnected) { closeKeyboard(); return; }
     if (document.activeElement !== target) target.focus({ preventScroll: true });
     if (k === 'ch') {
@@ -390,6 +450,7 @@ function press(k, ch) {
         if (target.matches('textarea')) { insert('\n'); emitInput(); return; }
         const handled = !target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
         if (!handled && opts.global) nextField();
+        else if (!handled && opts.tap) closeKeyboard();
     } else if (k === 'close') {
         closeKeyboard();
     }
