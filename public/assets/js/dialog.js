@@ -12,7 +12,7 @@ export function isDialogOpen() {
 
 const TONE_ICON = { info: 'i', warn: '?', danger: '!', error: '!' };
 
-function open({ title, message, okText, cancelText, tone, input }) {
+function open({ title, message, okText, cancelText, tone, input, html, width }) {
     return new Promise((resolve) => {
         const prev = document.activeElement;
         const el = document.createElement('div');
@@ -24,12 +24,13 @@ function open({ title, message, okText, cancelText, tone, input }) {
               + '<div class="app-dialog-error" data-error hidden></div>'
             : '';
         el.innerHTML = `
-          <div class="modal app-dialog-box" role="${cancelText ? 'alertdialog' : 'dialog'}" aria-modal="true" aria-labelledby="app-dialog-title">
+          <div class="modal app-dialog-box" ${width ? `style="width:${Number(width)}px"` : ''} role="${cancelText ? 'alertdialog' : 'dialog'}" aria-modal="true" aria-labelledby="app-dialog-title">
             <div class="modal-body app-dialog-body">
               <div class="app-dialog-icon ${tone}" aria-hidden="true">${TONE_ICON[tone] || 'i'}</div>
               <div class="app-dialog-text">
                 <h2 id="app-dialog-title">${escapeHtml(title)}</h2>
                 ${message ? `<p>${escapeHtml(message)}</p>` : ''}
+                ${html || ''}
                 ${field}
               </div>
             </div>
@@ -108,9 +109,12 @@ export function alertDialog(message, { title = 'แจ้งเตือน', ok
     return open({ title, message, okText, tone }).then(() => undefined);
 }
 
-/** Resolves to true when the user confirms. danger: true styles the confirm button red. */
-export function confirmDialog(message, { title = 'ยืนยันการทำรายการ', okText = 'ยืนยัน', cancelText = 'ยกเลิก', danger = false } = {}) {
-    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'warn' });
+/**
+ * Resolves to true when the user confirms. danger: true styles the confirm button red.
+ * html: trusted markup shown under the message (escape any data in it); width: the box in px.
+ */
+export function confirmDialog(message, { title = 'ยืนยันการทำรายการ', okText = 'ยืนยัน', cancelText = 'ยกเลิก', danger = false, html = '', width = 0 } = {}) {
+    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'warn', html, width });
 }
 
 /**

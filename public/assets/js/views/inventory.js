@@ -437,14 +437,41 @@ export async function render(container, { navigate, permissions, user }) {
         const group = dupsOf(p);
         const others = group.filter((x) => x.id !== p.id);
         const older = group[0].id === p.id;
-        const prices = new Set(group.map((x) => `${money(x.cost_price)}/${money(x.sale_price)}`));
+        const differs = (k) => group.some((x) => money(x[k]) !== money(p[k]));
+        const sum = (k) => group.reduce((s, x) => s + Number(x[k] || 0), 0);
+        // Side by side: the row that stays (marked and highlighted) and the ones folded into it.
+        const cell = (x, k, fmt) => {
+            const off = x.id !== p.id && differs(k) && money(x[k]) !== money(p[k]);
+            return `<td class="num" style="${off ? 'color:var(--muted);text-decoration:line-through' : ''}">${fmt(x[k])}</td>`;
+        };
+        const table = `
+          <div class="tbl-scroll" style="margin-top:12px;border:1px solid var(--border);border-radius:10px;overflow:auto">
+          <table style="font-size:13px">
+            <thead><tr><th></th><th>รหัส</th><th>ชื่อสินค้า</th><th>บาร์โค้ด</th><th class="num">ต้นทุน/ชิ้น</th><th class="num">ราคาขาย</th><th class="num">รับเข้า</th><th class="num">ขายแล้ว</th><th class="num">คงเหลือ</th></tr></thead>
+            <tbody>${group.map((x) => {
+                const keep = x.id === p.id;
+                return `<tr style="${keep ? 'background:var(--ok-bg);font-weight:600;box-shadow:inset 4px 0 0 var(--ok)' : ''}">
+                  <td style="white-space:nowrap">${keep ? '<span class="pill ok" style="font-size:11.5px">★ รายการหลัก</span>' : '<span class="pill muted" style="font-size:11.5px">→ รวมเข้า แล้วลบ</span>'}</td>
+                  <td class="muted">${x.id}${x.id === group[0].id ? ' <span style="font-size:11px">(เก่าสุด)</span>' : ''}</td>
+                  <td>${escapeHtml(x.name)}</td>
+                  <td style="font-size:12px">${escapeHtml(x.barcode || '—')}</td>
+                  ${cell(x, 'cost_price', (v) => `฿${money(v)}`)}
+                  ${cell(x, 'sale_price', (v) => `฿${money(v)}`)}
+                  <td class="num">${count(x.qty_received)}</td><td class="num">${count(x.qty_sold)}</td><td class="num">${count(x.qty_stock)}</td>
+                </tr>`;
+            }).join('')}
+            <tr style="border-top:2px solid var(--border)"><td colspan="4"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
+              <td class="num"><b>฿${money(p.cost_price)}</b></td><td class="num"><b>฿${money(p.sale_price)}</b></td>
+              <td class="num"><b>${count(sum('qty_received'))}</b></td><td class="num"><b>${count(sum('qty_sold'))}</b></td><td class="num"><b>${count(sum('qty_stock'))}</b></td></tr>
+            </tbody>
+          </table></div>
+          ${differs('cost_price') || differs('sale_price') ? `<div class="error-box" style="margin-top:10px;font-size:13px">ราคาไม่เท่ากัน — หลังรวมจะใช้ต้นทุน ฿${money(p.cost_price)} ราคาขาย ฿${money(p.sale_price)} ของรายการหลัก (ราคาที่ขีดฆ่าจะไม่ใช้ต่อ)</div>` : ''}
+          ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
         const ok = await confirmDialog(
-            `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว โดยใช้รายการที่${older ? 'เก่ากว่า' : 'ใหม่กว่า'} (รหัส ${p.id}) เป็นหลัก`
-            + ` · ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน เอกสารรับฝาก/ขาย/ตรวจนับ และบาร์โค้ดของรายการ ${others.map((x) => x.id).join(', ')} จะย้ายมาที่รายการหลัก แล้วลบรายการซ้ำทิ้ง`
-            + (p.consignor_id != null ? ' · ค่าทำข้อมูลที่เก็บจากรายการซ้ำจะคืนเข้าบัญชีผู้ฝาก' : '')
-            + (prices.size > 1 ? ` · ราคาไม่เท่ากัน จะใช้ต้นทุน ฿${money(p.cost_price)} ราคาขาย ฿${money(p.sale_price)} ของรายการหลักต่อจากนี้` : '')
-            + (older ? '' : ' · ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก'),
-            { title: 'รวมรายการสินค้าซ้ำ?', okText: 'รวมรายการ', danger: !older }
+            `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
+            + ` เอกสารรับฝาก/ขาย/ตรวจนับ และบาร์โค้ดของรายการ ${others.map((x) => x.id).join(', ')} จะย้ายมาที่รายการหลัก แล้วลบรายการซ้ำทิ้ง`
+            + (p.consignor_id != null ? ' · ค่าทำข้อมูลที่เก็บจากรายการซ้ำจะคืนเข้าบัญชีผู้ฝาก' : ''),
+            { title: 'รวมรายการสินค้าซ้ำ?', okText: 'รวมรายการ', danger: !older, html: table, width: 820 }
         );
         if (!ok) return;
         try {
