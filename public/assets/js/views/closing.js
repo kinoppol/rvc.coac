@@ -1,10 +1,11 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
-import { alertDialog, promptDialog } from '../dialog.js';
-import { printClosingReport } from '../print-slip.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { printClosingReport, printWageSlip } from '../print-slip.js';
 
 const SKIP_LABEL = { drawer: 'ปิดยอดลิ้นชัก', wages: 'จ่ายค่าแรง', payouts: 'จ่ายเงินผู้ฝากขาย', purchases: 'ซื้อสินค้าเข้าร้าน' };
 const PAY_METHOD = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
+const UNIT = { day: 'วัน', hour: 'ชั่วโมง' };
 
 /**
  * สรุปบัญชีรายวัน: the person on duty for a weekday checks that day's figures, records the
@@ -150,6 +151,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             if (!d.closing && d.can_submit) startEdit();
             document.body.appendChild(modal.el);
             drawDay();
+            if (d.can_submit) loadPayOptions(modal);
         } catch (e) {
             alertDialog(e.message, { tone: 'error' });
         }
@@ -206,15 +208,17 @@ export async function render(container, { user, permissions = [] } = {}) {
         const [route, perm, label] = LINKS[item];
         const mayAct = m.can_submit;
         const href = `#/${route}${item === 'drawer' ? `?date=${m.date}` : ''}`;
+        // Wages and consignor payouts are paid right on the report (item 3 / 4), not on their own page.
+        const inline = mayAct && (item === 'wages' || (item === 'payouts' && m.date === data.today));
         if (!missing) return '';
         if (sk) {
             return `<div class="step-note muted" style="font-size:12.5px;margin-top:8px">⏭️ ข้ามไปก่อนโดย ${escapeHtml(sk.user_name || '-')} · ${fmtDateTime(sk.created_at)}${sk.note ? ` · ${escapeHtml(sk.note)}` : ''}
               ${mayAct ? `<button type="button" class="btn sm secondary no-print" data-unskip="${item}" style="margin-left:6px">ยกเลิกการข้าม</button>` : ''}
-              ${can(perm) ? `<a class="btn sm secondary no-print" href="${href}" style="margin-left:6px">${label}</a>` : ''}</div>`;
+              ${can(perm) && !inline ? `<a class="btn sm secondary no-print" href="${href}" style="margin-left:6px">${label}</a>` : ''}</div>`;
         }
         return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px">
             <span class="pill warn" style="font-size:12px">${missingText}</span>
-            ${can(perm) ? `<a class="btn sm no-print" href="${href}">${label}</a>` : `<span class="muted no-print" style="font-size:12px">(ให้ผู้มีสิทธิ์ดำเนินการ)</span>`}
+            ${inline ? '' : can(perm) ? `<a class="btn sm no-print" href="${href}">${label}</a>` : `<span class="muted no-print" style="font-size:12px">(ให้ผู้มีสิทธิ์ดำเนินการ)</span>`}
             ${mayAct ? `<button type="button" class="btn sm secondary no-print" data-skip="${item}">ข้ามไปก่อน</button>` : ''}
           </div>`;
     }
@@ -247,6 +251,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             ${line('<b>เงินสดที่ต้องส่งวิทยาลัย</b> <span class="muted" style="font-size:12px">(ข้อ 7)</span>', `<b id="cl-send-v">฿ ${money(expectedSend(m))}</b>`)}`
             : line('เงินในลิ้นชักตอนเปิดร้าน', '<span class="muted">ไม่ได้ระบุ</span>');
 
+        const scroll = m.el.querySelector('.modal-body')?.scrollTop || 0;
         m.el.innerHTML = `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" aria-label="รายงานสรุปบัญชีวันที่ ${fmtDate(m.date)}" style="width:960px">
@@ -316,6 +321,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                   </tbody></table>
                   ${m.wages.rows.some((w) => w.method === 'cash') ? '<div class="muted" style="font-size:12px;margin-top:6px">ค่าแรงที่จ่ายเงินสดจากเงินในลิ้นชัก กด <b>จ่ายจากลิ้นชักวันนี้</b> เพื่อหักจากเงินสดที่ต้องส่ง</div>' : ''}` : '<div class="muted">ไม่มีการจ่ายค่าแรงวันนี้</div>'}
                   ${stepActions(m, 'wages', !m.wages.rows.length, 'ยังไม่มีการจ่ายค่าแรง')}
+                  ${wageFormHtml(m)}
                 </section>
 
                 <section class="card card-pad">
@@ -332,9 +338,9 @@ export async function render(container, { user, permissions = [] } = {}) {
                     ${m.payouts.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 6)</span>', `฿ ${money(m.payouts.from_drawer)}`) : ''}
                   </tbody></table>
                   ${m.payouts.cash ? '<div class="muted" style="font-size:12px;margin-top:6px">จ่ายเป็นเงินสดถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>' : ''}` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
-                  ${m.payouts.pending_count ? `<div style="margin-top:8px"><span class="pill warn" style="font-size:12px">คำขอเบิกรอจ่าย ${m.payouts.pending_count} รายการ ฿${money(m.payouts.pending_amount)}</span>
-                    ${can('withdraw.create') ? '<a class="btn sm no-print" href="#/withdraw" style="margin-left:6px">ไปจ่ายเงิน</a>' : ''}</div>` : ''}
+                  ${m.payouts.pending_count ? pendingHtml(m) : ''}
                   ${stepActions(m, 'payouts', !m.payouts.rows.length, 'ยังไม่มีการจ่ายเงินผู้ฝากขาย')}
+                  ${payoutFormHtml(m)}
                 </section>
               </div>
 
@@ -373,6 +379,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             </div>
           </div>
         </div>`;
+        m.el.querySelector('.modal-body').scrollTop = scroll;
         wireDay();
     }
 
@@ -459,6 +466,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         m.el.querySelector('#cl-cancel')?.addEventListener('click', () => { m.editing = false; m.error = null; drawDay(); });
         m.el.querySelector('#cl-edit')?.addEventListener('click', () => { startEdit(); drawDay(); });
         m.el.querySelector('#cl-verify')?.addEventListener('click', verify);
+        wirePay(m);
     }
 
     async function skip(item, on) {
@@ -480,6 +488,286 @@ export async function render(container, { user, permissions = [] } = {}) {
     }
 
     const docModalGone = (m) => modal !== m;
+
+    /* ---- Items 3 and 4 paid right on the report: a wage, a consignor payout, a waiting withdrawal ---- */
+
+    const newWage = () => ({ user_id: '', wage_type: 'day', units: '', rate: '', amount: '', method: 'cash', from_drawer: true, note: '', touched: false });
+    const newPayout = () => ({ consignor_id: '', amount: '', method: 'cash', from_drawer: true, overdraw: false, reason: '' });
+
+    async function loadPayOptions(m) {
+        try {
+            const o = (await api.get(`/closing/${m.date}/pay-options`)).data;
+            if (docModalGone(m)) return;
+            m.opts = o;
+            drawDay();
+        } catch {
+            // the report still works; the pay buttons stay hidden
+        }
+    }
+
+    const wageAuto = (w) => {
+        const u = Number(w.units);
+        const r = Number(w.rate);
+        return w.wage_type !== 'fixed' && u > 0 && r > 0 ? String(Math.round(u * r * 100) / 100) : '';
+    };
+
+    function wageFormHtml(m) {
+        const o = m.opts;
+        if (!m.can_submit || !o) return '';
+        if (!m.wf) return '<button type="button" class="btn sm no-print" data-pay-open="wages" style="margin-top:10px">+ จ่ายค่าแรง</button>';
+        const w = m.wf;
+        const fixed = w.wage_type === 'fixed';
+        return `
+        <div class="no-print cl-pay" style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
+          <div style="font-weight:600;margin-bottom:8px">จ่ายค่าแรง · ลงวันที่ ${fmtDate(m.date)}</div>
+          <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr));gap:10px">
+            <label class="field" style="grid-column:1/-1">พนักงาน *
+              <select data-wf="user_id"><option value="">— เลือกพนักงาน —</option>
+                ${o.staff.map((s) => `<option value="${s.id}" ${String(s.id) === String(w.user_id) ? 'selected' : ''}>${escapeHtml(s.full_name)}</option>`).join('')}</select></label>
+            <label class="field">ประเภทค่าแรง
+              <select data-wf="wage_type">${Object.entries(o.types).map(([k, v]) => `<option value="${k}" ${k === w.wage_type ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select></label>
+            ${fixed ? '' : `
+            <label class="field">จำนวน${UNIT[w.wage_type] || ''} <input data-wf="units" type="number" min="0" step="0.5" value="${escapeHtml(w.units)}"></label>
+            <label class="field">อัตราต่อ${UNIT[w.wage_type] || ''} <input data-wf="rate" type="number" min="0" step="1" value="${escapeHtml(w.rate)}"></label>`}
+            <label class="field">จำนวนเงิน (บาท) * <input data-wf="amount" type="number" min="0" step="0.01" value="${escapeHtml(w.amount)}"></label>
+            <label class="field">วิธีจ่าย
+              <select data-wf="method">${Object.entries(o.methods).map(([k, v]) => `<option value="${k}" ${k === w.method ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select></label>
+            <label class="field" style="grid-column:1/-1">หมายเหตุ <input data-wf="note" maxlength="200" value="${escapeHtml(w.note)}"></label>
+          </div>
+          ${w.method === 'cash' ? `
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:13px;${o.drawer ? 'cursor:pointer' : 'opacity:.6'}">
+            <input type="checkbox" data-wf="from_drawer" ${w.from_drawer && o.drawer ? 'checked' : ''} ${o.drawer ? '' : 'disabled'} style="margin-top:3px">
+            <span>จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="display:block;font-size:11.5px;font-weight:400">${o.drawer ? 'หักจากเงินสดที่ต้องส่งวิทยาลัย (ข้อ 6)' : 'ใช้ไม่ได้: วันนี้ไม่ได้ระบุเงินในลิ้นชัก'}</span></span>
+          </label>` : ''}
+          ${m.payError?.kind === 'wages' ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.payError.msg)}</div>` : ''}
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+            <button type="button" class="btn sm secondary" data-pay-close="wages">ยกเลิก</button>
+            <button type="button" class="btn sm" data-pay-save="wages" ${m.payBusy ? 'disabled' : ''}>${m.payBusy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายค่าแรง'}</button>
+          </div>
+        </div>`;
+    }
+
+    const payoutOver = (m) => {
+        const c = m.opts?.consignors.find((x) => String(x.id) === String(m.pf?.consignor_id));
+        return c && m.pf.amount !== '' && Number(m.pf.amount) > Number(c.balance) ? c : null;
+    };
+
+    function payoutFormHtml(m) {
+        const o = m.opts;
+        if (!m.can_submit || !o || !o.can_payout) return '';
+        if (!m.pf) return '<button type="button" class="btn sm no-print" data-pay-open="payouts" style="margin-top:10px">+ จ่ายเงินผู้ฝากขาย</button>';
+        const p = m.pf;
+        const c = o.consignors.find((x) => String(x.id) === String(p.consignor_id));
+        const over = payoutOver(m);
+        return `
+        <div class="no-print cl-pay" style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
+          <div style="font-weight:600;margin-bottom:8px">จ่ายเงินให้ผู้ฝากขาย</div>
+          <label class="field" style="margin-bottom:8px">ผู้ฝากขาย *
+            <select data-pf="consignor_id"><option value="">— เลือกผู้ฝากขาย —</option>
+              ${o.consignors.map((x) => `<option value="${x.id}" ${String(x.id) === String(p.consignor_id) ? 'selected' : ''}>${escapeHtml(x.code)} - ${escapeHtml(x.name)} (฿${money(x.balance)})</option>`).join('')}</select></label>
+          ${c ? `<div class="chip" style="margin-bottom:8px">ยอดที่เบิกได้: <b>&nbsp;฿ ${money(c.balance)}</b></div>` : ''}
+          <label class="field">จำนวนเงิน (บาท) *
+            <div style="display:flex;gap:6px"><input data-pf="amount" type="number" min="0" step="0.25" value="${escapeHtml(p.amount)}" ${c ? '' : 'disabled'} style="flex:1;min-width:0">
+              <button type="button" class="btn sm secondary" data-pf-all ${c && Number(c.balance) > 0 ? '' : 'disabled'}>ทั้งหมด</button></div></label>
+          <div data-pf-over style="margin-top:8px" ${over ? '' : 'hidden'}>
+            ${o.can_overdraw ? `
+              <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;font-size:13px">
+                <input type="checkbox" data-pf="overdraw" ${p.overdraw ? 'checked' : ''} style="margin-top:3px">
+                <span>เกินยอดคงเหลือ — ร้านรับผิดชอบ (เช่น สินค้าสูญหาย) ให้เบิกเกินยอดได้ คิดบัญชีติดลบไว้ก่อน</span></label>
+              ${p.overdraw ? `<input data-pf="reason" maxlength="150" placeholder="เหตุผล (จำเป็น)" value="${escapeHtml(p.reason)}" style="width:100%;margin-top:6px">` : ''}`
+              : '<div class="error-box">จำนวนเงินเกินยอดคงเหลือ</div>'}
+          </div>
+          <div class="actions-row" style="margin-top:8px">
+            ${Object.entries(PAY_METHOD).map(([k, v]) => `<button type="button" class="tab-btn ${p.method === k ? 'active' : ''}" data-pf-method="${k}">${v}</button>`).join('')}
+          </div>
+          ${p.method === 'cash' ? `
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" data-pf="from_drawer" ${p.from_drawer ? 'checked' : ''} style="margin-top:3px">
+            <span>จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="display:block;font-size:11.5px;font-weight:400">หักจากเงินสดที่ต้องส่งวิทยาลัย (ข้อ 6) · ไม่ติ๊กถ้าใช้เงินอื่น</span></span>
+          </label>` : ''}
+          ${m.payError?.kind === 'payouts' ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.payError.msg)}</div>` : ''}
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+            <button type="button" class="btn sm secondary" data-pay-close="payouts">ยกเลิก</button>
+            <button type="button" class="btn sm" data-pay-save="payouts" ${m.payBusy ? 'disabled' : ''}>${m.payBusy ? 'กำลังบันทึก...' : 'บันทึกการจ่ายเงิน'}</button>
+          </div>
+        </div>`;
+    }
+
+    /** Withdrawals waiting to be paid: paid from today's report with one click. */
+    function pendingHtml(m) {
+        const o = m.opts;
+        const head = `<span class="pill warn" style="font-size:12px">คำขอเบิกรอจ่าย ${m.payouts.pending_count} รายการ ฿${money(m.payouts.pending_amount)}</span>`;
+        if (!m.can_submit || !o?.can_payout || !o.pending.length) {
+            return `<div style="margin-top:8px">${head}${can('withdraw.create') ? '<a class="btn sm no-print" href="#/withdraw" style="margin-left:6px">ไปจ่ายเงิน</a>' : ''}</div>`;
+        }
+        return `<div class="no-print" style="margin-top:10px">${head}
+          <table class="cl-t" style="margin-top:6px"><tbody>
+          ${o.pending.map((r) => `<tr><td>${escapeHtml(r.consignor_code)} - ${escapeHtml(r.consignor_name)} <span class="muted" style="font-size:11.5px">${escapeHtml(r.doc_no)} · ${PAY_METHOD[r.method] || r.method} · ขอ ${fmtDateTime(r.requested_at)}</span></td>
+            <td class="num" style="white-space:nowrap">฿ ${money(r.amount)} <button type="button" class="btn sm" data-pay-approve="${r.id}" style="margin-left:6px" ${m.payBusy ? 'disabled' : ''}>จ่าย</button></td></tr>`).join('')}
+          </tbody></table></div>`;
+    }
+
+    function wirePay(m) {
+        const $ = (s) => m.el.querySelector(s);
+        m.el.querySelectorAll('[data-pay-open]').forEach((b) => b.addEventListener('click', () => {
+            if (b.dataset.payOpen === 'wages') m.wf = newWage(); else m.pf = newPayout();
+            m.payError = null;
+            drawDay();
+            m.el.querySelector(b.dataset.payOpen === 'wages' ? '[data-wf="user_id"]' : '[data-pf="consignor_id"]')?.focus();
+        }));
+        m.el.querySelectorAll('[data-pay-close]').forEach((b) => b.addEventListener('click', () => {
+            if (b.dataset.payClose === 'wages') m.wf = null; else m.pf = null;
+            m.payError = null;
+            drawDay();
+        }));
+        m.el.querySelectorAll('[data-pay-save]').forEach((b) => b.addEventListener('click', () => (b.dataset.paySave === 'wages' ? payWage(m) : payPayout(m))));
+        m.el.querySelectorAll('[data-pay-approve]').forEach((b) => b.addEventListener('click', () => approvePending(m, Number(b.dataset.payApprove))));
+
+        // Wage form: selects and the checkbox redraw, typed values update in place (the box keeps its focus).
+        m.el.querySelectorAll('[data-wf]').forEach((inp) => {
+            const k = inp.dataset.wf;
+            if (inp.type === 'checkbox') return inp.addEventListener('change', () => { m.wf.from_drawer = inp.checked; });
+            if (inp.tagName === 'SELECT') {
+                return inp.addEventListener('change', () => {
+                    m.wf[k] = inp.value;
+                    if (k === 'wage_type' && !m.wf.touched) m.wf.amount = wageAuto(m.wf);
+                    drawDay();
+                });
+            }
+            inp.addEventListener('input', () => {
+                m.wf[k] = inp.value;
+                if (k === 'amount') m.wf.touched = inp.value !== '';
+                if ((k === 'units' || k === 'rate') && !m.wf.touched) $('[data-wf="amount"]').value = m.wf.amount = wageAuto(m.wf);
+            });
+        });
+
+        m.el.querySelectorAll('[data-pf]').forEach((inp) => {
+            const k = inp.dataset.pf;
+            if (inp.type === 'checkbox') {
+                return inp.addEventListener('change', () => {
+                    m.pf[k] = inp.checked;
+                    if (k === 'overdraw') { drawDay(); $('[data-pf="reason"]')?.focus(); }
+                });
+            }
+            if (inp.tagName === 'SELECT') {
+                return inp.addEventListener('change', () => {
+                    Object.assign(m.pf, { consignor_id: inp.value, amount: '', overdraw: false, reason: '' });
+                    drawDay();
+                    $('[data-pf="amount"]')?.focus();
+                });
+            }
+            inp.addEventListener('input', () => {
+                m.pf[k] = inp.value;
+                if (k === 'amount') $('[data-pf-over]').hidden = !payoutOver(m);
+            });
+        });
+        $('[data-pf-all]')?.addEventListener('click', () => {
+            const c = m.opts.consignors.find((x) => String(x.id) === String(m.pf.consignor_id));
+            m.pf.amount = String(Number(c.balance));
+            drawDay();
+        });
+        m.el.querySelectorAll('[data-pf-method]').forEach((b) => b.addEventListener('click', () => { m.pf.method = b.dataset.pfMethod; drawDay(); }));
+    }
+
+    /** Takes a fresh report after a payment: the drawer and the cash to send follow, the day list too. */
+    function applyReport(m, r) {
+        const keepSend = m.editing && Number(m.form.cash_sent) === expectedSend(m);
+        Object.assign(m, r);
+        if (keepSend) m.form.cash_sent = String(expectedSend(m));
+        load();
+        loadPayOptions(m); // balances and waiting withdrawals changed
+    }
+
+    async function payWage(m) {
+        const w = m.wf;
+        const o = m.opts;
+        const staff = o.staff.find((s) => String(s.id) === String(w.user_id));
+        const amount = Number(w.amount);
+        const fail = (msg) => { m.payError = { kind: 'wages', msg }; drawDay(); };
+        if (!staff) return fail('กรุณาเลือกพนักงาน');
+        if (!(amount > 0)) return fail('กรุณาระบุจำนวนเงินค่าแรง');
+        const fromDrawer = w.method === 'cash' && w.from_drawer && o.drawer;
+        const ok = await confirmDialog(
+            `จ่ายค่าแรง ${staff.full_name} ฿${money(amount)} (${o.methods[w.method]}${fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ''}) ลงวันที่ ${fmtDate(m.date)}`,
+            { title: 'ยืนยันการจ่ายค่าแรง?', okText: 'บันทึก' }
+        );
+        if (!ok || docModalGone(m)) return;
+        m.payBusy = true;
+        m.payError = null;
+        drawDay();
+        try {
+            const res = await api.post(`/closing/${m.date}/wages`, {
+                user_id: w.user_id, wage_type: w.wage_type, units: w.units, rate: w.rate, amount, method: w.method, note: w.note, from_drawer: fromDrawer,
+            });
+            if (docModalGone(m)) return;
+            m.payBusy = false;
+            m.wf = null;
+            applyReport(m, res.data);
+            drawDay();
+            if (await confirmDialog(`บันทึก ${res.wage.doc_no} แล้ว ต้องการพิมพ์ใบสำคัญจ่ายให้พนักงานลงชื่อรับเงินหรือไม่?`, { title: 'บันทึกการจ่ายค่าแรงแล้ว', okText: 'พิมพ์', cancelText: 'ไม่พิมพ์' })) {
+                printWageSlip(res.wage, o.types, o.methods);
+            }
+        } catch (e) {
+            m.payBusy = false;
+            fail(e.message);
+        }
+    }
+
+    async function payPayout(m) {
+        const p = m.pf;
+        const c = m.opts.consignors.find((x) => String(x.id) === String(p.consignor_id));
+        const amount = Number(p.amount);
+        const over = payoutOver(m);
+        const fail = (msg) => { m.payError = { kind: 'payouts', msg }; drawDay(); };
+        if (!c) return fail('กรุณาเลือกผู้ฝากขาย');
+        if (!(amount > 0)) return fail('กรุณาระบุจำนวนเงิน');
+        if (over && !(m.opts.can_overdraw && p.overdraw && p.reason.trim())) {
+            return fail(m.opts.can_overdraw ? 'จำนวนเงินเกินยอดคงเหลือ: ติ๊กให้เบิกเกินยอดและระบุเหตุผล' : 'จำนวนเงินเกินยอดคงเหลือ');
+        }
+        const fromDrawer = p.method === 'cash' && p.from_drawer;
+        const ok = await confirmDialog(
+            `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})${over ? ` บัญชีจะติดลบ ฿${money(amount - Number(c.balance))}` : ''}`,
+            { title: 'ยืนยันการจ่ายเงินผู้ฝากขาย?', okText: 'บันทึก' }
+        );
+        if (!ok || docModalGone(m)) return;
+        m.payBusy = true;
+        m.payError = null;
+        drawDay();
+        try {
+            const res = await api.post(`/closing/${m.date}/payouts`, {
+                consignor_id: c.id, amount, method: p.method, from_drawer: fromDrawer, overdraw_reason: over ? p.reason.trim() : '',
+            });
+            if (docModalGone(m)) return;
+            m.payBusy = false;
+            m.pf = null;
+            applyReport(m, res.data);
+        } catch (e) {
+            m.payBusy = false;
+            return fail(e.message);
+        }
+        drawDay();
+    }
+
+    async function approvePending(m, id) {
+        const r = m.opts.pending.find((x) => x.id === id || Number(x.id) === id);
+        if (!r) return;
+        const ok = await confirmDialog(
+            `${r.doc_no} · ${r.consignor_code} - ${r.consignor_name} ฿${money(r.amount)} (${PAY_METHOD[r.method] || r.method})${r.method === 'cash' ? ' จ่ายจากเงินในลิ้นชักวันนี้' : ''}`,
+            { title: 'จ่ายเงินตามคำขอเบิก?', okText: 'จ่ายเงิน' }
+        );
+        if (!ok || docModalGone(m)) return;
+        m.payBusy = true;
+        drawDay();
+        try {
+            const res = await api.post(`/closing/${m.date}/payouts/${id}/approve`);
+            if (docModalGone(m)) return;
+            applyReport(m, res.data);
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        m.payBusy = false;
+        drawDay();
+    }
 
     /** A purchase / consignor payout / wage paid from today's drawer or with other money: the drawer and the cash to send follow. */
     async function setDrawer(kind, id, fromDrawer) {

@@ -230,6 +230,14 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}/wages/{id:[0-9]+}', [ClosingController::class, 'wageDrawer'])
         ->add(new RoleGuard('closing.submit'));
+    $group->get('/closing/{date}/pay-options', [ClosingController::class, 'payOptions'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}/wages', [ClosingController::class, 'payWage'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}/payouts', [ClosingController::class, 'payPayout'])
+        ->add(new RoleGuard('closing.submit'));
+    $group->post('/closing/{date}/payouts/{id:[0-9]+}/approve', [ClosingController::class, 'approvePayout'])
+        ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}/skip', [ClosingController::class, 'skip'])
         ->add(new RoleGuard('closing.submit'));
     $group->post('/closing/{date}/verify', [ClosingController::class, 'verify'])

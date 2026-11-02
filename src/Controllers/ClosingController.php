@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\UserRepo;
+use App\Repositories\WithdrawalRepo;
 use App\Services\AuditLogger;
 use App\Services\ClosingService;
+use App\Services\DocumentNumberService;
+use App\Services\LedgerService;
+use App\Services\WageService;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -128,6 +132,151 @@ class ClosingController
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $service->report($date)]);
+    }
+
+    /**
+     * What the report's own pay forms need (items 3 and 4): staff, wage types and methods,
+     * consignors with their balances and the withdrawals waiting to be paid.
+     */
+    public function payOptions(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $drawer = $db->prepare('SELECT 1 FROM cash_drawers WHERE business_date = ?');
+        $drawer->execute([$date]);
+        $wages = $this->wageService($db);
+        return $this->json($response, ['data' => [
+            'staff' => $wages->staff(),
+            'types' => WageService::TYPES,
+            'methods' => WageService::METHODS,
+            'drawer' => $drawer->fetchColumn() !== false,
+            // A consignor payout is dated when it is made, so only today's report can pay one.
+            'can_payout' => $date === date('Y-m-d'),
+            'can_overdraw' => (new UserRepo($db))->hasPermission((string) $request->getAttribute('user')['role'], 'withdraw.approve'),
+            'consignors' => $db->query(
+                "SELECT c.id, c.code, c.name, COALESCE((SELECT l.balance_after FROM ledger_entries l WHERE l.consignor_id = c.id ORDER BY l.id DESC LIMIT 1), 0) AS balance
+                 FROM consignors c WHERE c.status = 'active' ORDER BY c.code"
+            )->fetchAll(),
+            'pending' => $db->query(
+                "SELECT w.id, w.doc_no, w.amount, w.method, w.requested_at, c.code AS consignor_code, c.name AS consignor_name
+                 FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id WHERE w.status = 'pending' ORDER BY w.id"
+            )->fetchAll(),
+        ]]);
+    }
+
+    /** Pays a wage dated the report's day; cash may come out of that day's drawer (item 3). */
+    public function payWage(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        $fromDrawer = !empty($body['from_drawer']) && ($body['method'] ?? 'cash') === 'cash';
+        $service = $this->service($db);
+        try {
+            if ($fromDrawer) {
+                $drawer = $db->prepare('SELECT 1 FROM cash_drawers WHERE business_date = ?');
+                $drawer->execute([$date]);
+                if (!$drawer->fetchColumn()) {
+                    throw new \RuntimeException('วันนี้ไม่ได้ระบุเงินในลิ้นชัก จึงจ่ายจากลิ้นชักไม่ได้');
+                }
+            }
+            $wage = $this->wageService($db)->pay(['pay_date' => $date, 'from_drawer' => false] + $body, (int) $user['id'], null, $this->ip($request));
+            if ($fromDrawer) {
+                $service->setWageDrawer($date, (int) $wage['id'], true, (int) $user['id'], $this->ip($request));
+                $wage = $this->wageService($db)->find((int) $wage['id']);
+            }
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date), 'wage' => $wage], 201);
+    }
+
+    /** Pays a consignor now from today's report (item 4); cash is taken from today's drawer unless said otherwise. */
+    public function payPayout(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args, true);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        $consignorId = (int) ($body['consignor_id'] ?? 0);
+        $amount = round((float) ($body['amount'] ?? 0), 2);
+        $method = (string) ($body['method'] ?? 'cash');
+        if (!in_array($method, ['cash', 'promptpay', 'bank_transfer'], true)) {
+            return $this->error($response, 'ช่องทางจ่ายเงินไม่ถูกต้อง', 422);
+        }
+        if (!$consignorId || $amount <= 0) {
+            return $this->error($response, 'กรุณาเลือกผู้ฝากขายและระบุจำนวนเงิน', 422);
+        }
+        $reason = (string) ($body['overdraw_reason'] ?? '');
+        if ($reason !== '' && !(new UserRepo($db))->hasPermission((string) $user['role'], 'withdraw.approve')) {
+            $reason = ''; // paying over the balance needs a withdrawal approver
+        }
+        $service = $this->service($db);
+        try {
+            $id = $this->withdrawals($db)->payNow($consignorId, $amount, $method, (int) $user['id'], $this->ip($request), $reason);
+            if ($method === 'cash' && isset($body['from_drawer']) && empty($body['from_drawer'])) {
+                $service->setPayoutDrawer($date, $id, false, (int) $user['id'], $this->ip($request));
+            }
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date), 'withdrawal' => $this->withdrawals($db)->find($id)], 201);
+    }
+
+    /** Pays a withdrawal that was waiting for approval, from today's report (item 4). */
+    public function approvePayout(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args, true);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        try {
+            $this->withdrawals($db)->approve((int) $args['id'], (int) $request->getAttribute('user')['id'], $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $this->service($db)->report($date)]);
+    }
+
+    /**
+     * The report's date when the user may pay from it (on duty that day, or closing.manage),
+     * else [null, [message, status]]. $todayOnly: payments that are dated when made.
+     */
+    private function actDate(\PDO $db, Request $request, array $args, bool $todayOnly = false): array
+    {
+        $date = $this->dateParam($args['date']);
+        if ($date === null || $date > date('Y-m-d')) {
+            return [null, ['วันที่ไม่ถูกต้อง', 422]];
+        }
+        $user = $request->getAttribute('user');
+        if (!$this->canManage($db, $user) && !$this->service($db)->isOnDuty((int) $user['id'], $date)) {
+            return [null, ['ทำรายการได้เฉพาะผู้มีเวรสรุปบัญชีวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ', 403]];
+        }
+        if ($todayOnly && $date !== date('Y-m-d')) {
+            return [null, ['จ่ายเงินผู้ฝากขายจากรายงานได้เฉพาะวันนี้ (รายการจะลงวันที่ที่จ่ายจริง)', 422]];
+        }
+        return [$date, null];
+    }
+
+    private function wageService(\PDO $db): WageService
+    {
+        return new WageService($db, new AuditLogger($db), new DocumentNumberService($db));
+    }
+
+    private function withdrawals(\PDO $db): WithdrawalRepo
+    {
+        return new WithdrawalRepo($db, new AuditLogger($db), new DocumentNumberService($db), new LedgerService($db));
     }
 
     public function verify(Request $request, Response $response, array $args): Response
