@@ -200,6 +200,7 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelectorAll('[data-merge]').forEach((b) => b.addEventListener('click', () => {
             mergeInto(res.data.find((x) => String(x.id) === b.dataset.merge));
         }));
+        container.querySelectorAll('[data-held-release]').forEach((b) => b.addEventListener('click', () => releaseHeld(b.dataset.heldRelease, b.dataset.code)));
         container.querySelector('#zc-view')?.addEventListener('click', () => openDetailModal(async () => ({
             title: 'ยอดขายที่ต้นทุนเป็น 0',
             note: 'สินค้าเหล่านี้ขายไปก่อนบันทึกใบซื้อครั้งแรก ตอนขายยังไม่มีต้นทุน ระบบจึงบันทึกต้นทุนเป็น 0 ทำให้กำไรสูงเกินจริง ต้นทุนที่จะเติมคิดจากทุน/ชิ้นในใบซื้อแรกของสินค้านั้น',
@@ -443,6 +444,12 @@ export async function render(container, { navigate, permissions, user }) {
         // A consignor's price set comes with that lot; store goods keep the main row's shelf price.
         const after = { cost_price: latest.cost_price, sale_price: p.consignor_id != null ? latest.sale_price : p.sale_price };
         const costsDiffer = group.some((x) => money(x.cost_price) !== money(after.cost_price));
+        // Piece barcode: kept as is when there is one (or all match); different ones: the row bought /
+        // received last goes on, the others are held for checking (no other product may use them).
+        const byLatest = [...group].sort((a, b) => (`${b.last_purchase || ''}|${String(b.id).padStart(12, '0')}` > `${a.last_purchase || ''}|${String(a.id).padStart(12, '0')}` ? 1 : -1));
+        const codes = [...new Set(byLatest.map((x) => (x.barcode || '').trim()).filter(Boolean))];
+        const useCode = codes[0] || null;
+        const heldCodes = codes.slice(1);
         const salesDiffer = group.some((x) => money(x.sale_price) !== money(after.sale_price));
         const sum = (k) => group.reduce((s, x) => s + Number(x[k] || 0), 0);
         const table = `
@@ -457,14 +464,16 @@ export async function render(container, { navigate, permissions, user }) {
                   <td style="white-space:nowrap">${keep ? '<span class="pill ok" style="font-size:11.5px">★ รายการหลัก</span>' : '<span class="pill muted" style="font-size:11.5px">→ รวมเข้า แล้วลบ</span>'}</td>
                   <td class="muted" style="white-space:nowrap">${x.id}${x.id === group[0].id ? ' <span style="font-size:11px">(เก่าสุด)</span>' : ''}</td>
                   <td>${escapeHtml(x.name)}</td>
-                  <td style="font-size:12px">${escapeHtml(x.barcode || '—')}</td>
+                  <td style="font-size:12px;white-space:nowrap">${escapeHtml(x.barcode || '—')}${heldCodes.length && x.barcode
+                      ? (x.barcode.trim() === useCode ? '<div><span class="pill ok" style="font-size:11px">● ใช้ต่อ</span></div>' : '<div><span class="pill warn" style="font-size:11px">⏸ เก็บไว้ตรวจสอบ</span></div>') : ''}</td>
                   <td style="font-size:12px;white-space:nowrap">${x.last_purchase ? fmtDate(x.last_purchase) : '—'}</td>
                   <td class="num" style="white-space:nowrap">฿${money(x.cost_price)}${isLatest ? ' <span class="pill" style="font-size:11px">● ล่าสุด ใช้ต่อ</span>' : ''}</td>
                   <td class="num" style="${saleOff ? 'color:var(--muted);text-decoration:line-through' : ''}">฿${money(x.sale_price)}</td>
                   <td class="num">${count(x.qty_received)}</td><td class="num">${count(x.qty_sold)}</td><td class="num">${count(x.qty_stock)}</td>
                 </tr>`;
             }).join('')}
-            <tr style="border-top:2px solid var(--border)"><td colspan="5"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
+            <tr style="border-top:2px solid var(--border)"><td colspan="3"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
+              <td style="font-size:12px"><b>${escapeHtml(useCode || '—')}</b></td><td></td>
               <td class="num"><b>฿${money(after.cost_price)}</b></td><td class="num"><b>฿${money(after.sale_price)}</b></td>
               <td class="num"><b>${count(sum('qty_received'))}</b></td><td class="num"><b>${count(sum('qty_sold'))}</b></td><td class="num"><b>${count(sum('qty_stock'))}</b></td></tr>
             </tbody>
@@ -472,6 +481,8 @@ export async function render(container, { navigate, permissions, user }) {
           ${costsDiffer ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ต้นทุนไม่เท่ากัน (ราคาส่งต่างกันหรือมีการปรับราคา) — หลังรวมใช้ต้นทุนของรายการที่ซื้อ/รับล่าสุด <b>฿${money(after.cost_price)}</b> ต่อจากนี้
             · ต้นทุนเดิมเก็บเป็นประวัติในเอกสารซื้อ/รับแต่ละใบ (ดูในบัตรสต๊อก) และกำไรของยอดที่ขายไปแล้วคิดตามต้นทุนของช่วงเวลานั้น ไม่เปลี่ยน</div></div>` : ''}
           ${salesDiffer ? `<div class="error-box" style="margin-top:8px;font-size:13px">ราคาขายไม่เท่ากัน — หลังรวมขายที่ ฿${money(after.sale_price)} (ราคาที่ขีดฆ่าจะไม่ใช้ต่อ)</div>` : ''}
+          ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน — หลังรวมใช้ <b>${escapeHtml(useCode)}</b> ของรายการที่ซื้อ/รับล่าสุด
+            · ${heldCodes.map(escapeHtml).join(', ')} เก็บไว้ตรวจสอบที่รายการนี้ ใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก (ถ้าเป็นการบันทึกผิดพลาด)</div>` : ''}
           ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
         const ok = await confirmDialog(
             `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
@@ -482,7 +493,23 @@ export async function render(container, { navigate, permissions, user }) {
         if (!ok) return;
         try {
             const r = await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id) });
-            await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}`, { title: 'รวมรายการแล้ว' });
+            await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}${r.held?.length ? ` · บาร์โค้ด ${r.held.join(', ')} เก็บไว้ตรวจสอบ` : ''}`, { title: 'รวมรายการแล้ว' });
+            await load();
+        } catch (err) {
+            alertDialog(err.message, { tone: 'error' });
+        }
+    }
+
+    /** An admin checked a held barcode (a mistyped entry): remove it so it can be used again. */
+    async function releaseHeld(id, code) {
+        const p = res.data.find((x) => String(x.id) === String(id));
+        const ok = await confirmDialog(
+            `บาร์โค้ด ${code} ถูกเก็บไว้ตรวจสอบที่ «${p?.name || ''}» หลังรวมรายการซ้ำ ลบออกเมื่อตรวจแล้วว่าเป็นการบันทึกผิดพลาด หลังลบบาร์โค้ดนี้ใช้กับสินค้าอื่นได้`,
+            { title: 'ลบบาร์โค้ดที่รอตรวจสอบ?', okText: 'ลบ', danger: true }
+        );
+        if (!ok) return;
+        try {
+            await api.post(`/inventory/${id}/held-barcodes/release`, { barcode: code });
             await load();
         } catch (err) {
             alertDialog(err.message, { tone: 'error' });
@@ -501,7 +528,10 @@ export async function render(container, { navigate, permissions, user }) {
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
             ${dups.length > 1
                 ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อนี้ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
-          <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}</td>
+          <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}
+            ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
+              <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
+              ${user?.role === 'admin' ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}

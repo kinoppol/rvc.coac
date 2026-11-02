@@ -24,13 +24,37 @@ class InventoryController
 
     public function index(Request $request, Response $response): Response
     {
-        $service = new InventoryService(Db::connection());
+        $db = Db::connection();
+        $service = new InventoryService($db);
         $params = $request->getQueryParams();
         $search = trim((string) ($params['q'] ?? ''));
+        $rows = $service->products($search, !empty($params['consigned']));
+        // Piece barcodes put aside at a merge, waiting for an admin to check them.
+        $held = (new ProductRepo($db, new AuditLogger($db)))->heldBarcodes();
+        foreach ($rows as &$r) {
+            $r['held_barcodes'] = $held[(int) $r['id']] ?? [];
+        }
+        unset($r);
         return $this->json($response, [
             'summary' => $service->summary(),
-            'data' => $service->products($search, !empty($params['consigned'])),
+            'data' => $rows,
         ]);
+    }
+
+    /** Admin only: a held barcode was checked (e.g. a mistyped entry) and is let go (body: barcode). */
+    public function releaseHeldBarcode(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่ลบบาร์โค้ดที่เก็บไว้ตรวจสอบได้', 403);
+        }
+        $db = Db::connection();
+        try {
+            (new ProductRepo($db, new AuditLogger($db)))->releaseHeld((int) $args['id'], (string) (((array) $request->getParsedBody())['barcode'] ?? ''), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     /**

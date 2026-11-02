@@ -868,7 +868,16 @@ class PurchaseService
     {
         $stmt = $this->db->prepare('SELECT 1 FROM products WHERE barcode = ? LIMIT 1');
         $stmt->execute([$barcode]);
-        return (bool) $stmt->fetchColumn();
+        if ($stmt->fetchColumn()) {
+            return true;
+        }
+        try { // held for checking after a merge (migration 0055)
+            $stmt = $this->db->prepare('SELECT 1 FROM held_barcodes WHERE barcode = ?');
+            $stmt->execute([$barcode]);
+            return (bool) $stmt->fetchColumn();
+        } catch (\PDOException $e) {
+            return false;
+        }
     }
 
     /**

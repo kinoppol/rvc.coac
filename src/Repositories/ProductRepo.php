@@ -183,6 +183,7 @@ class ProductRepo
             if ($owner !== null) {
                 throw new \RuntimeException("บาร์โค้ด {$code} ใช้กับสินค้า \"{$owner}\" อยู่แล้ว");
             }
+            $this->assertNotHeld((string) $code, $productId);
         }
 
         $oldPacks = $this->packBarcodes($productId);
@@ -264,6 +265,7 @@ class ProductRepo
         if ($owner !== false) {
             throw new \RuntimeException("บาร์โค้ด {$code} ใช้กับสินค้า \"{$owner}\" อยู่แล้ว");
         }
+        $this->assertNotHeld($code, $productId);
         $this->db->prepare('UPDATE products SET barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$code, $productId]);
         $this->audit->log('products', $productId, 'update', ['barcode' => $old['barcode']], ['barcode' => $code], $userId, $ip);
     }
@@ -347,16 +349,24 @@ class ProductRepo
         // Before the documents move over: which row was bought / received last.
         $latest = $rows[$this->latestCostRow($rows)];
 
+        // Piece barcode: one barcode (or the same on every row) is simply kept. Different ones:
+        // the row bought / received last wins, the others are held for an admin to check.
+        $codes = [];
+        foreach ($this->rowsByLatest($rows) as $id) {
+            $c = trim((string) $rows[$id]['barcode']);
+            if ($c !== '' && !isset($codes[$c])) {
+                $codes[$c] = $id;
+            }
+        }
+        $barcode = $codes ? (string) array_key_first($codes) : null;
+        $held = array_slice($codes, 1, null, true);
+
         $refunded = 0.0;
-        $barcode = $keep['barcode'];
         $sum = ['qty_received' => 0, 'qty_sold' => 0, 'qty_returned' => 0, 'qty_stock' => 0];
         foreach ($dupIds as $id) {
             $dup = $rows[$id];
             foreach ($sum as $col => $_) {
                 $sum[$col] += (int) $dup[$col];
-            }
-            if (($barcode === null || $barcode === '') && $dup['barcode'] !== null && $dup['barcode'] !== '') {
-                $barcode = $dup['barcode'];
             }
             foreach (['receive_items', 'return_items', 'sale_items', 'purchase_items', 'stock_count_items',
                       'stock_count_photos', 'pos_item_mappings', 'product_pack_barcodes'] as $table) {
@@ -383,6 +393,19 @@ class ProductRepo
             'UPDATE products SET qty_received = qty_received + ?, qty_sold = qty_sold + ?, qty_returned = qty_returned + ?,
                 qty_stock = qty_stock + ?, barcode = ?, updated_at = NOW() WHERE id = ?'
         )->execute([...array_values($sum), $barcode, $keepId]);
+        if ($held) {
+            try {
+                $ins = $this->db->prepare(
+                    'INSERT INTO held_barcodes (barcode, product_id, from_product_id, note, user_id, created_at) VALUES (?, ?, ?, ?, ?, NOW())
+                     ON DUPLICATE KEY UPDATE product_id = VALUES(product_id), from_product_id = VALUES(from_product_id), note = VALUES(note)'
+                );
+                foreach ($held as $code => $fromId) {
+                    $ins->execute([(string) $code, $keepId, $fromId, mb_substr("รวมรายการซ้ำ: บาร์โค้ดชิ้นของรายการ {$fromId} ไม่ตรงกับ {$barcode} ที่ใช้ต่อ", 0, 255), $userId]);
+                }
+            } catch (\PDOException $e) {
+                throw new \RuntimeException('บาร์โค้ดชิ้นของรายการที่จะรวมไม่ตรงกัน ต้องเก็บไว้ตรวจสอบ: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0055) ก่อน');
+            }
+        }
 
         // Cost goes on from the most recently bought / received row (suppliers' prices change).
         // Past costs stay where they were recorded: each sale line keeps its own cost of goods
@@ -397,10 +420,11 @@ class ProductRepo
         $this->audit->log('products', $keepId, 'update', $keep, $this->find($keepId) + [
             'merged_from' => $dupIds,
             'cost_from' => (int) $latest['id'],
+            'held_barcodes' => array_map('strval', array_keys($held)),
             'cost_history' => array_map(fn ($r) => ['id' => (int) $r['id'], 'cost_price' => $r['cost_price'], 'sale_price' => $r['sale_price']], array_values($rows)),
         ], $userId, $ip);
 
-        return ['merged' => count($dupIds), 'refunded' => round($refunded, 2)];
+        return ['merged' => count($dupIds), 'refunded' => round($refunded, 2), 'barcode' => $barcode, 'held' => array_map('strval', array_keys($held))];
     }
 
     /**
@@ -412,11 +436,16 @@ class ProductRepo
      */
     private function latestCostRow(array $rows): int
     {
+        return $this->rowsByLatest($rows)[0];
+    }
+
+    /** @param array<int, array> $rows id => product row @return int[] ids, bought / received last first */
+    private function rowsByLatest(array $rows): array
+    {
         $stmt = $this->db->prepare(
             'SELECT MAX(pd.receipt_date) FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id WHERE pi.product_id = ?'
         );
-        $best = null;
-        $bestKey = '';
+        $keys = [];
         foreach ($rows as $id => $r) {
             if ($r['consignor_id'] === null) {
                 $stmt->execute([$id]);
@@ -424,12 +453,56 @@ class ProductRepo
             } else {
                 $day = substr((string) $r['created_at'], 0, 10);
             }
-            $key = $day . '|' . str_pad((string) $id, 12, '0', STR_PAD_LEFT);
-            if ($key > $bestKey) {
-                [$best, $bestKey] = [(int) $id, $key];
-            }
+            $keys[(int) $id] = $day . '|' . str_pad((string) $id, 12, '0', STR_PAD_LEFT);
         }
-        return $best;
+        arsort($keys, SORT_STRING);
+        return array_keys($keys);
+    }
+
+    /** The product a barcode is held for (put aside at a merge), or null; null too before migration 0055. */
+    public function heldBy(string $barcode): ?array
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT h.*, p.name FROM held_barcodes h LEFT JOIN products p ON p.id = h.product_id WHERE h.barcode = ?');
+            $stmt->execute([trim($barcode)]);
+            return $stmt->fetch() ?: null;
+        } catch (\PDOException $e) {
+            return null;
+        }
+    }
+
+    private function assertNotHeld(string $code, int $productId): void
+    {
+        $h = $this->heldBy($code);
+        if ($h !== null && (int) $h['product_id'] !== $productId) {
+            throw new \RuntimeException("บาร์โค้ด {$code} ถูกเก็บไว้ตรวจสอบที่สินค้า \"{$h['name']}\" (จากการรวมรายการซ้ำ) ใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก");
+        }
+    }
+
+    /** Barcodes held for checking, by product id. @return array<int, array<int, array>> */
+    public function heldBarcodes(): array
+    {
+        try {
+            $rows = $this->db->query('SELECT barcode, product_id, from_product_id, note, created_at FROM held_barcodes ORDER BY created_at')->fetchAll();
+        } catch (\PDOException $e) {
+            return [];
+        }
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r['product_id']][] = $r;
+        }
+        return $out;
+    }
+
+    /** An admin has checked a held barcode (a mistyped entry, say): it is free to use again. */
+    public function releaseHeld(int $productId, string $barcode, ?int $userId, ?string $ip): void
+    {
+        $h = $this->heldBy($barcode);
+        if ($h === null || (int) $h['product_id'] !== $productId) {
+            throw new \RuntimeException('ไม่พบบาร์โค้ดที่เก็บไว้ตรวจสอบนี้');
+        }
+        $this->db->prepare('DELETE FROM held_barcodes WHERE barcode = ?')->execute([$h['barcode']]);
+        $this->audit->log('products', $productId, 'update', ['held_barcode' => $h['barcode'], 'note' => $h['note']], ['held_barcode' => null], $userId, $ip);
     }
 
     /**
@@ -526,7 +599,8 @@ class ProductRepo
         $stmt->execute([
             $data['consignor_id'],
             $data['name'],
-            $data['barcode'] ?? null,
+            // A barcode held for checking after a merge is not handed to a new product.
+            isset($data['barcode']) && $data['barcode'] !== '' && $this->heldBy((string) $data['barcode']) === null ? $data['barcode'] : null,
             $data['cost_price'],
             $data['sale_price'],
             $data['fee_per_unit'],
