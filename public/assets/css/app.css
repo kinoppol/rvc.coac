@@ -1046,3 +1046,14 @@ body.tablet-mode .kpi .value { font-size: 26px; }
 .sec-file { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
 .sec-code { display: block; margin-top: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--bad); }
 .sec-note { font-size: 12px; margin-top: 2px; }
+
+.sec-row { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.sec-acts { display: flex; gap: 6px; flex-shrink: 0; }
+.sec-head .btn { margin-left: auto; }
+.sec-view { text-align: left; font-size: 13px; }
+.sec-view h4 { margin: 14px 0 6px; font-size: 13.5px; }
+.sec-facts { display: grid; gap: 4px; }
+.sec-pre { margin: 4px 0 8px; padding: 10px; border-radius: 8px; background: var(--surface-2, rgba(127,127,127,.08)); font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; }
+.sec-text { max-height: 360px; }
+.sec-img { max-width: 100%; max-height: 320px; border-radius: 8px; border: 1px solid var(--border); }
+.app-dialog-body .sec-view { max-height: 60vh; overflow: auto; }

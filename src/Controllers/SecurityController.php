@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Services\AuditLogger;
+use App\Services\QuarantineService;
 use App\Services\SecurityScanService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -59,6 +60,90 @@ class SecurityController
         $user = $request->getAttribute('user');
         (new AuditLogger(Db::connection()))->log('security', 0, $open ? 'repair_open' : 'repair_close', null, ['until' => $until ? date('Y-m-d H:i:s', $until) : null], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
         return $this->json($response, ['data' => ['repair_until' => $until ? date('Y-m-d H:i:s', $until) : null]]);
+    }
+
+    /** A look inside a file still in place, before deciding to quarantine it. */
+    public function inspect(Request $request, Response $response): Response
+    {
+        if ($denied = $this->deny($request, $response)) {
+            return $denied;
+        }
+        try {
+            return $this->json($response, ['data' => (new QuarantineService())->inspectPath((string) ($request->getQueryParams()['path'] ?? ''))]);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+    }
+
+    public function quarantineList(Request $request, Response $response): Response
+    {
+        if ($denied = $this->deny($request, $response)) {
+            return $denied;
+        }
+        return $this->json($response, ['data' => (new QuarantineService())->list()]);
+    }
+
+    public function quarantine(Request $request, Response $response): Response
+    {
+        if ($denied = $this->deny($request, $response)) {
+            return $denied;
+        }
+        $body = (array) $request->getParsedBody();
+        $paths = array_values(array_filter((array) ($body['paths'] ?? []), 'is_string'));
+        if (!$paths) {
+            return $this->error($response, 'ไม่ได้เลือกไฟล์', 422);
+        }
+        try {
+            $result = (new QuarantineService())->quarantine($paths, (string) ($body['reason'] ?? ''), (int) $request->getAttribute('user')['id']);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 500);
+        }
+        foreach ($result['moved'] as $m) {
+            $this->audit($request, 'quarantine', $m);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    public function quarantined(Request $request, Response $response, array $args): Response
+    {
+        if ($denied = $this->deny($request, $response)) {
+            return $denied;
+        }
+        try {
+            return $this->json($response, ['data' => (new QuarantineService())->inspectQuarantined((string) $args['id'])]);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 404);
+        }
+    }
+
+    public function restore(Request $request, Response $response, array $args): Response
+    {
+        return $this->act($request, $response, (string) $args['id'], 'restore');
+    }
+
+    public function destroy(Request $request, Response $response, array $args): Response
+    {
+        return $this->act($request, $response, (string) $args['id'], 'delete');
+    }
+
+    private function act(Request $request, Response $response, string $id, string $action): Response
+    {
+        if ($denied = $this->deny($request, $response)) {
+            return $denied;
+        }
+        try {
+            $q = new QuarantineService();
+            $meta = $action === 'restore' ? $q->restore($id) : $q->delete($id);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        $this->audit($request, 'quarantine_' . $action, $meta);
+        return $this->json($response, ['data' => $meta]);
+    }
+
+    private function audit(Request $request, string $action, array $meta): void
+    {
+        (new AuditLogger(Db::connection()))->log('security', 0, $action, null, $meta, (int) $request->getAttribute('user')['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
     }
 
     private function deny(Request $request, Response $response): ?Response

@@ -32,7 +32,7 @@ final class SecurityScanService
     private const DENY_HTACCESS = ['config', 'storage', 'src', 'migrations', 'project', 'bin'];
     private const KNOWN_HTACCESS = ['.htaccess', 'public/.htaccess', 'config/.htaccess', 'storage/.htaccess', 'src/.htaccess', 'migrations/.htaccess', 'project/.htaccess', 'bin/.htaccess', 'storage/sessions/.htaccess'];
     // Not walked: Git internals, sessions (tokens) and the generated files under cache.
-    private const SKIP_DIRS = ['.git', 'node_modules', 'storage/sessions'];
+    private const SKIP_DIRS = ['.git', 'node_modules', 'storage/sessions', QuarantineService::DIR];
 
     private const INPUT = '\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)|php:\/\/input|getallheaders\s*\(';
     private string $root;
@@ -72,6 +72,64 @@ final class SecurityScanService
         ];
     }
 
+    /**
+     * Web-shell patterns found in PHP source. Comments are blanked first (line breaks kept, so
+     * line numbers hold): libraries document $_SERVER / $_POST in prose ("REQUIRED to originate
+     * from $_SERVER"), and code in a comment never runs anyway.
+     *
+     * @return array<int, array{line: int, rule: string, level: string, code: string}>
+     */
+    public static function findings(string $text, bool $php): array
+    {
+        if ($php && str_contains($text, '<?')) {
+            $text = self::withoutComments($text);
+        }
+        $out = [];
+        foreach (self::signatures() as $s) {
+            if (preg_match_all($s['re'], $text, $m, PREG_OFFSET_CAPTURE) > 0) {
+                foreach (array_slice($m[0], 0, 3) as [$match, $offset]) {
+                    $out[] = [
+                        'line' => substr_count($text, "\n", 0, $offset) + 1,
+                        'rule' => $s['rule'],
+                        'level' => $s['level'],
+                        'code' => mb_strimwidth(preg_replace('/\s+/', ' ', (string) $match), 0, 160, '…'),
+                    ];
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * PHP code inside an image or other data file. Only a real opening tag counts: "<?php" then
+     * a space, or "<?=" then a variable / backtick / function name. A bare "<?=" turns up by
+     * chance in the compressed bytes of ordinary photos.
+     */
+    public const EMBEDDED_CODE = '/<\?php[\s\/]|<\?=\s*[\$`a-z_]/i';
+
+    public static function hasEmbeddedCode(string $raw): bool
+    {
+        return preg_match(self::EMBEDDED_CODE, $raw) === 1;
+    }
+
+    private static function withoutComments(string $text): string
+    {
+        try {
+            $tokens = token_get_all($text);
+        } catch (\Throwable) {
+            return $text;
+        }
+        $out = '';
+        foreach ($tokens as $t) {
+            if (is_array($t) && ($t[0] === T_COMMENT || $t[0] === T_DOC_COMMENT)) {
+                $out .= str_repeat("\n", substr_count($t[1], "\n"));
+            } else {
+                $out .= is_array($t) ? $t[1] : $t;
+            }
+        }
+        return $out;
+    }
+
     public function run(array $server): array
     {
         @set_time_limit(180);
@@ -99,6 +157,7 @@ final class SecurityScanService
             'file_count' => count($files),
             'counts' => $counts,
             'sections' => $sections,
+            'quarantine' => (new QuarantineService())->list(),
         ];
     }
 
@@ -142,7 +201,6 @@ final class SecurityScanService
 
     private function scanCode(array $files): array
     {
-        $sigs = self::signatures();
         $hits = [];
         $imageHits = [];
         $scanned = 0;
@@ -159,8 +217,8 @@ final class SecurityScanService
             }
             $scanned++;
             if ($isData) {
-                if (preg_match('/<\?(php|=)/i', $text) === 1) {
-                    $imageHits[] = ['file' => $rel, 'note' => 'พบโค้ด PHP ในไฟล์ที่ไม่ใช่ PHP (' . self::size((int) filesize($abs)) . ')'];
+                if (self::hasEmbeddedCode($text)) {
+                    $imageHits[] = ['file' => $rel, 'path' => $rel, 'note' => 'พบโค้ด PHP ในไฟล์ที่ไม่ใช่ PHP (' . self::size((int) filesize($abs)) . ')'];
                 }
                 continue;
             }
@@ -168,19 +226,8 @@ final class SecurityScanService
             if ($rel === 'src/Services/SecurityScanService.php') {
                 continue;
             }
-            foreach ($sigs as $s) {
-                if (preg_match_all($s['re'], $text, $m, PREG_OFFSET_CAPTURE) > 0) {
-                    foreach (array_slice($m[0], 0, 3) as [$match, $offset]) {
-                        $hits[] = [
-                            'file' => $rel,
-                            'line' => substr_count($text, "\n", 0, $offset) + 1,
-                            'rule' => $s['rule'],
-                            'level' => $s['level'],
-                            'code' => mb_strimwidth(preg_replace('/\s+/', ' ', (string) $match), 0, 160, '…'),
-                            'modified' => date('Y-m-d H:i', (int) filemtime($abs)),
-                        ];
-                    }
-                }
+            foreach (self::findings($text, true) as $f) {
+                $hits[] = ['file' => $rel, 'path' => $rel] + $f + ['modified' => date('Y-m-d H:i', (int) filemtime($abs))];
             }
         }
         $badHits = array_filter($hits, fn ($h) => $h['level'] === 'bad');
@@ -221,16 +268,16 @@ final class SecurityScanService
                     }
                 }
                 if (!$ok) {
-                    $stray[] = ['file' => $rel, 'note' => 'แก้ไขล่าสุด ' . date('Y-m-d H:i', (int) filemtime($abs)) . ' · ' . self::size((int) filesize($abs))];
+                    $stray[] = ['file' => $rel, 'path' => $rel, 'note' => 'แก้ไขล่าสุด ' . date('Y-m-d H:i', (int) filemtime($abs)) . ' · ' . self::size((int) filesize($abs))];
                 }
             }
             // .user.ini / php.ini can make PHP load an attacker's file before every page (auto_prepend_file).
             if (in_array(strtolower($base), ['.user.ini', 'php.ini'], true) && !str_starts_with($rel, 'vendor/')) {
                 $text = (string) @file_get_contents($abs);
-                $config[] = ['file' => $rel, 'note' => preg_match('/auto_(pre|ap)pend_file/i', $text) ? 'มี auto_prepend/append_file' : 'ตั้งค่า PHP เฉพาะโฟลเดอร์'];
+                $config[] = ['file' => $rel, 'path' => $rel, 'note' => preg_match('/auto_(pre|ap)pend_file/i', $text) ? 'มี auto_prepend/append_file' : 'ตั้งค่า PHP เฉพาะโฟลเดอร์'];
             }
             if ($base === '.htaccess' && !in_array($rel, self::KNOWN_HTACCESS, true) && !str_starts_with($rel, 'vendor/')) {
-                $htaccess[] = ['file' => $rel, 'note' => 'แก้ไขล่าสุด ' . date('Y-m-d H:i', (int) filemtime($abs))];
+                $htaccess[] = ['file' => $rel, 'path' => $rel, 'note' => 'แก้ไขล่าสุด ' . date('Y-m-d H:i', (int) filemtime($abs))];
             }
         }
         $missingDeny = [];
@@ -304,11 +351,11 @@ final class SecurityScanService
         foreach ($now as $rel => $_) {
             $t = (int) filemtime($files[$rel]);
             if ($t > time() - 3 * 86400 && preg_match(self::PHP_EXT, $rel) && !str_starts_with($rel, 'vendor/')) {
-                $recent[] = ['file' => $rel, 'note' => 'แก้ไข ' . date('Y-m-d H:i', $t), 't' => $t];
+                $recent[] = ['file' => $rel, 'path' => $rel, 'note' => 'แก้ไข ' . date('Y-m-d H:i', $t), 't' => $t];
             }
         }
         usort($recent, fn ($a, $b) => $b['t'] <=> $a['t']);
-        $recent = array_map(fn ($r) => ['file' => $r['file'], 'note' => $r['note']], array_slice($recent, 0, 50));
+        $recent = array_map(fn ($r) => ['file' => $r['file'], 'path' => $r['path'], 'note' => $r['note']], array_slice($recent, 0, 50));
         $recentCheck = self::check('info', 'ไฟล์ PHP ที่แก้ไขใน 3 วันล่าสุด', $recent ? 'ถ้าช่วงนี้ไม่ได้อัปเดตระบบ ไฟล์ที่ถูกแก้คือสิ่งที่ต้องตรวจ' : 'ไม่มี', $recent);
 
         $raw = @file_get_contents(self::baselinePath());
@@ -323,9 +370,9 @@ final class SecurityScanService
         $changed = $added = $removed = [];
         foreach ($now as $rel => $hash) {
             if (!isset($old[$rel])) {
-                $added[] = ['file' => $rel, 'note' => 'เพิ่ม ' . date('Y-m-d H:i', (int) filemtime($files[$rel]))];
+                $added[] = ['file' => $rel, 'path' => $rel, 'note' => 'เพิ่ม ' . date('Y-m-d H:i', (int) filemtime($files[$rel]))];
             } elseif ($old[$rel] !== $hash) {
-                $changed[] = ['file' => $rel, 'note' => 'แก้ไข ' . date('Y-m-d H:i', (int) filemtime($files[$rel]))];
+                $changed[] = ['file' => $rel, 'path' => $rel, 'note' => 'แก้ไข ' . date('Y-m-d H:i', (int) filemtime($files[$rel]))];
             }
         }
         foreach ($old as $rel => $_) {

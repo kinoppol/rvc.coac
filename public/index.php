@@ -431,6 +431,18 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('migrations.manage'));
     $group->post('/admin/security/repair', [SecurityController::class, 'repair'])
         ->add(new RoleGuard('migrations.manage'));
+    $group->get('/admin/security/inspect', [SecurityController::class, 'inspect'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->get('/admin/security/quarantine', [SecurityController::class, 'quarantineList'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/security/quarantine', [SecurityController::class, 'quarantine'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->get('/admin/security/quarantine/{id}', [SecurityController::class, 'quarantined'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/security/quarantine/{id}/restore', [SecurityController::class, 'restore'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/security/quarantine/{id}/delete', [SecurityController::class, 'destroy'])
+        ->add(new RoleGuard('migrations.manage'));
 
     $group->get('/admin/audit-logs', [AuditController::class, 'index'])
         ->add(new RoleGuard('audit.view'));
