@@ -997,3 +997,38 @@ td[data-save-cell] { white-space: nowrap; }
     .auth-card { padding: 22px 18px; }
     .ai-panel { height: calc(100dvh - 100px); }
 }
+
+/* ---------- ผู้บริหาร: read only. Action buttons go; reading, filters, print and export stay
+   (the server refuses any change anyway). Dialog buttons (OK / close) are kept. ---------- */
+body.read-only #view button.btn:not(.secondary):not(.ro-keep),
+body.read-only .modal-backdrop:not(.app-dialog) button.btn:not(.secondary):not(.ro-keep) { display: none !important; }
+.ro-pill { font-size: 12px; white-space: nowrap; }
+
+/* ---------- Tablet mode (chosen per device): the whole system sized for a tablet ---------- */
+body.tablet-mode { font-size: 15.5px; }
+body.tablet-mode .sidebar, body.tablet-mode .app-shell.sidebar-collapsed .sidebar { position: fixed; left: 0; top: 0; bottom: 0; z-index: 75; width: min(310px, 84vw); height: 100%; transform: translateX(-100%); transition: transform .22s ease-out; box-shadow: 0 0 40px rgba(0,0,0,.35); padding-bottom: env(safe-area-inset-bottom); overscroll-behavior: contain; visibility: hidden; }
+body.tablet-mode .app-shell.nav-open .sidebar { transform: none; visibility: visible; }
+body.tablet-mode .app-shell.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 74; background: rgba(10,18,36,.5); }
+body.tablet-mode .app-shell.sidebar-collapsed .sidebar .brand { padding: 20px 18px 16px; justify-content: flex-start; }
+body.tablet-mode .app-shell.sidebar-collapsed .sidebar .brand > div:not(.logo),
+body.tablet-mode .app-shell.sidebar-collapsed .sidebar .group-label,
+body.tablet-mode .app-shell.sidebar-collapsed .nav-btn > span:not(.badge),
+body.tablet-mode .app-shell.sidebar-collapsed .sidebar .footer-widget { display: block; }
+body.tablet-mode .app-shell.sidebar-collapsed .sidebar nav { padding: 14px 10px; }
+body.tablet-mode .app-shell.sidebar-collapsed .nav-btn { justify-content: flex-start; padding: 10px 12px; }
+body.tablet-mode .app-shell.sidebar-collapsed .nav-btn .badge { position: static; font-size: 11px; padding: 1px 7px; }
+body.tablet-mode .nav-btn { font-size: 16px; min-height: 50px; }
+body.tablet-mode .topbar { padding: 10px 16px; }
+body.tablet-mode .content { padding: 16px 16px 96px; }
+body.tablet-mode .btn { min-height: 46px; font-size: 15px; }
+body.tablet-mode .btn.sm { min-height: 40px; padding: 8px 13px; }
+body.tablet-mode .tab-btn { min-height: 46px; padding: 10px 17px; font-size: 14.5px; }
+body.tablet-mode .modal-close, body.tablet-mode .btn-sidebar-toggle { width: 46px; height: 46px; }
+body.tablet-mode .btn-theme { min-height: 44px; }
+body.tablet-mode table { font-size: 15px; }
+body.tablet-mode th { font-size: 13px; padding: 11px 14px; }
+body.tablet-mode td { padding: 12px 14px; }
+body.tablet-mode input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), body.tablet-mode select, body.tablet-mode textarea { font-size: 16px; min-height: 44px; }
+body.tablet-mode input[type="checkbox"], body.tablet-mode input[type="radio"] { width: 22px; height: 22px; }
+body.tablet-mode .kpi .value { font-size: 26px; }
+@media (prefers-reduced-motion: reduce) { body.tablet-mode .sidebar { transition: none !important; } }

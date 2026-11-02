@@ -102,18 +102,50 @@ const PAGE_TITLES = {
     audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
 };
 
-const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน', consignor: 'ผู้ฝากขาย' };
+const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน', executive: 'ผู้บริหาร', consignor: 'ผู้ฝากขาย' };
 
 const SIDEBAR_KEY = 'coac.sidebarCollapsed';
 // Phones and portrait tablets: the menu slides in over the page instead of taking width.
 const DRAWER_MQ = window.matchMedia('(max-width: 900px)');
+// ผู้บริหาร: sees everything, changes nothing (the server turns writes away too).
+const READ_ONLY_ROLE = 'executive';
+// Pages that only do things (selling): left out of a read-only menu.
+const READ_ONLY_HIDDEN = ['sales', 'mysales'];
+
+// Tablet mode (this device): the whole system laid out for a tablet held at arm's length —
+// full screen, the menu as a drawer, bigger touch targets and text, whatever the width.
+const TABLET_KEY = 'coac.tabletMode';
+export function tabletMode() {
+    try { return localStorage.getItem(TABLET_KEY) === '1'; } catch (e) { return false; }
+}
+function applyTabletMode() {
+    document.body.classList.toggle('tablet-mode', tabletMode());
+    markFullscreenButton();
+}
+function setTabletMode(on) {
+    try { localStorage.setItem(TABLET_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    applyTabletMode();
+    if (on) enterFullscreen();
+    else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    closeDrawer();
+}
+function enterFullscreen() {
+    const el = document.documentElement;
+    (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
+}
+function markFullscreenButton() {
+    const b = document.getElementById('fullscreen-btn');
+    if (b) b.hidden = !tabletMode() || !!document.fullscreenElement;
+}
+document.addEventListener('fullscreenchange', markFullscreenButton);
+const drawerMode = () => DRAWER_MQ.matches || tabletMode();
 
 // Remembered per browser; with no saved choice, start collapsed on narrow screens.
 function sidebarCollapsed() {
     let saved = null;
     try { saved = localStorage.getItem(SIDEBAR_KEY); } catch (e) { /* ignore */ }
     if (saved !== null) return saved === '1';
-    return DRAWER_MQ.matches;
+    return drawerMode();
 }
 
 function setDrawer(open) {
@@ -127,7 +159,10 @@ function setDrawer(open) {
 export function closeDrawer() { setDrawer(false); }
 
 export function renderShell(root, { user, permissions, impersonator = null, badges = {} }) {
+    const readOnly = user.role === READ_ONLY_ROLE;
     const has = (perm) => permissions.includes(perm);
+    document.body.classList.toggle('read-only', readOnly);
+    applyTabletMode();
     const initials = (user.full_name || user.username).slice(0, 2);
 
     root.innerHTML = `
@@ -142,7 +177,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
         </div>
         <nav id="side-nav">
           ${PAGES.map((g) => {
-              const items = g.items.filter((it) => has(it.perm));
+              const items = g.items.filter((it) => has(it.perm) && !(readOnly && READ_ONLY_HIDDEN.includes(it.key)));
               if (!items.length) return '';
               return `<div class="group-label">${escapeHtml(g.group)}</div>` + items.map((it) => `
                 <button type="button" class="nav-btn" data-route="${it.key}" title="${escapeHtml(it.label)}">
@@ -169,6 +204,8 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
             <h1 id="topbar-title"></h1>
           </div>
           <div class="right">
+            ${readOnly ? '<span class="pill warn ro-pill" title="บัญชีผู้บริหารดูข้อมูลได้อย่างเดียว">👁 ดูอย่างเดียว</span>' : ''}
+            <button type="button" class="btn-theme" id="fullscreen-btn" title="เต็มจอ" aria-label="เต็มจอ" hidden>⛶</button>
             <div class="chip" id="topbar-date"></div>
             <button type="button" class="btn-theme" id="theme-toggle"></button>
             <button type="button" class="btn-theme btn-device" id="device-btn" title="ตั้งค่าเครื่องนี้ (แป้นพิมพ์บนจอ)" aria-label="ตั้งค่าเครื่องนี้" aria-haspopup="true">⌨</button>
@@ -197,7 +234,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
     updateThemeButton();
     document.getElementById('sidebar-toggle').addEventListener('click', () => {
         const shell = root.querySelector('.app-shell');
-        if (DRAWER_MQ.matches) { setDrawer(!shell.classList.contains('nav-open')); return; }
+        if (drawerMode()) { setDrawer(!shell.classList.contains('nav-open')); return; }
         const collapsed = shell.classList.toggle('sidebar-collapsed');
         try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
     });
@@ -206,6 +243,8 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
     DRAWER_MQ.addEventListener?.('change', closeDrawer);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
     document.getElementById('device-btn').addEventListener('click', (e) => toggleDevicePanel(e.currentTarget));
+    document.getElementById('fullscreen-btn').addEventListener('click', enterFullscreen);
+    markFullscreenButton();
     markDeviceButton();
     document.getElementById('topbar-date').textContent = fmtNow({
         weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
@@ -240,6 +279,10 @@ function toggleDevicePanel(anchor) {
             <input type="checkbox" data-dev-kb ${keyboardEnabled() ? 'checked' : ''}><span></span>
             <div>ใช้แป้นพิมพ์บนจอของระบบ<small class="muted">ปิดแป้นพิมพ์ของแท็บเล็ต/มือถือ ช่องข้อความเปิดแป้นพิมพ์เล็ก ช่องตัวเลขเปิดแป้นตัวเลข</small></div>
           </label>
+          <label class="pos-switch dev-switch">
+            <input type="checkbox" data-dev-tablet ${tabletMode() ? 'checked' : ''}><span></span>
+            <div>โหมดแท็บเล็ต (เต็มจอ)<small class="muted">แสดงผลเต็มจอทั้งระบบ เมนูเลื่อนออกจากด้านซ้าย ปุ่มและตัวอักษรใหญ่ขึ้น แตะใช้งานง่าย</small></div>
+          </label>
           <div class="dev-sub">ธีมหน้าจอ</div>
           <div class="dev-themes">${THEMES.map((t) => {
               const m = themeMeta(t);
@@ -249,6 +292,7 @@ function toggleDevicePanel(anchor) {
     };
     draw();
     devicePanel.addEventListener('change', (e) => {
+        if (e.target.matches('[data-dev-tablet]')) { setTabletMode(e.target.checked); return; }
         if (!e.target.matches('[data-dev-kb]')) return;
         setKeyboardEnabled(e.target.checked);
         markDeviceButton();

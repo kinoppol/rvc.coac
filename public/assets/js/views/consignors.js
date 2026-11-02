@@ -103,7 +103,7 @@ export async function render(container, { navigate, permissions }) {
                 <option value="staff" ${imp.type === 'staff' ? 'selected' : ''}>ครู / บุคลากร</option>
                 <option value="student" ${imp.type === 'student' ? 'selected' : ''}>นักเรียน / นักศึกษา</option>
               </select>
-              <button type="submit" class="btn sm">ค้นหา</button>
+              <button type="submit" class="btn sm ro-keep">ค้นหา</button>
             </form>
             ${imp.error ? `<div class="error-box">${escapeHtml(imp.error)}</div>` : ''}
             ${imp.rows === null ? skBlock(5, 8) : rows.length ? `

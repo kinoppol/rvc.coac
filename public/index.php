@@ -34,6 +34,7 @@ use App\Controllers\StockCountController;
 use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
+use App\Middleware\ReadOnlyGuard;
 use App\Middleware\CsrfMiddleware;
 use App\Middleware\RoleGuard;
 use App\Services\SettingsService;
@@ -483,7 +484,7 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('ai.manage'));
     $group->delete('/ai/providers/{id}', [AiController::class, 'deleteProvider'])
         ->add(new RoleGuard('ai.manage'));
-})->add(new CsrfMiddleware())->add(new AuthMiddleware());
+})->add(new ReadOnlyGuard())->add(new CsrfMiddleware())->add(new AuthMiddleware());
 
 // ---- SPA shell fallback: any other GET request serves the app shell ----
 $app->get('/{path:.*}', function (Request $request, Response $response) {
