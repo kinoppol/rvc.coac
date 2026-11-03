@@ -574,16 +574,25 @@ export async function render(container, { user } = {}) {
         drawCart();
     }
 
-    /** One more piece, or with pack one more whole pack at the pack price. */
+    /**
+     * One more piece, or with pack one more whole pack at the pack price. A pack takes in the loose pieces
+     * of the same product already in the cart (1 piece then "ยกแพ็ค" = 1 pack, not 1 piece + 1 pack).
+     */
     function add(p, pack = null) {
         closeKeyboard(); // show the cart again once a product is picked
         const size = pack?.pack_size || 1;
         const line = cart.find((c) => c.id === p.id && lineSize(c) === size);
-        const short = inCart(p.id) + size > p.qty_stock;
+        const pieces = size > 1 ? cart.find((c) => c.id === p.id && lineSize(c) === 1) : null;
+        const absorbed = pieces ? Math.min(pieces.qty, size) : 0;
+        const short = inCart(p.id) - absorbed + size > p.qty_stock;
         if (short && !allowShort()) {
             play('error');
             message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น${size > 1 ? ` (ยกแพ็คใช้ ${size} ชิ้น)` : ''}`, 'error');
             return;
+        }
+        if (pieces) {
+            pieces.qty -= absorbed;
+            if (pieces.qty < 1) cart.splice(cart.indexOf(pieces), 1);
         }
         if (line) line.qty += 1;
         else {
