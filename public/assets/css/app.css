@@ -803,6 +803,17 @@ div.pos-row.out { cursor: not-allowed; }
 /* POS: whole-pack lines */
 .pos-pack-pill { font-size: 10.5px; padding: 1px 7px; vertical-align: middle; }
 .pos-pack-adds { display: block; margin-top: 2px; font-size: 12px; }
+/* A product sold whole by the pack: its tile/row with "ยกแพ็ค" buttons under (grid) or beside (list) it. */
+.pos-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pos-item > .pos-tile { flex: 1; }
+.pos-list .pos-item { flex-direction: row; align-items: stretch; }
+.pos-list .pos-item > .pos-row { flex: 1; min-width: 0; }
+.pos-pack-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.pos-list .pos-pack-btns { flex-direction: column; flex-wrap: nowrap; }
+.pos-pack-btn { flex: 1; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 6px; padding: 8px 10px; border: 2px solid var(--pri); border-radius: 10px; background: var(--soft); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; touch-action: manipulation; white-space: nowrap; }
+.pos-pack-btn b { color: var(--pri); }
+.pos-pack-btn small { font-size: 11.5px; font-weight: 500; color: var(--ok); }
+.pos-pack-btn:active { transform: scale(.97); }
 .pos-pack-adds .link-btn { font-size: 12px; padding: 0; }
 
 /* Assistant: is the attached .md a receipt or an order */

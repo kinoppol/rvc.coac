@@ -604,17 +604,20 @@ export async function render(container, { navigate, permissions, user }) {
               <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง (แพ็คที่ไม่มีบาร์โค้ดใส่เฉพาะชิ้น/แพ็คกับราคายกแพ็คได้)
                 ระบบใช้จับคู่สินค้าและเติมจำนวนชิ้น/แพ็คให้ตอนซื้อเข้า</div>
               <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th>
+                <th class="num" title="ส่วนลดเมื่อซื้อยกแพ็ค เทียบกับซื้อแยกชิ้น (ราคา/ชิ้น × ชิ้น/แพ็ค)">ส่วนลด/แพ็ค</th>
                 <th class="num" title="เว้นว่าง = ไม่ขายยกแพ็ค ขายแยกชิ้นเท่านั้น">ราคาขายยกแพ็ค</th><th></th></tr></thead><tbody>
                 ${e.packs.map((p, i) => `<tr data-pack="${i}">
                   <td><input data-pf="barcode" data-barcode autocomplete="off" value="${escapeHtml(p.barcode)}" placeholder="ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค" style="width:100%"></td>
                   <td><input data-pf="pack_size" type="number" min="2" step="1" value="${escapeHtml(p.pack_size)}" class="num" style="width:80px"></td>
+                  <td><input data-pd type="number" min="0" step="0.25" value="${escapeHtml(packDiscount(p))}" placeholder="0" class="num" style="width:90px"></td>
                   <td><input data-pf="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(p.sale_price ?? '')}" placeholder="ไม่ขายยกแพ็ค" class="num" style="width:110px">
                     <div class="muted" data-pack-hint style="font-size:11.5px">${packHint(p)}</div></td>
                   <td><button type="button" class="btn secondary sm" data-del-pack="${i}" title="ลบ">✕</button></td>
                 </tr>`).join('')}
               </tbody></table>
               <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
-              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายยกแพ็ค: สแกนบาร์โค้ดแพ็คที่หน้าขายจะขายทั้งแพ็คในราคานี้ (หรือกด "+ ยกแพ็ค" ในตะกร้า) · เว้นว่างถ้าขายแยกชิ้นเท่านั้น</div>`;
+              <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายยกแพ็ค: สแกนบาร์โค้ดแพ็คที่หน้าขายจะขายทั้งแพ็คในราคานี้ (หรือกดปุ่ม "ยกแพ็ค" ที่หน้าขาย) · เว้นว่างถ้าขายแยกชิ้นเท่านั้น
+                · ใส่ส่วนลด/แพ็คแล้วระบบคำนวณราคายกแพ็คให้ (ราคา/ชิ้น × ชิ้น/แพ็ค − ส่วนลด) — ราคายกแพ็คที่บันทึกไม่เปลี่ยนตามราคาชิ้นที่แก้ภายหลัง</div>`;
     }
 
     /** Cost and margin next to the piece price being set. */
@@ -623,6 +626,15 @@ export async function render(container, { navigate, permissions, user }) {
         if (!(price > 0)) return `ทุน/ชิ้น ฿${money(e.costPrice)}`;
         const margin = price - e.costPrice;
         return `ทุน/ชิ้น ฿${money(e.costPrice)} · กำไร ฿${money(margin)}${e.costPrice > 0 ? ` (${(margin / e.costPrice * 100).toFixed(1)}% ของทุน)` : ''}${margin < 0 ? ' ⚠️ ต่ำกว่าทุน' : ''}`;
+    }
+
+    /** Discount of buying the pack whole vs. its pieces one by one ('' when there is no pack price). */
+    function packDiscount(p) {
+        const price = Number(p.sale_price);
+        const size = Number(p.pack_size);
+        const piece = editing ? Number(editing.salePrice) : 0;
+        if (p.sale_price === '' || p.sale_price == null || !(size > 1) || !(piece > 0)) return '';
+        return String(Math.round((piece * size - price) * 100) / 100);
     }
 
     /** Pack price per piece next to the piece price, so the discount is visible. */
@@ -734,7 +746,9 @@ export async function render(container, { navigate, permissions, user }) {
             if (Number(ev.target.value) > 0) e.salePrice = Number(ev.target.value);
             container.querySelector('#bc-price-hint').textContent = priceHint(e);
             container.querySelectorAll('tr[data-pack]').forEach((tr) => {
-                tr.querySelector('[data-pack-hint]').innerHTML = packHint(e.packs[Number(tr.dataset.pack)]);
+                const p = e.packs[Number(tr.dataset.pack)];
+                tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
+                tr.querySelector('[data-pd]').value = packDiscount(p);
             });
         });
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
@@ -742,7 +756,18 @@ export async function render(container, { navigate, permissions, user }) {
             tr.querySelectorAll('[data-pf]').forEach((inp) => inp.addEventListener('input', () => {
                 p[inp.dataset.pf] = inp.value;
                 tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
+                if (inp.dataset.pf !== 'barcode') tr.querySelector('[data-pd]').value = packDiscount(p);
             }));
+            // A discount sets the pack price from the piece price: piece × pieces per pack − discount.
+            tr.querySelector('[data-pd]').addEventListener('input', (ev) => {
+                const size = Number(p.pack_size);
+                const piece = Number(e.salePrice);
+                if (ev.target.value === '' || !(size > 1) || !(piece > 0)) return;
+                const price = Math.max(0, Math.round((piece * size - Number(ev.target.value)) * 100) / 100);
+                p.sale_price = String(price);
+                tr.querySelector('[data-pf="sale_price"]').value = p.sale_price;
+                tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
+            });
         });
         container.querySelectorAll('[data-del-pack]').forEach((b) => b.addEventListener('click', () => {
             e.packs.splice(Number(b.dataset.delPack), 1);

@@ -328,25 +328,35 @@ export async function render(container, { user } = {}) {
             }
             return;
         }
+        // Products sold whole by the pack get a "ยกแพ็ค" button beside them (one per pack size).
+        const packBtns = (p) => {
+            const sizes = [...new Map((p.packs || []).map((k) => [k.pack_size, k])).values()];
+            return `<div class="pos-pack-btns">${sizes.map((k) => {
+                const save = p.sale_price * k.pack_size - k.sale_price;
+                return `<button type="button" class="pos-pack-btn" data-pick-pack="${p.id}" data-size="${k.pack_size}" title="ซื้อยกแพ็ค ${k.pack_size} ชิ้น">
+                  📦 ยกแพ็ค ×${k.pack_size} <b>฿${money(k.sale_price)}</b>${save >= 0.005 ? `<small>ลด ฿${money(save)}</small>` : ''}</button>`;
+            }).join('')}</div>`;
+        };
+        const withPacks = (p, html) => (p.packs?.length ? `<div class="pos-item">${html}${packBtns(p)}</div>` : html);
         box.innerHTML = view === 'grid'
             ? `<div class="pos-grid">${list.map((p) => {
                 const n = inCart(p.id);
-                return `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
+                return withPacks(p, `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-tile-img">${photoImg(p)}</span>
                   <span class="pos-tile-name">${escapeHtml(p.name)}</span>
                   ${p.consignor_id != null ? `<span class="pos-tile-consignor">ผู้ฝาก: ${escapeHtml(p.consignor_name)}</span>` : ''}
                   <span class="pos-tile-meta"><b>฿${money(p.sale_price)}</b><span>เหลือ ${p.qty_stock - n}</span></span>
                   ${n ? `<span class="pos-tile-badge">${n}</span>` : ''}
-                </button>`;
+                </button>`);
             }).join('')}</div>`
             : `<div class="pos-list">${list.map((p) => {
                 const n = inCart(p.id);
-                return `<button type="button" class="pos-row${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
+                return withPacks(p, `<button type="button" class="pos-row${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
                   <span class="pos-row-stock">เหลือ ${p.qty_stock - n}</span>
                   <b>฿${money(p.sale_price)}</b>
                   ${n ? `<span class="pos-tile-badge">${n}</span>` : ''}
-                </button>`;
+                </button>`);
             }).join('')}</div>`;
     }
 
@@ -968,6 +978,10 @@ export async function render(container, { user } = {}) {
             } else if (t.dataset.pick) {
                 const p = products.find((x) => x.id === Number(t.dataset.pick));
                 if (p) add(p);
+            } else if (t.dataset.pickPack) {
+                const p = products.find((x) => x.id === Number(t.dataset.pickPack));
+                const k = p?.packs?.find((x) => x.pack_size === Number(t.dataset.size));
+                if (k) add(p, k);
             } else if (t.dataset.ddToggle) {
                 toggleDropdown(t.dataset.ddToggle);
                 return; // keep the menu open (no refocus of the search box)
