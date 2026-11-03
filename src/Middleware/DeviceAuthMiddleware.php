@@ -16,11 +16,13 @@ use Slim\Psr7\Factory\ResponseFactory;
 
 /**
  * Android POS API (/api/device/v1/*): the paired device's token stands in for a sign-in.
- * The request then carries the account the device sells as in 'user' (so RoleGuard and the
+ * The request then carries the seller working on the device in 'user' (so RoleGuard and the
  * web POS controllers work unchanged) and the device itself in 'device'. No cookies, so no CSRF.
  *
  * Token: "Authorization: Bearer <token>" or "X-Device-Token: <token>" (some PHP setups drop
- * the Authorization header). The app may also send X-App-Version and X-Pending-Sales.
+ * the Authorization header). X-Device-User: the id of the seller profile working on the device
+ * (one of its sellers; without it, the default profile). The app may also send X-App-Version
+ * and X-Pending-Sales.
  */
 class DeviceAuthMiddleware implements MiddlewareInterface
 {
@@ -47,23 +49,26 @@ class DeviceAuthMiddleware implements MiddlewareInterface
             return $this->deny(401, 'device_revoked', 'อุปกรณ์นี้ถูกยกเลิกการจับคู่ หรือรหัสอุปกรณ์ไม่ถูกต้อง กรุณาจับคู่ใหม่');
         }
 
-        $users = new UserRepo($db);
-        $user = $device['user_id'] ? $users->find((int) $device['user_id']) : null;
-        if (!$user || !UserRepo::canSignIn($user)) {
-            return $this->deny(403, 'user_inactive', 'บัญชีผู้ขายของอุปกรณ์นี้ถูกปิดใช้งาน ให้ผู้ดูแลระบบเลือกบัญชีใหม่');
+        // The profile working on the device (X-Device-User), or its default one.
+        $asked = ctype_digit($request->getHeaderLine('X-Device-User')) ? (int) $request->getHeaderLine('X-Device-User') : null;
+        try {
+            $seller = $devices->seller($device, $asked);
+        } catch (\PDOException $e) {
+            if (!PosDeviceService::notMigrated($e)) {
+                throw $e;
+            }
+            return $this->deny(503, 'not_migrated', PosDeviceService::NOT_MIGRATED);
         }
-        // A device always sells as staff, never as the account's consignor side.
-        $roles = array_values(array_filter($users->rolesOf($user), fn ($r) => $r !== UserRepo::CONSIGNOR));
-        if (!$roles) {
-            return $this->deny(403, 'user_inactive', 'บัญชีผู้ขายของอุปกรณ์นี้ไม่ใช่บัญชีพนักงาน');
+        if (isset($seller['error'])) {
+            return $this->deny(403, $seller['code'], $seller['error']);
         }
-        $user['role'] = $roles[0];
-        $user['roles'] = $roles;
+        $user = $seller['user'];
 
         $server = $request->getServerParams();
         $devices->touch($device, $server['REMOTE_ADDR'] ?? null, [
             'app_version' => $request->getHeaderLine('X-App-Version'),
             'pending' => $request->getHeaderLine('X-Pending-Sales'),
+            'user_id' => $asked !== null ? (int) $user['id'] : null,
         ]);
         return $handler->handle($request->withAttribute('user', $user)->withAttribute('device', $device));
     }

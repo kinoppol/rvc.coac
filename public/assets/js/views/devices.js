@@ -3,9 +3,11 @@ import { escapeHtml, fmtDateTime, money } from '../util.js';
 import { confirmDialog, alertDialog, promptDialog } from '../dialog.js';
 
 // อุปกรณ์ POS (Android): pairs the Android POS app like a TV with a phone — the app shows a
-// 6-character code, the admin types it here and picks the account the device sells as.
-// Also lists paired devices (rename, change account, revoke) and the sales a device sent
-// that the server could not book (retry, or settle by hand). See PosDeviceService.
+// 6-character code, the admin types it here and picks the sellers who use the device (each
+// switches to their profile on it, with a PIN when one is set here) and how often it syncs
+// in the background (the app can change that too). Also lists paired devices (rename,
+// sellers, PINs, sync level, revoke) and the sales a device sent that the server could not
+// book (retry, or settle by hand). See PosDeviceService.
 // The app's .apk is uploaded here (in 1 MB pieces, past PHP's upload limit) and anyone can
 // download it from api/app/pos.apk — a link and QR-Code to open on the phone. See AppReleaseService.
 
@@ -16,10 +18,12 @@ export async function render(container, { params = {} } = {}) {
     let devices = [];
     let sellers = [];
     let failed = [];
+    let levels = []; // background sync levels: {key, label, description}
+    let defaultLevel = 'medium';
     let error = null;
     let busy = false;
     let editing = null; // id of the device row being edited
-    let form = { code: (params.code || '').toUpperCase(), name: '', user_id: '' };
+    let form = { code: (params.code || '').toUpperCase(), name: '', user_ids: [], sync_level: null };
     let release = null; // the current .apk: {version, size, sha256, note, uploaded_at, uploaded_by}
     let apk = { file: null, version: '', note: '', busy: false, error: null };
     // The address the app connects to: this page's, without the hash.
@@ -34,6 +38,8 @@ export async function render(container, { params = {} } = {}) {
             devices = res.data;
             sellers = res.sellers;
             failed = res.failed;
+            levels = res.sync_levels || [];
+            defaultLevel = res.sync_default || 'medium';
             error = null;
         } catch (e) {
             error = e.message;
@@ -41,27 +47,44 @@ export async function render(container, { params = {} } = {}) {
         draw();
     }
 
-    const online = (d) => d.last_seen_at && Date.now() - Date.parse(d.last_seen_at.replace(' ', 'T')) < 5 * 60 * 1000;
-    const sellerOptions = (selected) => sellers.map((u) => `<option value="${u.id}" ${String(u.id) === String(selected) ? 'selected' : ''}>${escapeHtml(u.full_name)} (${escapeHtml(ROLE_LABEL[u.role] || u.role)})</option>`).join('');
+    const online = (d) => d.last_seen_at && Date.now() - Date.parse(d.last_seen_at.replace(' ', 'T')) < (d.online_seconds || 300) * 1000;
+    const roleLabel = (r) => ROLE_LABEL[r] || r;
+    /** Checkboxes of the accounts that may sell; $keep: sellers already on the device (listed even if they no longer could be added). */
+    function sellerChecks(checked, keep = []) {
+        const list = [...sellers];
+        keep.forEach((u) => { if (!list.some((x) => x.id === u.id)) list.push(u); });
+        return `<div class="seller-checks" style="display:flex;flex-wrap:wrap;gap:6px 18px">${list.map((u) => `
+            <label style="display:flex;gap:6px;align-items:center;font-weight:400;cursor:pointer">
+              <input type="checkbox" data-seller value="${u.id}" ${checked.includes(u.id) ? 'checked' : ''}>
+              ${escapeHtml(u.full_name)} <span class="muted" style="font-size:12px">(${escapeHtml(roleLabel(u.role))})</span></label>`).join('')}</div>`;
+    }
+    const levelOptions = (selected) => levels.map((l) => `<option value="${l.key}" ${l.key === selected ? 'selected' : ''}>${escapeHtml(l.label)}${l.key === defaultLevel ? ' (ค่าเริ่มต้น)' : ''} — ${escapeHtml(l.description)}</option>`).join('');
+    const checkedIn = (root) => [...root.querySelectorAll('[data-seller]:checked')].map((c) => Number(c.value));
 
     function deviceRow(d) {
         const revoked = d.status === 'revoked';
         if (editing === d.id) {
             return `<tr data-edit-row="${d.id}">
               <td><input data-f="name" maxlength="100" value="${escapeHtml(d.name)}"></td>
-              <td colspan="4"><select data-f="user">${sellerOptions(d.user_id)}</select>
-                <div class="muted" style="font-size:12px">รายการที่ขายต่อจากนี้จะบันทึกเป็นของบัญชีที่เลือก (รายการที่ขายไปแล้วไม่เปลี่ยน)</div></td>
+              <td colspan="4">
+                <div style="font-size:13px;font-weight:600;margin-bottom:4px">พนักงานขายที่ใช้อุปกรณ์นี้</div>
+                ${sellerChecks(d.users.map((u) => u.id), d.users)}
+                <div class="muted" style="font-size:12px;margin-top:4px">ผู้ที่เอาออกจะสลับมาใช้โปรไฟล์ของตนบนอุปกรณ์นี้ไม่ได้อีก (ยอดที่ขายตอนออฟไลน์ไว้ก่อนหน้ายังส่งเข้าระบบได้)</div>
+                ${d.users.length ? `<div style="margin-top:8px;font-size:13px">PIN สำหรับสลับโปรไฟล์: ${d.users.map((u) => `
+                  <button type="button" class="btn secondary sm" data-pin="${d.id}:${u.id}" style="margin:2px">${u.has_pin ? '🔒' : '🔓'} ${escapeHtml(u.full_name)}</button>`).join('')}</div>` : ''}
+                <label class="field" style="margin-top:8px">ความถี่ในการส่งข้อมูลเบื้องหลัง <select data-f="sync">${levelOptions(d.sync.level)}</select></label></td>
               <td style="white-space:nowrap"><button type="button" class="btn sm" data-save="${d.id}">บันทึก</button>
                 <button type="button" class="btn secondary sm" data-cancel-edit>ยกเลิก</button></td>
             </tr>`;
         }
         return `<tr class="${revoked ? 'muted' : ''}">
             <td><b>${escapeHtml(d.name)}</b><div class="muted" style="font-size:12px">${escapeHtml([d.model, d.platform, d.app_version && `v${d.app_version}`].filter(Boolean).join(' · '))}</div></td>
-            <td>${escapeHtml(d.user_name || '—')}</td>
+            <td>${d.users.length ? d.users.map((u) => `<div>${escapeHtml(u.full_name)}${u.has_pin ? ' <span title="ตั้ง PIN แล้ว">🔒</span>' : ''}${u.id === d.current_user_id && !revoked ? ' <span class="pill ok" style="font-size:11px">ใช้งานล่าสุด</span>' : ''}</div>`).join('') : '—'}</td>
             <td>${revoked ? '<span class="pill">ยกเลิกแล้ว</span>' : online(d) ? '<span class="pill ok">ออนไลน์</span>' : '<span class="pill warn">ออฟไลน์</span>'}
               <div class="muted" style="font-size:12px">${d.last_seen_at ? `เห็นล่าสุด ${escapeHtml(fmtDateTime(d.last_seen_at))}` : 'ยังไม่เคยเชื่อมต่อ'}</div></td>
             <td>${d.last_sync_at ? escapeHtml(fmtDateTime(d.last_sync_at)) : '—'}
-              <div class="muted" style="font-size:12px">ส่งแล้ว ${d.synced_count} รายการ${d.pending_count ? ` · <b style="color:var(--warn)">ค้างในเครื่อง ${d.pending_count}</b>` : ''}${d.failed_count ? ` · <b style="color:var(--danger)">ไม่สำเร็จ ${d.failed_count}</b>` : ''}</div></td>
+              <div class="muted" style="font-size:12px">ส่งแล้ว ${d.synced_count} รายการ${d.pending_count ? ` · <b style="color:var(--warn)">ค้างในเครื่อง ${d.pending_count}</b>` : ''}${d.failed_count ? ` · <b style="color:var(--danger)">ไม่สำเร็จ ${d.failed_count}</b>` : ''}</div>
+              <div class="muted" style="font-size:12px">ความถี่: <b>${escapeHtml(d.sync.label)}</b>${d.sync.changed_by === 'app' ? ' (ตั้งจากแอป)' : ''}</div></td>
             <td>${escapeHtml(d.paired_at ? fmtDateTime(d.paired_at) : '')}<div class="muted" style="font-size:12px">${escapeHtml(d.paired_by_name || '')}</div></td>
             <td style="white-space:nowrap">${revoked ? '' : `
               <button type="button" class="btn secondary sm" data-edit="${d.id}">แก้ไข</button>
@@ -178,15 +201,19 @@ export async function render(container, { params = {} } = {}) {
         <section class="card card-pad">
           <h2>จับคู่อุปกรณ์ POS (Android)</h2>
           <p class="muted" style="font-size:13px;margin:4px 0 12px">เปิดแอป POS บนอุปกรณ์ ใส่ที่อยู่เซิร์ฟเวอร์ (หรือสแกน QR-Code ด้านขวา) แล้วแอปจะแสดงรหัสจับคู่ 6 ตัว กรอกรหัสนั้นที่นี่ภายใน 10 นาที
-            แล้วเลือกบัญชีที่อุปกรณ์ใช้ขายสินค้า — ยอดขายจากอุปกรณ์จะบันทึกเป็นของบัญชีนี้ และใช้สิทธิ์ตามบทบาทของบัญชีนี้</p>
+            แล้วเลือกพนักงานขายที่ใช้อุปกรณ์นี้ (ได้หลายคน) — แต่ละคนสลับโปรไฟล์ของตนบนอุปกรณ์เพื่อขาย ยอดขายบันทึกเป็นของผู้ที่ขายจริง และใช้สิทธิ์ตามบทบาทของแต่ละคน
+            (ตั้ง PIN สำหรับสลับโปรไฟล์ได้ที่ปุ่ม "แก้ไข" หลังจับคู่)</p>
           <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
             <div class="form-grid" style="flex:1 1 360px">
               <label class="field">รหัสจับคู่ที่แสดงบนอุปกรณ์ *
                 <input id="d-code" maxlength="7" autocomplete="off" spellcheck="false" placeholder="เช่น K7M-Q2X" value="${escapeHtml(form.code)}"
                   style="font-size:22px;letter-spacing:4px;text-transform:uppercase;font-family:ui-monospace,monospace"></label>
               <label class="field">ชื่ออุปกรณ์ <input id="d-name" maxlength="100" placeholder="เช่น แท็บเล็ตหน้าร้าน 1 (เว้นว่าง = ชื่อที่แอปส่งมา)" value="${escapeHtml(form.name)}"></label>
-              <label class="field" style="grid-column:1/-1">ขายสินค้าในนามบัญชี *
-                <select id="d-user"><option value="">— เลือกบัญชีผู้ขาย —</option>${sellerOptions(form.user_id)}</select></label>
+              <div class="field" style="grid-column:1/-1" id="d-users">พนักงานขายที่ใช้อุปกรณ์นี้ * <span class="muted" style="font-size:12px">(คนแรกที่เลือกเป็นโปรไฟล์เริ่มต้น)</span>
+                ${sellerChecks(form.user_ids)}</div>
+              <label class="field" style="grid-column:1/-1">ความถี่ในการส่งข้อมูลเบื้องหลัง
+                <select id="d-sync">${levelOptions(form.sync_level || defaultLevel)}</select>
+                <span class="muted" style="font-size:12px">ส่งน้อยลงช่วยให้เครื่องทำงานลื่นขึ้นและประหยัดเน็ต แต่ยอดขายจะเข้าระบบช้าลง — เปลี่ยนภายหลังได้ทั้งที่หน้านี้และในแอป</span></label>
               <div class="actions-row" style="grid-column:1/-1"><button type="button" class="btn" id="d-pair" ${busy ? 'disabled' : ''}>${busy ? 'กำลังจับคู่…' : 'จับคู่อุปกรณ์'}</button></div>
             </div>
             <div style="text-align:center;flex:0 0 180px">
@@ -210,7 +237,7 @@ export async function render(container, { params = {} } = {}) {
         <section class="card card-pad">
           <h2>อุปกรณ์ที่จับคู่แล้ว</h2>
           ${devices.length ? `<div class="table-wrap"><table>
-            <thead><tr><th>อุปกรณ์</th><th>ขายในนาม</th><th>สถานะ</th><th>ส่งยอดขายล่าสุด</th><th>จับคู่เมื่อ</th><th></th></tr></thead>
+            <thead><tr><th>อุปกรณ์</th><th>พนักงานขาย</th><th>สถานะ</th><th>ส่งยอดขายล่าสุด</th><th>จับคู่เมื่อ</th><th></th></tr></thead>
             <tbody>${devices.map(deviceRow).join('')}</tbody>
           </table></div>` : '<div class="empty">ยังไม่มีอุปกรณ์ที่จับคู่</div>'}
         </section>`;
@@ -220,7 +247,12 @@ export async function render(container, { params = {} } = {}) {
             form.code = code.value.toUpperCase();
         });
         container.querySelector('#d-name').addEventListener('input', (e) => { form.name = e.target.value; });
-        container.querySelector('#d-user').addEventListener('change', (e) => { form.user_id = e.target.value; });
+        container.querySelectorAll('#d-users [data-seller]').forEach((c) => c.addEventListener('change', () => {
+            const id = Number(c.value);
+            form.user_ids = c.checked ? [...form.user_ids.filter((x) => x !== id), id] : form.user_ids.filter((x) => x !== id);
+        }));
+        container.querySelector('#d-sync').addEventListener('change', (e) => { form.sync_level = e.target.value; });
+        container.querySelectorAll('[data-pin]').forEach((b) => b.addEventListener('click', () => setPin(...b.dataset.pin.split(':').map(Number))));
         container.querySelector('#d-pair').addEventListener('click', pair);
         code.addEventListener('keydown', (e) => { if (e.key === 'Enter') pair(); });
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => { editing = Number(b.dataset.edit); draw(); }));
@@ -251,11 +283,11 @@ export async function render(container, { params = {} } = {}) {
     async function pair() {
         if (busy) return;
         if (form.code.replace(/[^A-Z0-9]/g, '').length !== 6) { error = 'กรุณากรอกรหัสจับคู่ 6 ตัวที่แสดงบนอุปกรณ์'; return draw(); }
-        if (!form.user_id) { error = 'กรุณาเลือกบัญชีที่อุปกรณ์ใช้ขายสินค้า'; return draw(); }
+        if (!form.user_ids.length) { error = 'กรุณาเลือกพนักงานขายที่ใช้อุปกรณ์นี้อย่างน้อย 1 คน'; return draw(); }
         busy = true; error = null; draw();
         try {
-            const d = (await api.post('/devices/pair', { code: form.code, name: form.name, user_id: Number(form.user_id) })).data;
-            form = { code: '', name: '', user_id: '' };
+            const d = (await api.post('/devices/pair', { code: form.code, name: form.name, user_ids: form.user_ids, sync_level: form.sync_level || defaultLevel })).data;
+            form = { code: '', name: '', user_ids: [], sync_level: null };
             busy = false;
             await load();
             await alertDialog(`จับคู่ "${d.name}" แล้ว อุปกรณ์จะเข้าสู่หน้าขายสินค้าและเริ่มโหลดข้อมูลสินค้าภายในไม่กี่วินาที`, { title: 'จับคู่สำเร็จ' });
@@ -269,12 +301,28 @@ export async function render(container, { params = {} } = {}) {
     async function saveEdit(id) {
         const row = container.querySelector(`[data-edit-row="${id}"]`);
         try {
+            const userIds = checkedIn(row);
+            if (!userIds.length) return alertDialog('กรุณาเลือกพนักงานขายอย่างน้อย 1 คน', { tone: 'danger' });
             await api.put(`/devices/${id}`, {
                 name: row.querySelector('[data-f="name"]').value,
-                user_id: Number(row.querySelector('[data-f="user"]').value),
+                user_ids: userIds,
+                sync_level: row.querySelector('[data-f="sync"]').value,
             });
             editing = null;
             await load();
+        } catch (e) { alertDialog(e.message, { tone: 'danger' }); }
+    }
+
+    async function setPin(deviceId, userId) {
+        const u = devices.find((x) => x.id === deviceId)?.users.find((x) => x.id === userId);
+        if (!u) return;
+        const pin = await promptDialog(`PIN ตัวเลข 4–6 หลักที่ ${u.full_name} ต้องกรอกเมื่อสลับมาใช้โปรไฟล์ของตนบนอุปกรณ์นี้${u.has_pin ? ' — เว้นว่างแล้วกดตกลงเพื่อยกเลิก PIN' : ''}`,
+            { title: u.has_pin ? 'เปลี่ยน PIN' : 'ตั้ง PIN', placeholder: 'เช่น 4821' });
+        if (pin === null || (pin.trim() === '' && !u.has_pin)) return;
+        try {
+            await api.put(`/devices/${deviceId}/users/${userId}/pin`, { pin: pin.trim() });
+            await load();
+            alertDialog(pin.trim() ? `ตั้ง PIN ของ ${u.full_name} แล้ว อุปกรณ์จะได้รับเมื่อเชื่อมต่อครั้งถัดไป` : `ยกเลิก PIN ของ ${u.full_name} แล้ว`, { title: 'บันทึกแล้ว' });
         } catch (e) { alertDialog(e.message, { tone: 'danger' }); }
     }
 
@@ -319,5 +367,5 @@ export async function render(container, { params = {} } = {}) {
 
     draw();
     await load();
-    if (form.code) container.querySelector('#d-user')?.focus();
+    if (form.code) container.querySelector('#d-users [data-seller]')?.focus();
 }

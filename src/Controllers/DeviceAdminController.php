@@ -26,6 +26,8 @@ class DeviceAdminController
             return $this->json($response, [
                 'data' => $devices->all(),
                 'sellers' => $devices->sellers(),
+                'sync_levels' => PosDeviceService::syncLevels(),
+                'sync_default' => PosDeviceService::SYNC_DEFAULT,
                 'failed' => $this->sync($db)->list('failed', null),
             ]);
         } catch (\PDOException $e) {
@@ -36,13 +38,14 @@ class DeviceAdminController
         }
     }
 
-    /** POST /devices/pair {code, name, user_id} */
+    /** POST /devices/pair {code, name, user_ids: [...] (the first is the default profile), sync_level?} */
     public function pair(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();
         $db = Db::connection();
         try {
-            $device = $this->devices($db)->approve((string) ($body['code'] ?? ''), (string) ($body['name'] ?? ''), (int) ($body['user_id'] ?? 0),
+            $device = $this->devices($db)->approve((string) ($body['code'] ?? ''), (string) ($body['name'] ?? ''),
+                (array) ($body['user_ids'] ?? [$body['user_id'] ?? 0]), isset($body['sync_level']) ? (string) $body['sync_level'] : null,
                 (int) $request->getAttribute('user')['id'], $this->ip($request));
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
@@ -50,7 +53,7 @@ class DeviceAdminController
         return $this->json($response, ['data' => $device], 201);
     }
 
-    /** PUT /devices/{id} {name?, user_id?} */
+    /** PUT /devices/{id} {name?, user_ids?, sync_level?} */
     public function update(Request $request, Response $response, array $args): Response
     {
         $db = Db::connection();
@@ -60,6 +63,19 @@ class DeviceAdminController
             return $this->error($response, $e->getMessage(), 422);
         }
         return $this->json($response, ['data' => $device]);
+    }
+
+    /** PUT /devices/{id}/users/{userId}/pin {pin} — '' clears it. */
+    public function pin(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        try {
+            $this->devices($db)->setPin((int) $args['id'], (int) $args['userId'], (string) (((array) $request->getParsedBody())['pin'] ?? ''),
+                (int) $request->getAttribute('user')['id'], $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     public function revoke(Request $request, Response $response, array $args): Response

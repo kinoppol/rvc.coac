@@ -30,11 +30,12 @@ class DeviceSaleSyncService
 
     /**
      * @param array $sale {client_uuid, sold_at, offline, allow_short, items:[{product_id, qty, pack_size?, unit_price?}], payments:[{method, amount}], total_value?}
-     * @param array $user the account the device sells as (with its active role)
+     * @param array $user the seller who made the sale (with its active role)
+     * @param string[] $notes warnings to keep with the sale
      * @return array{client_uuid:string, status:string, sale?:array, error?:string, warnings?:string[]}
      *         status: synced | duplicate | failed (kept for an admin) | rejected (online: fix and send again) | drawer_required
      */
-    public function process(array $device, array $user, array $sale, ?string $ip): array
+    public function process(array $device, array $user, array $sale, ?string $ip, array $notes = []): array
     {
         $uuid = strtolower(trim((string) ($sale['client_uuid'] ?? '')));
         if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
@@ -49,7 +50,7 @@ class DeviceSaleSyncService
         }
 
         $settings = new SettingsService($this->db);
-        $warnings = [];
+        $warnings = $notes;
         $now = new \DateTimeImmutable();
         $soldAt = $this->soldAt($sale['sold_at'] ?? null) ?? $now;
         if ($soldAt->getTimestamp() > $now->getTimestamp() + self::FUTURE_SLACK) {
@@ -201,24 +202,45 @@ class DeviceSaleSyncService
         ];
     }
 
-    /** Admin: books a failed sale again, as the account and device that made it. */
+    /**
+     * A sale whose seller cannot sell (taken off the device, account closed): online it goes
+     * back to the device; one made offline already happened, so it is kept for an admin.
+     */
+    public function fail(array $device, int $userId, array $sale, string $error): array
+    {
+        $uuid = strtolower(trim((string) ($sale['client_uuid'] ?? '')));
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
+            return ['client_uuid' => $uuid, 'status' => 'rejected', 'error' => 'client_uuid ต้องเป็น UUID'];
+        }
+        $done = $this->booked((int) $device['id'], $uuid);
+        if ($done) {
+            return $done;
+        }
+        if (empty($sale['offline'])) {
+            return ['client_uuid' => $uuid, 'status' => 'rejected', 'error' => $error];
+        }
+        $soldAt = $this->soldAt($sale['sold_at'] ?? null) ?? new \DateTimeImmutable();
+        $this->keepFailed((int) $device['id'], $uuid, $userId, $soldAt, (string) json_encode($sale, JSON_UNESCAPED_UNICODE), $error);
+        return ['client_uuid' => $uuid, 'status' => 'failed', 'error' => $error];
+    }
+
+    /** Admin: books a failed sale again, as the seller and device that made it. */
     public function retry(int $id, ?string $ip): array
     {
         $row = $this->row($id);
         if (!$row || $row['status'] !== 'failed') {
             throw new \RuntimeException('ไม่พบรายการที่บันทึกไม่สำเร็จ');
         }
-        $device = $this->db->prepare('SELECT * FROM pos_devices WHERE id = ?');
-        $device->execute([$row['device_id']]);
-        $user = $this->db->prepare('SELECT * FROM users WHERE id = ?');
-        $user->execute([$row['user_id']]);
-        $u = $user->fetch();
-        if (!$u) {
-            throw new \RuntimeException('ไม่พบบัญชีผู้ขายของรายการนี้');
+        $stmt = $this->db->prepare('SELECT * FROM pos_devices WHERE id = ?');
+        $stmt->execute([$row['device_id']]);
+        $device = $stmt->fetch();
+        $seller = (new PosDeviceService($this->db, $this->audit))->seller($device, (int) $row['user_id'], true);
+        if (isset($seller['error'])) {
+            throw new \RuntimeException($seller['error']);
         }
         $sale = (array) json_decode((string) $row['payload'], true);
         $sale['offline'] = true; // it was made long ago: book it as it was made
-        return $this->process($device->fetch(), $u, $sale, $ip);
+        return $this->process($device, $seller['user'], $sale, $ip);
     }
 
     /** Admin: a failed sale settled another way (recorded by hand, or not a real sale). */

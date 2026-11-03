@@ -127,6 +127,7 @@ $app->post('/api/device/v1/pair/status', [DeviceController::class, 'pairStatus']
 $app->group('/api/device/v1', function ($group) {
     $group->get('/ping', [DeviceController::class, 'ping']);
     $group->get('/me', [DeviceController::class, 'me']);
+    $group->put('/settings', [DeviceController::class, 'settings']);
     $group->get('/catalog', [DeviceController::class, 'catalog'])
         ->add(new RoleGuard('sales.create'));
     $group->get('/catalog/popular', [DeviceController::class, 'popular'])
@@ -510,6 +511,8 @@ $app->group('/api', function ($group) {
     $group->put('/devices/{id:[0-9]+}', [DeviceAdminController::class, 'update'])
         ->add(new RoleGuard('devices.manage'));
     $group->post('/devices/{id:[0-9]+}/revoke', [DeviceAdminController::class, 'revoke'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->put('/devices/{id:[0-9]+}/users/{userId:[0-9]+}/pin', [DeviceAdminController::class, 'pin'])
         ->add(new RoleGuard('devices.manage'));
     $group->get('/devices/{id:[0-9]+}/sales', [DeviceAdminController::class, 'sales'])
         ->add(new RoleGuard('devices.manage'));

@@ -61,8 +61,10 @@ class DeviceController
     }
 
     /**
-     * GET /me — who the device is and sells as, and every setting the POS needs to work
-     * offline (payment methods, switches, store hours and days off for the accounting day).
+     * GET /me — who the device is, its sellers (each profile with its permissions, PIN check
+     * and drawer, so profiles switch offline), who is working now (X-Device-User), the sync
+     * level, and every setting the POS needs to work offline (payment methods, switches,
+     * store hours and days off for the accounting day).
      */
     public function me(Request $request, Response $response): Response
     {
@@ -70,17 +72,24 @@ class DeviceController
         $settings = new SettingsService($db);
         $user = $request->getAttribute('user');
         $device = $request->getAttribute('device');
+        $devices = $this->devices($db);
         $role = $user['role'];
         $day = DrawerController::currentDay($settings);
-        try {
-            $drawer = (new CashDrawerService($db, new AuditLogger($db)))->state($day['date'], (int) $user['id'], $day['required']);
-        } catch (\PDOException $e) {
-            $drawer = null; // migration 0033 not run yet
+        $profiles = [];
+        foreach ($devices->members((int) $device['id']) as $m) {
+            $seller = $devices->seller($device, $m['id']);
+            if (isset($seller['user'])) {
+                $profiles[] = $this->profile($db, $settings, $seller['user'], $day) + [
+                    'is_default' => $m['id'] === (int) $device['user_id'],
+                    'pin' => $m['pin_hash'] ? ['salt' => $m['pin_salt'], 'hash' => $m['pin_hash']] : null,
+                ];
+            }
         }
+        $current = $this->profile($db, $settings, $user, $day);
         $pos = [
             'payment_methods' => array_map(fn ($m) => ['key' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]], $settings->paymentMethods()),
-            'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
-            'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
+            'payment_mixed' => $current['pos']['payment_mixed'],
+            'sell_out_of_stock' => $current['pos']['sell_out_of_stock'],
             'sell_out_of_stock_always' => $settings->get('pos_short_stock_always') === '1',
             'store_hours' => ['open' => (string) $settings->get('store_open_time'), 'close' => (string) $settings->get('store_close_time')],
             'store_closed_days' => array_values(array_map('intval', array_filter(explode(',', (string) $settings->get('store_closed_days')), 'strlen'))),
@@ -91,18 +100,53 @@ class DeviceController
         return $this->json($response, [
             'api_version' => self::API_VERSION,
             'server_time' => date(DATE_ATOM),
-            'device' => $this->devices($db)->publicView($this->devices($db)->find((int) $device['id'])),
-            'user' => [
-                'id' => (int) $user['id'], 'username' => $user['username'], 'full_name' => $user['full_name'], 'role' => $role,
-                'permissions' => (new UserRepo($db))->permissionsFor($role),
-            ],
+            'device' => $devices->publicView($devices->find((int) $device['id'])),
+            'user' => array_diff_key($current, ['drawer' => 1, 'pos' => 1]),
+            'users' => $profiles,
+            'sync' => PosDeviceService::syncConfig($device),
+            'sync_levels' => PosDeviceService::syncLevels(),
             'pos' => $pos,
             // Changes when any of the above does, so the app knows to redraw.
             'settings_hash' => sha1(json_encode([$pos, $user['id'], $role])),
+            'config_hash' => $devices->configHash($device),
             'business_day' => $settings->businessDay(new \DateTimeImmutable()),
             'today' => date('Y-m-d'),
-            'drawer' => $drawer,
+            'drawer' => $current['drawer'],
         ]);
+    }
+
+    /** PUT /settings {sync_level, changed_at?} — the level picked on the device (changed_at: when, if picked offline). */
+    public function settings(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $db = Db::connection();
+        try {
+            $sync = $this->devices($db)->setSyncLevelFromApp($request->getAttribute('device'), (string) ($body['sync_level'] ?? ''),
+                isset($body['changed_at']) ? (string) $body['changed_at'] : null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['sync' => $sync]);
+    }
+
+    /** A seller profile as the app keeps it: permissions and role-dependent POS switches. */
+    private function profile(\PDO $db, SettingsService $settings, array $user, array $day): array
+    {
+        $role = $user['role'];
+        try {
+            $drawer = (new CashDrawerService($db, new AuditLogger($db)))->state($day['date'], (int) $user['id'], $day['required']);
+        } catch (\PDOException $e) {
+            $drawer = null; // migration 0033 not run yet
+        }
+        return [
+            'id' => (int) $user['id'], 'username' => $user['username'], 'full_name' => $user['full_name'], 'role' => $role,
+            'permissions' => (new UserRepo($db))->permissionsFor($role),
+            'pos' => [
+                'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
+                'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
+            ],
+            'drawer' => $drawer,
+        ];
     }
 
     /**
@@ -192,6 +236,8 @@ class DeviceController
      * POST /sales {sales: [...]} — up to 50 sales, booked in the order given. Every sale gets
      * its own result; the app removes from its queue those that come back synced, duplicate
      * or failed (failed ones are kept on the server for an admin). See DeviceSaleSyncService.
+     * Each sale names the seller who made it (user_id; without it, the X-Device-User profile),
+     * so one batch may carry sales of several profiles.
      */
     public function syncSales(Request $request, Response $response): Response
     {
@@ -207,17 +253,42 @@ class DeviceController
         $service = new DeviceSaleSyncService($db, new AuditLogger($db));
         $device = $request->getAttribute('device');
         $user = $request->getAttribute('user');
+        $devices = $this->devices($db);
+        $users = new UserRepo($db);
         $results = [];
         foreach ($sales as $sale) {
-            $results[] = $service->process($device, $user, is_array($sale) ? $sale : [], $this->ip($request));
+            $sale = is_array($sale) ? $sale : [];
+            $sellerId = isset($sale['user_id']) && is_numeric($sale['user_id']) ? (int) $sale['user_id'] : (int) $user['id'];
+            $notes = [];
+            $seller = $sellerId === (int) $user['id'] ? ['user' => $user] : $devices->seller($device, $sellerId, !empty($sale['offline']));
+            if (isset($seller['user']) && !$users->hasPermission($seller['user']['role'], 'sales.create')) {
+                $seller = ['error' => "บัญชี {$seller['user']['full_name']} ไม่มีสิทธิ์ขายสินค้า"];
+            }
+            if (isset($seller['error'])) {
+                $results[] = $service->fail($device, $sellerId, $sale, $seller['error']);
+                continue;
+            }
+            if (!empty($seller['removed'])) {
+                $notes[] = "ขายโดย {$seller['user']['full_name']} ซึ่งถูกนำออกจากอุปกรณ์นี้แล้ว";
+            }
+            $results[] = $service->process($device, $seller['user'], $sale, $this->ip($request), $notes);
         }
         return $this->json($response, ['results' => $results, 'server_time' => date(DATE_ATOM)]);
     }
 
-    /** GET /ping — cheap check that the server (and this device's pairing) is reachable. */
+    /**
+     * GET /ping — cheap check that the server (and this device's pairing) is reachable. Also
+     * the sync level (it may have been changed on the web page) and config_hash: when it
+     * differs from the one of the last /me, fetch /me again (sellers or PINs changed).
+     */
     public function ping(Request $request, Response $response): Response
     {
-        return $this->json($response, ['ok' => true, 'server_time' => date(DATE_ATOM)]);
+        $device = $request->getAttribute('device');
+        return $this->json($response, [
+            'ok' => true, 'server_time' => date(DATE_ATOM),
+            'sync' => PosDeviceService::syncConfig($device),
+            'config_hash' => $this->devices(Db::connection())->configHash($device),
+        ]);
     }
 
     /** @return array{0:string,1:int}|null */
