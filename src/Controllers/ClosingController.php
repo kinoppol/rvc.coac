@@ -237,6 +237,11 @@ class ClosingController
         if (!$consignorId || $amount <= 0) {
             return $this->error($response, 'กรุณาเลือกผู้ฝากขายและระบุจำนวนเงิน', 422);
         }
+        // Handing goods back with the payout is a return: it needs the return permission.
+        $returns = (array) ($body['returns'] ?? []);
+        if ($returns && !(new \App\Repositories\UserRepo($db))->hasPermission($user['role'], 'return.create')) {
+            return $this->error($response, 'ไม่มีสิทธิ์คืนสินค้าให้ผู้ฝากขาย', 403);
+        }
         $service = $this->service($db);
         try {
             // For the sales not paid out yet in a period; a different amount needs a reason
@@ -249,7 +254,7 @@ class ClosingController
             $id = $this->payouts($db)->pay([
                 'consignor_id' => $consignorId, 'from' => $from, 'to' => $to, 'amount' => $amount, 'method' => $method,
                 'product_ids' => (array) ($body['product_ids'] ?? []), 'reason' => (string) ($body['reason'] ?? ''),
-                'stock' => (array) ($body['stock'] ?? []),
+                'stock' => (array) ($body['stock'] ?? []), 'returns' => $returns,
             ], (int) $user['id'], $this->ip($request));
             if ($method === 'cash' && isset($body['from_drawer']) && empty($body['from_drawer'])) {
                 $service->setPayoutDrawer($date, $id, false, (int) $user['id'], $this->ip($request));

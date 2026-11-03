@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Repositories\ProductRepo;
 use App\Repositories\WithdrawalRepo;
 use App\Support\Db;
 use PDO;
@@ -12,7 +13,8 @@ use PDO;
  * Paying a consignor from the daily report for the sales not yet paid out in a period:
  * the amount follows the chosen sale lines (the consignor's share of each), the person
  * summing up may pay a different amount with a reason (the account may go negative when
- * the store answers for lost goods), and may set what is left of the consignor's goods.
+ * the store answers for lost goods), may set what is left of the consignor's goods, and
+ * may hand back all that is left of some products (a return document, stock down to 0).
  */
 class ConsignorPayoutService
 {
@@ -60,7 +62,7 @@ class ConsignorPayoutService
 
     /**
      * @param array{consignor_id:int, from:string, to:string, product_ids:int[], amount:float, method:string,
-     *              reason?:string, stock?:array<int, array{product_id:int, qty:int}>} $d
+     *              reason?:string, stock?:array<int, array{product_id:int, qty:int}>, returns?:int[]} $d
      * @return int the withdrawal id
      */
     public function pay(array $d, int $userId, ?string $ip): int
@@ -85,6 +87,7 @@ class ConsignorPayoutService
             }
             $stock[(int) ($s['product_id'] ?? 0)] = $qty;
         }
+        $returns = array_values(array_unique(array_filter(array_map('intval', (array) ($d['returns'] ?? [])))));
         if ($stock && (new StockCountService($this->db, $this->docs, $this->audit))->hasOpenRound()) {
             throw new \RuntimeException('มีรอบตรวจนับสต๊อกเปิดอยู่ ปรับยอดคงเหลือได้ในรอบนั้นแทน');
         }
@@ -124,12 +127,42 @@ class ConsignorPayoutService
             if ($stock) {
                 $this->adjustStock($consignorId, $stock, $id, $reason, $userId, $ip);
             }
+            if ($returns) {
+                $this->returnAll($consignorId, $returns, $id, $note, $userId, $ip);
+            }
             $this->db->commit();
             return $id;
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /** All that is left of the chosen products goes back to the consignor: one return document, stock 0. */
+    private function returnAll(int $consignorId, array $productIds, int $withdrawalId, string $note, int $userId, ?string $ip): void
+    {
+        $in = implode(',', array_fill(0, count($productIds), '?'));
+        $stmt = $this->db->prepare("SELECT id, name, qty_stock FROM products WHERE id IN ($in) AND consignor_id = ? FOR UPDATE");
+        $stmt->execute([...$productIds, $consignorId]);
+        $rows = $stmt->fetchAll();
+        if (count($rows) !== count($productIds)) {
+            throw new \RuntimeException('คืนสินค้าได้เฉพาะสินค้าของผู้ฝากขายรายนี้');
+        }
+        $items = [];
+        foreach ($rows as $p) {
+            if ((int) $p['qty_stock'] > 0) {
+                $items[] = ['product_id' => (int) $p['id'], 'qty' => (int) $p['qty_stock']];
+            }
+        }
+        if (!$items) {
+            return; // nothing left on the shelf to hand back
+        }
+        $c = $this->db->prepare('SELECT name FROM consignors WHERE id = ?');
+        $c->execute([$consignorId]);
+        $doc = (new ReturnService($this->db, new ProductRepo($this->db, $this->audit), $this->docs, $this->audit))
+            ->returnGoods($consignorId, $items, ($c->fetchColumn() ?: null), $userId, $ip);
+        $this->db->prepare('UPDATE withdrawals SET note = ? WHERE id = ?')
+            ->execute([mb_substr("{$note} · คืนสินค้า {$doc['doc_no']} {$doc['total_qty']} ชิ้น", 0, 255), $withdrawalId]);
     }
 
     /** What is left of the consignor's goods, set with the payout: one approved stock count. */

@@ -564,8 +564,10 @@ export async function render(container, { user, permissions = [] } = {}) {
     const newWage = () => ({ user_id: '', wage_type: 'day', units: '', rate: '', amount: '', method: 'cash', from_drawer: true, note: '', touched: false });
     const newPayout = () => ({
         consignor_id: '', period: 'today', from: '', to: '', data: null, loading: false, picked: new Set(),
-        amount: '', touched: false, reason: '', method: 'cash', from_drawer: true, stock: {},
+        amount: '', touched: false, reason: '', method: 'cash', from_drawer: true, stock: {}, returns: new Set(),
     });
+    /** Pieces of a consignor product still on the shelf (the payout data lists those not at 0). */
+    const pfLeft = (d, id) => Number(d.stock.find((x) => Number(x.id) === Number(id))?.qty_stock || 0);
 
     async function loadPayOptions(m) {
         try {
@@ -679,21 +681,29 @@ export async function render(container, { user, permissions = [] } = {}) {
         const d = p.data;
         const [from, to] = pfRange(m);
         const periods = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['custom', 'กำหนดเอง']];
+        const canReturn = can('return.create');
         const salesHtml = !p.consignor_id ? '' : p.loading ? '<div class="muted" style="margin-top:8px">กำลังโหลดรายการขาย...</div>' : !d ? '' : `
           ${d.ready ? '' : '<div class="error-box" style="margin-top:8px;font-size:12.5px">ยังแยกรายการที่เบิกแล้วไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0057) ก่อน</div>'}
           <div style="font-weight:600;font-size:13px;margin-top:10px">รายการขายที่ยังไม่ได้เบิก ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`}</div>
           ${d.sales.length ? `<table class="cl-t" style="font-size:13px"><tbody>
-            ${d.sales.map((x) => `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
+            ${d.sales.map((x) => {
+                const left = pfLeft(d, x.product_id);
+                return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
                 <input type="checkbox" data-pf-pick="${x.product_id}" ${p.picked.has(x.product_id) ? 'checked' : ''} style="margin-top:3px">
                 <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ขาย ${x.qty} ชิ้น ฿${money(x.sales)}</span></span></label></td>
-              <td class="num" style="white-space:nowrap">฿ ${money(x.share)}</td></tr>`).join('')}
+              <td class="num" style="white-space:nowrap">฿ ${money(x.share)}
+                ${canReturn ? `<label class="muted" style="display:flex;gap:4px;align-items:center;justify-content:flex-end;font-size:11.5px;margin-top:2px;${left > 0 ? 'cursor:pointer' : 'opacity:.6'}"
+                  title="${left > 0 ? `คืนสินค้าที่เหลือทั้งหมด ${left} ชิ้นให้ผู้ฝาก (คงเหลือเป็น 0)` : 'ไม่มีสินค้าเหลือให้คืน'}">
+                  <input type="checkbox" data-pf-return="${x.product_id}" ${p.returns.has(x.product_id) && left > 0 ? 'checked' : ''} ${left > 0 ? '' : 'disabled'}>
+                  คืนสินค้า${left > 0 ? ` (${left} ชิ้น)` : ''}</label>` : ''}</td></tr>`;
+            }).join('')}
             <tr><td><b>ส่วนของผู้ฝาก (รายการที่เลือก)</b></td><td class="num"><b>฿ ${money(pfSales(m))}</b></td></tr>
           </tbody></table>` : '<div class="muted" style="font-size:12.5px;margin-top:4px">ไม่มีรายการขายที่ยังไม่ได้เบิกในช่วงนี้</div>'}`;
         const stockHtml = !d || !d.stock.length ? '' : `
           <details style="margin-top:10px" ${Object.values(p.stock).some((x) => x.on) ? 'open' : ''}>
             <summary style="cursor:pointer;font-weight:600;font-size:13px">ปรับยอดคงเหลือสินค้า (เช่น สินค้าสูญหาย)</summary>
             <table class="cl-t" style="font-size:13px"><tbody>
-            ${d.stock.map((x) => {
+            ${d.stock.filter((x) => !p.returns.has(Number(x.id))).map((x) => {
                 const st = p.stock[x.id] || { on: false, qty: '0' };
                 return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
                     <input type="checkbox" data-pf-stock="${x.id}" ${st.on ? 'checked' : ''} style="margin-top:3px">
@@ -816,6 +826,11 @@ export async function render(container, { user, permissions = [] } = {}) {
             if (cb.checked) pf.picked.add(id); else pf.picked.delete(id);
             drawDay();
         }));
+        m.el.querySelectorAll('[data-pf-return]').forEach((cb) => cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.pfReturn);
+            if (cb.checked) { pf.returns.add(id); delete pf.stock[id]; } else pf.returns.delete(id);
+            drawDay();
+        }));
         m.el.querySelectorAll('[data-pf-stock]').forEach((cb) => cb.addEventListener('change', () => {
             const id = cb.dataset.pfStock;
             pf.stock[id] = { qty: '0', ...pf.stock[id], on: cb.checked };
@@ -884,8 +899,9 @@ export async function render(container, { user, permissions = [] } = {}) {
         if (!(amount > 0)) return fail('จำนวนเงินที่จ่ายต้องมากกว่า 0');
         if (differs && !p.reason.trim()) return fail('ยอดที่จ่ายไม่ตรงกับยอดขาย กรุณาระบุเหตุผล');
         const stock = [];
+        const returns = [...p.returns].filter((id) => pfLeft(d, id) > 0);
         for (const [id, st] of Object.entries(p.stock)) {
-            if (!st.on) continue;
+            if (!st.on || p.returns.has(Number(id))) continue;
             const qty = Number(st.qty);
             if (st.qty === '' || !Number.isInteger(qty) || qty < 0) return fail('จำนวนคงเหลือที่ปรับต้องเป็นจำนวนเต็มไม่ติดลบ');
             stock.push({ product_id: Number(id), qty });
@@ -899,7 +915,8 @@ export async function render(container, { user, permissions = [] } = {}) {
             + ` · รายการขาย ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`} ฿${money(sales)}`
             + (differs ? ` · ต่างจากยอดขาย ${signed(amount - sales)}: ${p.reason.trim()}` : '')
             + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}` : '')
-            + (stock.length ? ` · ปรับคงเหลือ ${stock.map((x) => `${names(x.product_id)} เป็น ${x.qty} ชิ้น`).join(', ')}` : ''),
+            + (stock.length ? ` · ปรับคงเหลือ ${stock.map((x) => `${names(x.product_id)} เป็น ${x.qty} ชิ้น`).join(', ')}` : '')
+            + (returns.length ? ` · คืนสินค้าให้ผู้ฝาก (คงเหลือเป็น 0): ${returns.map((id) => `${names(id)} ${pfLeft(d, id)} ชิ้น`).join(', ')}` : ''),
             { title: 'ยืนยันการจ่ายเงินผู้ฝากขาย?', okText: 'บันทึก' }
         );
         if (!ok || docModalGone(m)) return;
@@ -909,7 +926,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         try {
             const res = await api.post(`/closing/${m.date}/payouts`, {
                 consignor_id: c.id, from, to, product_ids: [...p.picked], amount, reason: differs ? p.reason.trim() : '',
-                stock, method: p.method, from_drawer: fromDrawer,
+                stock, returns, method: p.method, from_drawer: fromDrawer,
             });
             if (docModalGone(m)) return;
             m.payBusy = false;

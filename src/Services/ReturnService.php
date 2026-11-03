@@ -24,7 +24,11 @@ class ReturnService
             throw new \RuntimeException('ไม่มีรายการคืนสินค้า');
         }
 
-        $this->db->beginTransaction();
+        // Inside a caller's transaction (a consignor payout returning goods) it joins that one.
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
         try {
             $docNo = $this->docs->next('RT', 'return_documents', 'doc_no');
             $insDoc = $this->db->prepare(
@@ -67,10 +71,14 @@ class ReturnService
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
             ], $userId, $ip);
 
-            $this->db->commit();
+            if ($own) {
+                $this->db->commit();
+            }
             return ['id' => $docId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2)];
         } catch (\Throwable $e) {
-            $this->db->rollBack();
+            if ($own) {
+                $this->db->rollBack();
+            }
             throw $e;
         }
     }
