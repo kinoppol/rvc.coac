@@ -40,7 +40,21 @@ export async function render(container, { navigate, permissions, user }) {
     let res = null;
     // Barcode editor: piece barcode (scanned at the POS) + any number of pack barcodes.
     // Admins can also hand the product to a consignor (goods that skipped receiving).
-    let editing = null; // { id, name, barcode, packs: [{ barcode, pack_size }], consign, consignorId, consignCost, error, busy }
+    let editing = null; // { id, name, barcode, packs: [{ codes: [barcode...], pack_size, sale_price }], consign, consignorId, consignCost, error, busy }
+
+    /**
+     * Pack barcodes as edited: one row per pack (size + whole-pack price) holding all its barcodes,
+     * e.g. the same 12-bottle pack from two suppliers. Saved as one pack barcode per code.
+     */
+    function packRows(list) {
+        const rows = new Map();
+        for (const b of list) {
+            const key = `${b.pack_size}|${b.sale_price ?? ''}`;
+            if (!rows.has(key)) rows.set(key, { codes: [], pack_size: b.pack_size, sale_price: b.sale_price });
+            if (b.barcode) rows.get(key).codes.push(b.barcode);
+        }
+        return [...rows.values()].map((r) => (r.codes.length ? r : { ...r, codes: [''] }));
+    }
     const canEdit = permissions.includes('purchase.create');
     const canConsign = canEdit && user?.role === 'admin';
     // Counting on the phone with no round open sets stock at once: approvers only.
@@ -244,7 +258,7 @@ export async function render(container, { navigate, permissions, user }) {
             const consigned = p.consignor_id != null;
             if (canConsign && !consigned && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
             editing = {
-                id: p.id, name: p.name, barcode: p.barcode || '', packs: p.pack_barcodes.map((x) => ({ ...x })), consigned, consignorName: p.consignor_name,
+                id: p.id, name: p.name, barcode: p.barcode || '', packs: packRows(p.pack_barcodes), consigned, consignorName: p.consignor_name,
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
                 priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price),
                 pastQty: Number(p.store_sold_qty), claimPast: true,
@@ -252,7 +266,7 @@ export async function render(container, { navigate, permissions, user }) {
                 cpCost: String(Number(p.cost_price)), cpPrice: String(Number(p.sale_price)),
                 error: null, busy: false,
             };
-            if (!consigned && !editing.packs.length) editing.packs.push({ barcode: '', pack_size: '' });
+            if (!consigned && !editing.packs.length) editing.packs.push({ codes: [''], pack_size: '' });
             draw();
             container.querySelector(consigned ? '#bc-piece' : '#bc-name')?.focus();
             if (!consigned) {
@@ -340,9 +354,10 @@ export async function render(container, { navigate, permissions, user }) {
             }
             if (!e.barcode.trim() || e.consigned) {
                 e.barcode = code;
-            } else if (e.barcode.trim() !== code && !e.packs.some((p) => String(p.barcode ?? '').trim() === code)) {
-                const empty = e.packs.find((p) => !String(p.barcode ?? '').trim());
-                if (empty) empty.barcode = code; else e.packs.push({ barcode: code, pack_size: '' });
+            } else if (e.barcode.trim() !== code && !e.packs.some((p) => p.codes.some((c) => c.trim() === code))) {
+                const empty = e.packs.find((p) => p.codes.some((c) => !c.trim()));
+                if (empty) empty.codes[empty.codes.findIndex((c) => !c.trim())] = code;
+                else e.packs.push({ codes: [code], pack_size: '' });
             }
             draw();
             return;
@@ -428,11 +443,65 @@ export async function render(container, { navigate, permissions, user }) {
         } catch (e) { alertDialog(e.message, { tone: 'error' }); }
     }
 
-    // Duplicate rows of one item (same owner + same name, e.g. a repeat deposit booked as a new
-    // listing): admins can merge them. The oldest row is the usual one to keep.
-    const dupKey = (p) => `${p.consignor_id ?? 'store'}|${String(p.name).trim().replace(/\s+/g, ' ').toLowerCase()}`;
+    // Duplicate rows of one item (same owner + same or almost the same name, e.g. a repeat deposit
+    // booked as a new listing, or "สตรอเบอร์รี่" / "สตรอว์เบอร์รี่"): admins can merge them.
+    // The oldest row is the usual one to keep.
+    let dupGroups = { data: null, byId: new Map() };
     function dupsOf(p) {
-        return res.data.filter((x) => dupKey(x) === dupKey(p)).sort((a, b) => Number(a.id) - Number(b.id));
+        if (dupGroups.data !== res.data) dupGroups = { data: res.data, byId: groupDuplicates(res.data) };
+        return dupGroups.byId.get(p.id) || [p];
+    }
+    // Name as spelled loosely: no spaces/punctuation/case, tone marks dropped, a silent letter with
+    // ์ (ว์, ร์) dropped, units written alike (มล. = ml).
+    const looseName = (name) => String(name).toLowerCase()
+        .replace(/มล\.?|มิลลิลิตร/g, 'ml').replace(/ลิตร/g, 'l').replace(/กรัม|ก\./g, 'g')
+        .replace(/[ก-ฮ]์/g, '')
+        .replace(/[็-๎]/g, '')
+        .replace(/[^\p{L}\p{M}\p{N}]/gu, '');
+    const digitsOf = (name) => (name.match(/\d+/g) || []).join(',');
+    // One letter added/removed/changed (a typo), on names long enough for that to be a typo.
+    function oneEditApart(a, b) {
+        if (Math.abs(a.length - b.length) > 1 || Math.min(a.length, b.length) < 10) return false;
+        let i = 0;
+        while (i < a.length && a[i] === b[i]) i++;
+        if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+        return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+    }
+    /** product id => its duplicate group (oldest first). Sizes / numbers in the name must match. */
+    function groupDuplicates(list) {
+        const keyed = list.map((p) => {
+            const loose = looseName(p.name);
+            return { p, owner: String(p.consignor_id ?? 'store'), loose, digits: digitsOf(loose) };
+        });
+        const parent = keyed.map((_, i) => i);
+        const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+        const buckets = new Map();
+        keyed.forEach((k, i) => {
+            const key = `${k.owner}|${k.digits}`;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(i);
+        });
+        for (const idx of buckets.values()) {
+            for (let x = 0; x < idx.length; x++) {
+                for (let y = x + 1; y < idx.length; y++) {
+                    const a = keyed[idx[x]].loose;
+                    const b = keyed[idx[y]].loose;
+                    if (a === b || oneEditApart(a, b)) parent[find(idx[x])] = find(idx[y]);
+                }
+            }
+        }
+        const groups = new Map();
+        keyed.forEach((k, i) => {
+            const r = find(i);
+            if (!groups.has(r)) groups.set(r, []);
+            groups.get(r).push(k.p);
+        });
+        const byId = new Map();
+        for (const g of groups.values()) {
+            g.sort((a, b) => Number(a.id) - Number(b.id));
+            g.forEach((p) => byId.set(p.id, g));
+        }
+        return byId;
     }
     async function mergeInto(p) {
         const group = dupsOf(p);
@@ -483,6 +552,8 @@ export async function render(container, { navigate, permissions, user }) {
           ${salesDiffer ? `<div class="error-box" style="margin-top:8px;font-size:13px">ราคาขายไม่เท่ากัน — หลังรวมขายที่ ฿${money(after.sale_price)} (ราคาที่ขีดฆ่าจะไม่ใช้ต่อ)</div>` : ''}
           ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน — หลังรวมใช้ <b>${escapeHtml(useCode)}</b> ของรายการที่ซื้อ/รับล่าสุด
             · ${heldCodes.map(escapeHtml).join(', ')} เก็บไว้ตรวจสอบที่รายการนี้ ใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก (ถ้าเป็นการบันทึกผิดพลาด)</div>` : ''}
+          ${group.some((x) => x.name !== p.name) ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ชื่อสินค้าสะกดต่างกันเล็กน้อย — ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกัน หลังรวมใช้ชื่อ <b>«${escapeHtml(p.name)}»</b> ของรายการหลัก
+            (ถ้าต้องการชื่ออื่น กด "รวมเข้ารายการนี้แทน" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
           ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
         const ok = await confirmDialog(
             `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
@@ -527,7 +598,7 @@ export async function render(container, { navigate, permissions, user }) {
             ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
             ${dups.length > 1
-                ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อนี้ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
+                ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อเดียวกัน (หรือสะกดต่างกันเล็กน้อย) ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}
             ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
               <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
@@ -601,13 +672,16 @@ export async function render(container, { navigate, permissions, user }) {
     function packsHtml(e) {
         return `
               <div style="font-weight:600;margin-bottom:4px">บาร์โค้ดแพ็ค/ลัง</div>
-              <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง (แพ็คที่ไม่มีบาร์โค้ดใส่เฉพาะชิ้น/แพ็คกับราคายกแพ็คได้)
+              <div class="muted" style="font-size:12.5px;margin-bottom:8px">สินค้าเดียวกันอาจมาหลายแพ็ค (เช่น 24, 30, 50 ชิ้น) แต่ละแพ็คมีบาร์โค้ดของตัวเอง แพ็คเดียวกันมีได้หลายบาร์โค้ด (เช่น ซื้อจากหลายร้าน) กด "+ บาร์โค้ด" (แพ็คที่ไม่มีบาร์โค้ดใส่เฉพาะชิ้น/แพ็คกับราคายกแพ็คได้)
                 ระบบใช้จับคู่สินค้าและเติมจำนวนชิ้น/แพ็คให้ตอนซื้อเข้า</div>
               <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th>
                 <th class="num" title="ส่วนลดเมื่อซื้อยกแพ็ค เทียบกับซื้อแยกชิ้น (ราคา/ชิ้น × ชิ้น/แพ็ค)">ส่วนลด/แพ็ค</th>
                 <th class="num" title="เว้นว่าง = ไม่ขายยกแพ็ค ขายแยกชิ้นเท่านั้น">ราคาขายยกแพ็ค</th><th></th></tr></thead><tbody>
                 ${e.packs.map((p, i) => `<tr data-pack="${i}">
-                  <td><input data-pf="barcode" data-barcode autocomplete="off" value="${escapeHtml(p.barcode)}" placeholder="ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค" style="width:100%"></td>
+                  <td>${p.codes.map((c, j) => `<div class="pack-code">
+                      <input data-pf="barcode" data-code="${j}" data-barcode autocomplete="off" value="${escapeHtml(c)}" placeholder="${j ? 'สแกนบาร์โค้ดเพิ่ม' : 'ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค'}">
+                      ${p.codes.length > 1 ? `<button type="button" class="link-btn" data-del-code="${j}" title="เอาบาร์โค้ดนี้ออก" aria-label="เอาบาร์โค้ดนี้ออก">✕</button>` : ''}</div>`).join('')}
+                    <button type="button" class="link-btn" data-add-code style="font-size:12px">+ บาร์โค้ด</button></td>
                   <td><input data-pf="pack_size" type="number" min="2" step="1" value="${escapeHtml(p.pack_size)}" class="num" style="width:80px"></td>
                   <td><input data-pd type="number" min="0" step="0.25" value="${escapeHtml(packDiscount(p))}" placeholder="0" class="num" style="width:90px"></td>
                   <td><input data-pf="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(p.sale_price ?? '')}" placeholder="ไม่ขายยกแพ็ค" class="num" style="width:110px">
@@ -754,7 +828,8 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelectorAll('tr[data-pack]').forEach((tr) => {
             const p = e.packs[Number(tr.dataset.pack)];
             tr.querySelectorAll('[data-pf]').forEach((inp) => inp.addEventListener('input', () => {
-                p[inp.dataset.pf] = inp.value;
+                if (inp.dataset.code != null) p.codes[Number(inp.dataset.code)] = inp.value;
+                else p[inp.dataset.pf] = inp.value;
                 tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
                 if (inp.dataset.pf !== 'barcode') tr.querySelector('[data-pd]').value = packDiscount(p);
             }));
@@ -768,13 +843,22 @@ export async function render(container, { navigate, permissions, user }) {
                 tr.querySelector('[data-pf="sale_price"]').value = p.sale_price;
                 tr.querySelector('[data-pack-hint]').innerHTML = packHint(p);
             });
+            tr.querySelector('[data-add-code]').addEventListener('click', () => {
+                p.codes.push('');
+                draw();
+                container.querySelector(`tr[data-pack="${tr.dataset.pack}"] [data-code="${p.codes.length - 1}"]`)?.focus();
+            });
+            tr.querySelectorAll('[data-del-code]').forEach((b) => b.addEventListener('click', () => {
+                p.codes.splice(Number(b.dataset.delCode), 1);
+                draw();
+            }));
         });
         container.querySelectorAll('[data-del-pack]').forEach((b) => b.addEventListener('click', () => {
             e.packs.splice(Number(b.dataset.delPack), 1);
             draw();
         }));
         container.querySelector('#bc-add')?.addEventListener('click', () => {
-            e.packs.push({ barcode: '', pack_size: '' });
+            e.packs.push({ codes: [''], pack_size: '' });
             draw();
             const inputs = container.querySelectorAll('[data-pf="barcode"]');
             inputs[inputs.length - 1]?.focus();
@@ -818,12 +902,13 @@ export async function render(container, { navigate, permissions, user }) {
                     ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
                     ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),
                     // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
-                    pack_barcodes: e.packs
-                        .map((p) => ({
-                            barcode: String(p.barcode ?? '').trim(), pack_size: Number(p.pack_size),
-                            sale_price: p.sale_price === '' || p.sale_price == null ? null : Number(p.sale_price),
-                        }))
-                        .filter((p) => p.barcode || p.sale_price !== null),
+                    pack_barcodes: e.packs.flatMap((p) => {
+                        const size = Number(p.pack_size);
+                        const price = p.sale_price === '' || p.sale_price == null ? null : Number(p.sale_price);
+                        const codes = [...new Set(p.codes.map((c) => c.trim()).filter(Boolean))];
+                        if (codes.length) return codes.map((barcode) => ({ barcode, pack_size: size, sale_price: price }));
+                        return price !== null ? [{ barcode: '', pack_size: size, sale_price: price }] : [];
+                    }),
                 });
                 const p = res.data.find((x) => x.id === e.id);
                 p.name = out.data.name;
