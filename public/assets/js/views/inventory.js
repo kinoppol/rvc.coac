@@ -32,6 +32,8 @@ const FILTERS = [
     ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
     ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
+    // Same / almost the same name of the same owner (the test needs the loaded list: set in render).
+    ['dup', 'สินค้าซ้ำซ้อน', null],
 ];
 const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
@@ -116,9 +118,19 @@ export async function render(container, { navigate, permissions, user }) {
         draw();
     }
 
+    function filterFn(key) {
+        return key === 'dup' ? (p) => dupsOf(p).length > 1 : FILTERS.find(([k]) => k === key)[2];
+    }
+
     function draw() {
         const s = res.summary;
-        const shown = sorted(res.data.filter(FILTERS.find(([k]) => k === filter)[2]));
+        let shown = sorted(res.data.filter(filterFn(filter)));
+        // Duplicates: each group's rows together, in the order the sort puts the group's first row.
+        if (filter === 'dup') {
+            const at = new Map();
+            shown.forEach((p, i) => { const g = dupsOf(p)[0].id; if (!at.has(g)) at.set(g, i); });
+            shown = shown.map((p, i) => [at.get(dupsOf(p)[0].id), i, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
+        }
         const canBuy = permissions.includes('purchase.create');
         container.innerHTML = `
         <div id="inv-page" hidden></div>
@@ -148,7 +160,7 @@ export async function render(container, { navigate, permissions, user }) {
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}">${l} (${count(res.data.filter(fn).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${k === 'dup' ? ' title="ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)"' : ''}>${l} (${count(res.data.filter(filterFn(k)).length)})</button>`).join('')}
           </div>
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
