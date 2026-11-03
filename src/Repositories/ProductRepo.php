@@ -95,6 +95,8 @@ class ProductRepo
      * A store product booked at cost 0 (stock that was on the shelf, cost not known) gets the
      * cost found out later: the product's piece cost, and every past sale line of it still at
      * cost 0 (POS and imported sales alike), so the profit of past days is counted right.
+     * A cost set this way can be corrected while no purchase has given the product its cost:
+     * the sale lines at the old cost (a sale books cost × qty) move to the new one too.
      *
      * @return array{lines:int, qty:int, cost:float}
      */
@@ -104,31 +106,47 @@ class ProductRepo
         if (!$old || $old['consignor_id'] !== null) {
             throw new \RuntimeException('ระบุต้นทุนได้เฉพาะสินค้าของร้าน');
         }
-        if ((float) $old['cost_price'] >= 0.005) {
-            throw new \RuntimeException('สินค้านี้มีต้นทุนแล้ว (ต้นทุนคิดจากใบซื้อ) ระบุต้นทุนได้เฉพาะสินค้าที่ต้นทุนเป็น 0');
+        $oldCost = round((float) $old['cost_price'], 2);
+        if ($oldCost >= 0.005 && $this->hasPurchaseCost($productId)) {
+            throw new \RuntimeException('ต้นทุนของสินค้านี้คิดจากใบซื้อแล้ว แก้ที่ใบซื้อแทน (ระบุ/แก้ต้นทุนเองได้เฉพาะสินค้าที่ยังไม่มีใบซื้อ)');
         }
         $cost = round($cost, 2);
         if ($cost <= 0 || $cost > 1000000) {
             throw new \RuntimeException('ต้นทุน/ชิ้นไม่ถูกต้อง');
         }
-        $stmt = $this->db->prepare(
-            'SELECT COUNT(*) AS line_count, COALESCE(SUM(qty), 0) AS qty FROM sale_items
-             WHERE product_id = ? AND consignor_id IS NULL AND cost_amount = 0 AND qty > 0'
-        );
-        $stmt->execute([$productId]);
+        if (abs($cost - $oldCost) < 0.005) {
+            return ['lines' => 0, 'qty' => 0, 'cost' => 0.0, 'old_cost' => $oldCost];
+        }
+        // Lines still at cost 0, and (a correction) the lines booked at the old cost.
+        $match = 'product_id = ? AND consignor_id IS NULL AND qty > 0 AND (cost_amount = 0 OR (? > 0 AND cost_amount = ROUND(qty * ?, 2)))';
+        $params = [$productId, $oldCost, $oldCost];
+        $stmt = $this->db->prepare("SELECT COUNT(*) AS line_count, COALESCE(SUM(qty), 0) AS qty FROM sale_items WHERE $match");
+        $stmt->execute($params);
         $past = $stmt->fetch();
         $this->db->prepare(
-            'UPDATE sale_items SET cost_amount = ROUND(qty * ?, 2), fee_amount = ROUND(qty * unit_price - qty * ?, 2)
-             WHERE product_id = ? AND consignor_id IS NULL AND cost_amount = 0 AND qty > 0'
-        )->execute([$cost, $cost, $productId]);
+            "UPDATE sale_items SET cost_amount = ROUND(qty * ?, 2), fee_amount = ROUND(qty * unit_price - qty * ?, 2) WHERE $match"
+        )->execute([$cost, $cost, ...$params]);
         $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
-        $out = ['lines' => (int) $past['line_count'], 'qty' => (int) $past['qty'], 'cost' => round((int) $past['qty'] * $cost, 2)];
-        $this->audit->log('products', $productId, 'update', ['cost_price' => 0.0], [
+        $out = ['lines' => (int) $past['line_count'], 'qty' => (int) $past['qty'], 'cost' => round((int) $past['qty'] * $cost, 2), 'old_cost' => $oldCost];
+        $this->audit->log('products', $productId, 'update', ['cost_price' => $oldCost], [
             'cost_price' => $cost,
-            'note' => 'ระบุต้นทุนที่สืบทราบภายหลัง และเติมต้นทุนให้ยอดขายย้อนหลังที่ต้นทุนเป็น 0',
+            'note' => $oldCost > 0
+                ? 'แก้ต้นทุนที่ระบุเอง และปรับต้นทุนของยอดขายย้อนหลังตามต้นทุนใหม่'
+                : 'ระบุต้นทุนที่สืบทราบภายหลัง และเติมต้นทุนให้ยอดขายย้อนหลังที่ต้นทุนเป็น 0',
             'past_sales' => $out,
         ], $userId, $ip);
         return $out;
+    }
+
+    /** The product's cost comes from a purchase (a received purchase line of it). */
+    private function hasPurchaseCost(int $productId): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1 FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+             WHERE pi.product_id = ? AND pi.item_type = 'stock' AND pd.status = 'active' LIMIT 1"
+        );
+        $stmt->execute([$productId]);
+        return (bool) $stmt->fetchColumn();
     }
 
     /**
