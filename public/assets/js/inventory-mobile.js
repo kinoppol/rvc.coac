@@ -38,7 +38,7 @@ export function openInventoryMobile({ canLink, canPhoto, onClose }) {
       <div class="mc-cam" data-el="cam" hidden><video playsinline muted></video><div class="mc-aim"></div></div>
       <div class="mc-scroll">
         <form data-el="form" style="display:flex;gap:6px">
-          <input class="mc-search" data-el="code" style="flex:1;min-width:0" placeholder="พิมพ์หรือสแกนบาร์โค้ด" inputmode="numeric" autocomplete="off">
+          <input class="mc-search" data-el="code" data-barcode style="flex:1;min-width:0" placeholder="พิมพ์หรือสแกนบาร์โค้ด" inputmode="numeric" autocomplete="off">
           <button type="submit" class="mc-btn" style="flex:0 0 auto;padding:0 18px;min-height:48px">ค้นหา</button>
         </form>
         <div data-el="msg"></div>

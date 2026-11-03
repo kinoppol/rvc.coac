@@ -96,7 +96,7 @@ export async function render(container) {
                 <label class="field">วันที่ผลิต * <input id="f-mfg" type="date" value="${depositDate}" max="${depositDate}" required>
                   <span class="muted" style="font-size:11.5px;font-weight:400">ไม่เกินวันที่ฝาก</span></label>
                 <label class="field">วันหมดอายุ (ถ้ามี) <input id="f-expiry" type="date"></label>
-                <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode"></label>
+                <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode" data-barcode autocomplete="off"></label>
               </div>
               <div id="quote-box" class="muted" style="font-size:13px"></div>
               <div><button type="button" class="btn secondary" id="btn-add">+ เพิ่มลงรายการ</button></div>

@@ -117,7 +117,7 @@ export async function render(container, { permissions = [], user } = {}) {
                 <label class="field">จำนวนที่ฝาก (ชิ้น) * <input id="f-qty" type="number" min="1" value="1"></label>
                 <label class="field">วันที่ผลิต * <input id="f-mfg" type="date" value="${todayISO()}" max="${todayISO()}" required></label>
                 <label class="field">วันหมดอายุ (ถ้ามี) <input id="f-expiry" type="date"></label>
-                <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode"></label>
+                <label class="field">บาร์โค้ด (ถ้ามี) <input id="f-barcode" data-barcode autocomplete="off"></label>
               </div>
               <div class="rc-add">
                 <div id="quote-box" class="muted" style="font-size:13px"></div>
@@ -649,7 +649,7 @@ export async function render(container, { permissions = [], user } = {}) {
         return `
           <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
             <label class="field" style="grid-column:span 2">ชื่อสินค้า <input data-ef="name" value="${escapeHtml(ed.name)}" maxlength="191"></label>
-            <label class="field">บาร์โค้ดชิ้น <input data-ef="barcode" value="${escapeHtml(ed.barcode)}"></label>
+            <label class="field">บาร์โค้ดชิ้น <input data-ef="barcode" data-barcode autocomplete="off" value="${escapeHtml(ed.barcode)}"></label>
             <label class="field">จำนวนรับฝาก (ชิ้น) <input data-ef="qty" type="number" min="${Math.max(1, gone)}" value="${escapeHtml(ed.qty)}">
               ${gone > 0 ? `<span class="muted" style="font-size:11.5px;font-weight:400">ขาย/คืน/ปรับไปแล้ว ${gone} ชิ้น</span>` : ''}</label>
             <label class="field">ผู้ฝากได้/ชิ้น ตั้งแต่นี้ไป <input data-ef="cost_price" type="number" min="0" step="0.25" value="${escapeHtml(ed.cost_price)}"></label>

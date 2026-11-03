@@ -565,7 +565,7 @@ export async function render(container, { navigate, permissions, user }) {
                 <input id="bc-name" value="${escapeHtml(e.name)}" maxlength="191" style="width:100%">
               </label>${nameOptionsHtml(e)}`}
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
-                <input id="bc-piece" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
+                <input id="bc-piece" data-barcode autocomplete="off" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
               ${canSetPrice && !e.consigned ? `<label class="field" style="display:block;margin-bottom:16px">ราคาขาย/ชิ้น (บาท)
                 <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
@@ -606,7 +606,7 @@ export async function render(container, { navigate, permissions, user }) {
               <table><thead><tr><th>บาร์โค้ดแพ็ค</th><th class="num">ชิ้น/แพ็ค</th>
                 <th class="num" title="เว้นว่าง = ไม่ขายยกแพ็ค ขายแยกชิ้นเท่านั้น">ราคาขายยกแพ็ค</th><th></th></tr></thead><tbody>
                 ${e.packs.map((p, i) => `<tr data-pack="${i}">
-                  <td><input data-pf="barcode" value="${escapeHtml(p.barcode)}" placeholder="ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค" style="width:100%"></td>
+                  <td><input data-pf="barcode" data-barcode autocomplete="off" value="${escapeHtml(p.barcode)}" placeholder="ไม่มีก็ได้ ถ้าตั้งราคายกแพ็ค" style="width:100%"></td>
                   <td><input data-pf="pack_size" type="number" min="2" step="1" value="${escapeHtml(p.pack_size)}" class="num" style="width:80px"></td>
                   <td><input data-pf="sale_price" type="number" min="0" step="0.25" value="${escapeHtml(p.sale_price ?? '')}" placeholder="ไม่ขายยกแพ็ค" class="num" style="width:110px">
                     <div class="muted" data-pack-hint style="font-size:11.5px">${packHint(p)}</div></td>

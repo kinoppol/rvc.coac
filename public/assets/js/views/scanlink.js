@@ -29,7 +29,7 @@ export async function render(container, { params = {} }) {
         <div class="mc-cam" data-el="cam" style="border-radius:12px" hidden><video playsinline muted></video><div class="mc-aim"></div></div>
         <button type="button" class="btn" data-el="scan" style="font-size:17px;padding:14px">📷 เปิดกล้องสแกน</button>
         <form data-el="form" style="display:flex;gap:6px">
-          <input data-el="code" style="flex:1;min-width:0;font-size:17px" placeholder="หรือพิมพ์บาร์โค้ด" inputmode="numeric" autocomplete="off">
+          <input data-el="code" data-barcode style="flex:1;min-width:0;font-size:17px" placeholder="หรือพิมพ์บาร์โค้ด" inputmode="numeric" autocomplete="off">
           <button type="submit" class="btn secondary">ส่ง</button>
         </form>
         <div data-el="msg"></div>

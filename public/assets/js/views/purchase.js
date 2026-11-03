@@ -360,7 +360,7 @@ export async function render(container, { user } = {}) {
                     <option value="stock" ${it.item_type === 'stock' ? 'selected' : ''}>เพื่อขาย</option>
                     <option value="supply" ${it.item_type === 'supply' ? 'selected' : ''}>ใช้ในกิจการ</option>
                   </select>${it.prevSupply && it.item_type === 'stock' ? '<div class="muted" style="font-size:11px;margin-top:2px" title="ใบซื้อก่อนหน้าบันทึกรายการนี้เป็นใช้ในกิจการ">เคยบันทึกเป็นใช้ในกิจการ</div>' : ''}</td>
-                  <td><input data-f="barcode" value="${escapeHtml(it.barcode)}" style="width:130px"></td>
+                  <td><input data-f="barcode" data-barcode autocomplete="off" value="${escapeHtml(it.barcode)}" style="width:130px"></td>
                   <td><input data-f="qty" type="number" min="1" step="1" value="${it.qty}" class="num" style="width:70px"></td>
                   <td><input data-f="pack_size" type="number" min="1" step="1" value="${it.pack_size}" class="num" style="width:62px"></td>
                   <td><input data-f="unit_cost" type="number" min="0" step="0.01" value="${it.unit_cost}" class="num" style="width:90px"></td>
