@@ -126,11 +126,32 @@ class InventoryController
     /** One product's details and every stock movement up to its current balance. */
     public function movements(Request $request, Response $response, array $args): Response
     {
-        $data = (new InventoryService(Db::connection()))->movements((int) $args['id']);
+        $db = Db::connection();
+        $data = (new InventoryService($db))->movements((int) $args['id']);
         if ($data === null) {
             return $this->error($response, 'ไม่พบสินค้า', 404);
         }
+        $data['photo_backups'] = (new ProductRepo($db, new AuditLogger($db)))->photoBackups((int) $args['id']);
         return $this->json($response, ['data' => $data]);
+    }
+
+    /** POST /inventory/{id}/photo/restore {token}: a backup photo becomes the product's photo again. */
+    public function restorePhoto(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $db = Db::connection();
+        $db->beginTransaction();
+        try {
+            (new ProductRepo($db, new AuditLogger($db)))->restorePhoto((int) $args['id'], (string) (((array) $request->getParsedBody())['token'] ?? ''), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            if ($e instanceof \RuntimeException) {
+                return $this->error($response, $e->getMessage(), 422);
+            }
+            throw $e;
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     /** Admin only: store products whose stock may be off from documents keyed in late or out of order. */

@@ -204,9 +204,16 @@ class StockCountController
     public function photo(Request $request, Response $response, array $args): Response
     {
         $db = Db::connection();
-        $product = (new ProductRepo($db, new AuditLogger($db)))->find((int) $args['id']);
+        $repo = new ProductRepo($db, new AuditLogger($db));
+        $product = $repo->find((int) $args['id']);
         $service = new AttachmentService($db);
-        $row = $product && $product['image_token'] ? $service->findByToken($product['image_token']) : null;
+        // ?token= one of the product's backup photos (kept at a merge / when a new photo was taken).
+        $token = (string) ($request->getQueryParams()['token'] ?? '');
+        if ($product && $token !== '' && $token !== $product['image_token']) {
+            $row = $repo->isPhotoBackup((int) $product['id'], $token) ? $service->findByToken($token) : null;
+        } else {
+            $row = $product && $product['image_token'] ? $service->findByToken($product['image_token']) : null;
+        }
         if (!$row) {
             return $this->error($response, 'ไม่พบรูปสินค้า', 404);
         }

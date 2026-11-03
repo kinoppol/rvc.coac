@@ -97,6 +97,24 @@ export async function openProductModal(productId, navigate) {
           <div class="muted" style="font-size:11.5px;margin-top:4px">มูลค่าคงเหลือคิดจากต้นทุนเฉลี่ยปัจจุบัน ฿${money(p.cost_price)}/ชิ้น · ต้นทุนขายตามที่บันทึกไว้ในแต่ละบิล</div>`;
     }
 
+    /** Older photos kept at a merge of duplicates / when a new photo was taken; any can be put back. */
+    function photoBackupsHtml() {
+        const list = d.photo_backups || [];
+        if (!list.length) return '';
+        return `
+            <details style="margin-top:12px">
+              <summary style="cursor:pointer;font-weight:600;font-size:14px">รูปสำรอง (${count(list.length)})</summary>
+              <div class="pm-backups">${list.map((b) => `
+                <div class="pm-backup">
+                  <img src="${api.downloadUrl(`/products/${p.id}/photo?size=thumb&token=${encodeURIComponent(b.image_token)}`)}" alt="" loading="lazy">
+                  <div class="muted" style="font-size:11.5px">${escapeHtml(fmtDateTime(b.taken_at || b.created_at))}</div>
+                  ${b.note ? `<div class="muted" style="font-size:11.5px">${escapeHtml(b.note)}</div>` : ''}
+                  <button type="button" class="btn secondary sm" data-restore-photo="${escapeHtml(b.image_token)}">ใช้รูปนี้</button>
+                </div>`).join('')}</div>
+              <div class="muted" style="font-size:12px;margin-top:6px">รูปเก่าไม่ถูกลบ · กด "ใช้รูปนี้" แล้วรูปปัจจุบันจะกลายเป็นรูปสำรองแทน</div>
+            </details>`;
+    }
+
     /** When the shelf price changed; bills sold before keep the price they were sold at. */
     function priceChangesHtml() {
         const list = d.price_changes || [];
@@ -136,6 +154,7 @@ export async function openProductModal(productId, navigate) {
                 ${p.expiry_date ? info('วันหมดอายุ', escapeHtml(fmtDate(p.expiry_date))) : ''}
               </div>
             </div>
+            ${photoBackupsHtml()}
             ${summaryHtml()}
             ${priceChangesHtml()}
             <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
@@ -158,6 +177,19 @@ export async function openProductModal(productId, navigate) {
             );
         }));
         box.querySelector('[data-order]').addEventListener('click', () => { newestFirst = !newestFirst; draw(); });
+        box.querySelectorAll('[data-restore-photo]').forEach((b) => b.addEventListener('click', async () => {
+            b.disabled = true;
+            try {
+                await api.post(`/inventory/${p.id}/photo/restore`, { token: b.dataset.restorePhoto });
+                const fresh = (await api.get(`/inventory/${productId}/movements`)).data;
+                p.image_token = fresh.product.image_token;
+                d.photo_backups = fresh.photo_backups;
+                draw();
+            } catch (e) {
+                b.disabled = false;
+                alertDialog(e.message, { tone: 'error' });
+            }
+        }));
     }
     draw();
 }

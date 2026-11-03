@@ -532,11 +532,19 @@ export async function render(container, { navigate, permissions, user }) {
         const useCode = codes[0] || null;
         const heldCodes = codes.slice(1);
         const salesDiffer = group.some((x) => money(x.sale_price) !== money(after.sale_price));
+        // Photo: the latest one taken goes on (as the server picks it), the others are kept as backups.
+        const withPhoto = group.filter((x) => x.image_token);
+        const photoKey = (x) => `${x.image_at || ''}|${String(x.id).padStart(12, '0')}`;
+        const usePhoto = withPhoto.reduce((a, x) => (!a || photoKey(x) > photoKey(a) ? x : a), null);
+        const photoCell = (x) => (x.image_token
+            ? `<img src="${api.downloadUrl(`/products/${x.id}/photo?size=thumb&v=${encodeURIComponent(x.image_token)}`)}" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:6px;display:block">
+               ${withPhoto.length > 1 ? (x.id === usePhoto.id ? '<span class="pill ok" style="font-size:11px">● ใช้ต่อ</span>' : '<span class="pill muted" style="font-size:11px">รูปสำรอง</span>') : ''}`
+            : '<span class="muted">—</span>');
         const sum = (k) => group.reduce((s, x) => s + Number(x[k] || 0), 0);
         const table = `
           <div class="tbl-scroll" style="margin-top:12px;border:1px solid var(--border);border-radius:10px;overflow:auto">
           <table style="font-size:13px">
-            <thead><tr><th></th><th>รหัส</th><th style="min-width:170px">ชื่อสินค้า</th><th>บาร์โค้ด</th><th>ซื้อ/รับล่าสุด</th><th class="num">ต้นทุน/ชิ้น</th><th class="num">ราคาขาย</th><th class="num">รับเข้า</th><th class="num">ขายแล้ว</th><th class="num">คงเหลือ</th></tr></thead>
+            <thead><tr><th></th><th>รหัส</th><th>รูป</th><th style="min-width:170px">ชื่อสินค้า</th><th>บาร์โค้ด</th><th>ซื้อ/รับล่าสุด</th><th class="num">ต้นทุน/ชิ้น</th><th class="num">ราคาขาย</th><th class="num">รับเข้า</th><th class="num">ขายแล้ว</th><th class="num">คงเหลือ</th></tr></thead>
             <tbody>${group.map((x) => {
                 const keep = x.id === p.id;
                 const isLatest = costsDiffer && x.id === latest.id;
@@ -544,6 +552,7 @@ export async function render(container, { navigate, permissions, user }) {
                 return `<tr style="${keep ? 'background:var(--ok-bg);font-weight:600;box-shadow:inset 4px 0 0 var(--ok)' : ''}">
                   <td style="white-space:nowrap">${keep ? '<span class="pill ok" style="font-size:11.5px">★ รายการหลัก</span>' : '<span class="pill muted" style="font-size:11.5px">→ รวมเข้า แล้วลบ</span>'}</td>
                   <td class="muted" style="white-space:nowrap">${x.id}${x.id === group[0].id ? ' <span style="font-size:11px">(เก่าสุด)</span>' : ''}</td>
+                  <td style="white-space:nowrap">${photoCell(x)}</td>
                   <td>${escapeHtml(x.name)}</td>
                   <td style="font-size:12px;white-space:nowrap">${escapeHtml(x.barcode || '—')}${heldCodes.length && x.barcode
                       ? (x.barcode.trim() === useCode ? '<div><span class="pill ok" style="font-size:11px">● ใช้ต่อ</span></div>' : '<div><span class="pill warn" style="font-size:11px">⏸ เก็บไว้ตรวจสอบ</span></div>') : ''}</td>
@@ -553,7 +562,7 @@ export async function render(container, { navigate, permissions, user }) {
                   <td class="num">${count(x.qty_received)}</td><td class="num">${count(x.qty_sold)}</td><td class="num">${count(x.qty_stock)}</td>
                 </tr>`;
             }).join('')}
-            <tr style="border-top:2px solid var(--border)"><td colspan="3"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
+            <tr style="border-top:2px solid var(--border)"><td colspan="4"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
               <td style="font-size:12px"><b>${escapeHtml(useCode || '—')}</b></td><td></td>
               <td class="num"><b>฿${money(after.cost_price)}</b></td><td class="num"><b>฿${money(after.sale_price)}</b></td>
               <td class="num"><b>${count(sum('qty_received'))}</b></td><td class="num"><b>${count(sum('qty_sold'))}</b></td><td class="num"><b>${count(sum('qty_stock'))}</b></td></tr>
@@ -566,6 +575,7 @@ export async function render(container, { navigate, permissions, user }) {
             · ${heldCodes.map(escapeHtml).join(', ')} เก็บไว้ตรวจสอบที่รายการนี้ ใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก (ถ้าเป็นการบันทึกผิดพลาด)</div>` : ''}
           ${group.some((x) => x.name !== p.name) ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ชื่อสินค้าสะกดต่างกันเล็กน้อย — ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกัน หลังรวมใช้ชื่อ <b>«${escapeHtml(p.name)}»</b> ของรายการหลัก
             (ถ้าต้องการชื่ออื่น กด "รวมเข้ารายการนี้แทน" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
+          ${withPhoto.length > 1 ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>มีรูปสินค้า ${withPhoto.length} รูป — หลังรวมใช้รูปล่าสุด (รายการ ${usePhoto.id}) รูปอื่นเก็บเป็นรูปสำรอง ไม่ลบ ดูหรือเปลี่ยนกลับได้ในหน้ารายละเอียดสินค้า</div></div>` : ''}
           ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
         const ok = await confirmDialog(
             `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`

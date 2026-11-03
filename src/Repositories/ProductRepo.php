@@ -361,6 +361,11 @@ class ProductRepo
         $barcode = $codes ? (string) array_key_first($codes) : null;
         $held = array_slice($codes, 1, null, true);
 
+        // Photo: the latest one taken goes on; every other photo is kept as a backup (not deleted).
+        $photos = $this->photosByLatest($rows);
+        $photo = $photos ? (string) array_key_first($photos) : null;
+        $photoBackups = array_slice($photos, 1, null, true);
+
         $refunded = 0.0;
         $sum = ['qty_received' => 0, 'qty_sold' => 0, 'qty_returned' => 0, 'qty_stock' => 0];
         foreach ($dupIds as $id) {
@@ -371,6 +376,11 @@ class ProductRepo
             foreach (['receive_items', 'return_items', 'sale_items', 'purchase_items', 'stock_count_items',
                       'stock_count_photos', 'pos_item_mappings', 'product_pack_barcodes'] as $table) {
                 $this->db->prepare("UPDATE $table SET product_id = ? WHERE product_id = ?")->execute([$keepId, $id]);
+            }
+            // Backups the duplicate already had come along (before migration 0059 there are none).
+            try {
+                $this->db->prepare('UPDATE IGNORE product_photo_backups SET product_id = ? WHERE product_id = ?')->execute([$keepId, $id]);
+            } catch (\PDOException $e) {
             }
             if ($dup['consignor_id'] !== null && $dup['listing_fee_status'] === 'charged'
                 && (float) $dup['listing_fee_amount'] > 0 && !(int) $dup['listing_fee_refunded']) {
@@ -391,8 +401,11 @@ class ProductRepo
 
         $this->db->prepare(
             'UPDATE products SET qty_received = qty_received + ?, qty_sold = qty_sold + ?, qty_returned = qty_returned + ?,
-                qty_stock = qty_stock + ?, barcode = ?, updated_at = NOW() WHERE id = ?'
-        )->execute([...array_values($sum), $barcode, $keepId]);
+                qty_stock = qty_stock + ?, barcode = ?, image_token = ?, updated_at = NOW() WHERE id = ?'
+        )->execute([...array_values($sum), $barcode, $photo, $keepId]);
+        foreach ($photoBackups as $token => $fromId) {
+            $this->backupPhoto($keepId, (string) $token, $fromId, "รวมรายการซ้ำ: รูปของรายการ {$fromId} (ใช้รูปล่าสุดแทน)", $userId, true);
+        }
         if ($held) {
             try {
                 $ins = $this->db->prepare(
@@ -421,10 +434,97 @@ class ProductRepo
             'merged_from' => $dupIds,
             'cost_from' => (int) $latest['id'],
             'held_barcodes' => array_map('strval', array_keys($held)),
+            'photo_backups' => array_map('strval', array_keys($photoBackups)),
             'cost_history' => array_map(fn ($r) => ['id' => (int) $r['id'], 'cost_price' => $r['cost_price'], 'sale_price' => $r['sale_price']], array_values($rows)),
         ], $userId, $ip);
 
-        return ['merged' => count($dupIds), 'refunded' => round($refunded, 2), 'barcode' => $barcode, 'held' => array_map('strval', array_keys($held))];
+        return ['merged' => count($dupIds), 'refunded' => round($refunded, 2), 'barcode' => $barcode, 'held' => array_map('strval', array_keys($held)),
+                'photo_backups' => count($photoBackups)];
+    }
+
+    /**
+     * Photos of rows being merged, the latest taken first: token => product id.
+     *
+     * @param array<int, array> $rows id => product row
+     * @return array<string,int>
+     */
+    private function photosByLatest(array $rows): array
+    {
+        $stmt = $this->db->prepare('SELECT created_at FROM attachments WHERE token = ?');
+        $keys = [];
+        foreach ($rows as $id => $r) {
+            $token = (string) ($r['image_token'] ?? '');
+            if ($token === '' || isset($keys[$token])) {
+                continue;
+            }
+            $stmt->execute([$token]);
+            $at = (string) ($stmt->fetchColumn() ?: ($r['updated_at'] ?? ''));
+            $keys[$token] = [$at . '|' . str_pad((string) $id, 12, '0', STR_PAD_LEFT), (int) $id];
+        }
+        uasort($keys, fn ($a, $b) => strcmp($b[0], $a[0]));
+        return array_map(fn ($k) => $k[1], $keys);
+    }
+
+    /**
+     * Keeps an older photo of a product. $required: the caller cannot go on without it (a merge
+     * would otherwise lose the photo); else a missing table (before migration 0059) is let be.
+     */
+    private function backupPhoto(int $productId, string $token, ?int $fromId, string $note, ?int $userId, bool $required): void
+    {
+        try {
+            $this->db->prepare(
+                'INSERT IGNORE INTO product_photo_backups (product_id, image_token, from_product_id, note, user_id, created_at) VALUES (?, ?, ?, ?, ?, NOW())'
+            )->execute([$productId, $token, $fromId, mb_substr($note, 0, 255), $userId]);
+        } catch (\PDOException $e) {
+            if ($required) {
+                throw new \RuntimeException('สินค้าที่จะรวมมีรูปมากกว่า 1 รูป ต้องเก็บรูปเก่าเป็นรูปสำรอง: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0059) ก่อน');
+            }
+        }
+    }
+
+    /** Backup photos of a product, the latest taken first ([] before migration 0059). */
+    public function photoBackups(int $productId): array
+    {
+        try {
+            $stmt = $this->db->prepare(
+                'SELECT b.image_token, b.from_product_id, b.note, b.created_at, a.created_at AS taken_at
+                 FROM product_photo_backups b LEFT JOIN attachments a ON a.token = b.image_token
+                 WHERE b.product_id = ? ORDER BY COALESCE(a.created_at, b.created_at) DESC, b.id DESC'
+            );
+            $stmt->execute([$productId]);
+            return $stmt->fetchAll();
+        } catch (\PDOException $e) {
+            return [];
+        }
+    }
+
+    public function isPhotoBackup(int $productId, string $token): bool
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT 1 FROM product_photo_backups WHERE product_id = ? AND image_token = ?');
+            $stmt->execute([$productId, $token]);
+            return (bool) $stmt->fetchColumn();
+        } catch (\PDOException $e) {
+            return false;
+        }
+    }
+
+    /** A backup photo becomes the product's photo again; the current one becomes a backup. */
+    public function restorePhoto(int $productId, string $token, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        if (!$this->isPhotoBackup($productId, $token)) {
+            throw new \RuntimeException('ไม่พบรูปสำรองนี้ของสินค้า');
+        }
+        if ($old['image_token']) {
+            $this->backupPhoto($productId, (string) $old['image_token'], null, 'รูปเดิม ก่อนเปลี่ยนกลับไปใช้รูปสำรอง', $userId, true);
+        }
+        $this->db->prepare('DELETE FROM product_photo_backups WHERE product_id = ? AND image_token = ?')->execute([$productId, $token]);
+        $this->db->prepare('UPDATE products SET image_token = ?, updated_at = NOW() WHERE id = ?')->execute([$token, $productId]);
+        $this->audit->log('products', $productId, 'update', ['image_token' => $old['image_token']], ['image_token' => $token, 'photo_restored' => true], $userId, $ip);
     }
 
     /**
@@ -569,6 +669,10 @@ class ProductRepo
         $old = $this->find($productId);
         if (!$old) {
             throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        // The photo it replaces is kept as a backup.
+        if ($old['image_token'] && $old['image_token'] !== $token) {
+            $this->backupPhoto($productId, (string) $old['image_token'], null, 'รูปเดิม ก่อนถ่ายรูปใหม่', $userId, false);
         }
         $this->db->prepare('UPDATE products SET image_token = ?, updated_at = NOW() WHERE id = ?')->execute([$token, $productId]);
         $this->audit->log('products', $productId, 'update', ['image_token' => $old['image_token']], ['image_token' => $token], $userId, $ip);

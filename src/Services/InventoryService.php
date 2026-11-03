@@ -24,6 +24,7 @@ class InventoryService
     public function products(string $search = '', bool $withConsigned = false): array
     {
         $sql = "SELECT p.id, p.name, p.barcode, p.image_token, p.consignor_id, c.name AS consignor_name,
+                       (SELECT a.created_at FROM attachments a WHERE a.token = p.image_token) AS image_at,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price,
                        ROUND(p.qty_stock * p.cost_price, 2) AS stock_cost_value,
