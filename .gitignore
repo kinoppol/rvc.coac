@@ -11,3 +11,4 @@ Thumbs.db
 /storage/uploads/*
 /storage/sessions/
 !/storage/uploads/.gitkeep
+/storage/backups/

@@ -32,7 +32,7 @@ final class SecurityScanService
     private const DENY_HTACCESS = ['config', 'storage', 'src', 'migrations', 'project', 'bin'];
     private const KNOWN_HTACCESS = ['.htaccess', 'public/.htaccess', 'config/.htaccess', 'storage/.htaccess', 'src/.htaccess', 'migrations/.htaccess', 'project/.htaccess', 'bin/.htaccess', 'storage/sessions/.htaccess'];
     // Not walked: Git internals, sessions (tokens) and the generated files under cache.
-    private const SKIP_DIRS = ['.git', 'node_modules', 'storage/sessions', QuarantineService::DIR];
+    private const SKIP_DIRS = ['.git', 'node_modules', 'storage/sessions', QuarantineService::DIR, BackupService::DIR];
 
     private const INPUT = '\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)|php:\/\/input|getallheaders\s*\(';
     private string $root;
@@ -322,7 +322,7 @@ final class SecurityScanService
     {
         $out = [];
         foreach ($files as $rel => $abs) {
-            if (preg_match('#^storage/(uploads|logs|cache|sessions)/#', $rel) || $rel === 'storage/security-baseline.json' || $rel === 'storage/repair-unlock.txt') {
+            if (preg_match('#^storage/(uploads|logs|cache|sessions|backups)/#', $rel) || $rel === 'storage/security-baseline.json' || $rel === 'storage/repair-unlock.txt') {
                 continue;
             }
             if (preg_match('/(\.(php\d?|phtml|phar|pht|inc|js|mjs|html?|css)|\/?\.htaccess|\.user\.ini)$/i', $rel) !== 1) {

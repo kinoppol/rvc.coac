@@ -12,6 +12,7 @@ use App\Controllers\WageController;
 use App\Controllers\AttachmentController;
 use App\Controllers\AuditController;
 use App\Controllers\AuthController;
+use App\Controllers\BackupController;
 use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
 use App\Controllers\InventoryController;
@@ -445,6 +446,17 @@ $app->group('/api', function ($group) {
     $group->post('/admin/security/quarantine/{id}/restore', [SecurityController::class, 'restore'])
         ->add(new RoleGuard('migrations.manage'));
     $group->post('/admin/security/quarantine/{id}/delete', [SecurityController::class, 'destroy'])
+        ->add(new RoleGuard('migrations.manage'));
+
+    $group->get('/admin/backups', [BackupController::class, 'index'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/backups', [BackupController::class, 'create'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->get('/admin/backups/{id:[a-z0-9_-]+}/download', [BackupController::class, 'download'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/backups/{id:[a-z0-9_-]+}/restore', [BackupController::class, 'restore'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/backups/{id:[a-z0-9_-]+}/delete', [BackupController::class, 'delete'])
         ->add(new RoleGuard('migrations.manage'));
 
     $group->get('/admin/audit-logs', [AuditController::class, 'index'])
