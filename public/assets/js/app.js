@@ -13,7 +13,7 @@ const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
     ret: 'return.create', count: 'stockcount.create', consignors: 'consignors.view',
     passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
-    settings: 'settings.view', migrations: 'migrations.manage', security: 'migrations.manage', backup: 'migrations.manage', audit: 'audit.view',
+    settings: 'settings.view', migrations: 'migrations.manage', security: 'migrations.manage', backup: 'migrations.manage', devices: 'devices.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
     posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage', closing: 'closing.submit',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',

@@ -29,7 +29,7 @@ final class SecurityScanService
     // Where PHP belongs. Anything else that runs as PHP was not put there by the system.
     private const PHP_ALLOWED = ['#^src/#', '#^migrations/#', '#^vendor/#', '#^bin/#', '#^config/config(\.sample)?\.php$#', '#^public/(index|install)\.php$#', '#^index\.php$#'];
     // Folders closed to the web by their own .htaccess (the root .htaccess turns them away too).
-    private const DENY_HTACCESS = ['config', 'storage', 'src', 'migrations', 'project', 'bin'];
+    private const DENY_HTACCESS = ['config', 'storage', 'src', 'migrations', 'project', 'bin', 'docs'];
     private const KNOWN_HTACCESS = ['.htaccess', 'public/.htaccess', 'config/.htaccess', 'storage/.htaccess', 'src/.htaccess', 'migrations/.htaccess', 'project/.htaccess', 'bin/.htaccess', 'storage/sessions/.htaccess'];
     // Not walked: Git internals, sessions (tokens) and the generated files under cache.
     private const SKIP_DIRS = ['.git', 'node_modules', 'storage/sessions', QuarantineService::DIR, BackupService::DIR];

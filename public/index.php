@@ -15,6 +15,8 @@ use App\Controllers\AuthController;
 use App\Controllers\BackupController;
 use App\Controllers\ConsignorController;
 use App\Controllers\DashboardController;
+use App\Controllers\DeviceAdminController;
+use App\Controllers\DeviceController;
 use App\Controllers\InventoryController;
 use App\Controllers\MigrationsController;
 use App\Controllers\SecurityController;
@@ -36,6 +38,7 @@ use App\Controllers\StockCountController;
 use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
+use App\Middleware\DeviceAuthMiddleware;
 use App\Middleware\ReadOnlyGuard;
 use App\Middleware\CsrfMiddleware;
 use App\Middleware\RoleGuard;
@@ -53,7 +56,10 @@ use Slim\Factory\AppFactory;
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 $requestStarted = microtime(true);
-if (session_status() === PHP_SESSION_NONE) {
+// The Android POS app signs every request with its device token and keeps no cookies:
+// starting a session for it would only leave an empty session file per request.
+$deviceApi = preg_match('#/api/device/#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
+if (!$deviceApi && session_status() === PHP_SESSION_NONE) {
     // PHP locks the session file while a request holds it open, so one slow request
     // (an AI receipt read, a POS import) would make every other request of that user
     // wait. Only sign-in/out, role switching and impersonation change the session;
@@ -110,6 +116,35 @@ $app->get('/api/auth/methods', [AuthController::class, 'methods']);
 $app->post('/api/auth/qr', [AuthController::class, 'qrStart']);
 $app->get('/api/auth/qr/status', [AuthController::class, 'qrStatus']);
 $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
+
+// ---- Android POS app (docs/android-pos-app.md): pairing is open, the rest needs the device token ----
+$app->post('/api/device/v1/pair/start', [DeviceController::class, 'pairStart']);
+$app->post('/api/device/v1/pair/status', [DeviceController::class, 'pairStatus']);
+$app->group('/api/device/v1', function ($group) {
+    $group->get('/ping', [DeviceController::class, 'ping']);
+    $group->get('/me', [DeviceController::class, 'me']);
+    $group->get('/catalog', [DeviceController::class, 'catalog'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/catalog/popular', [DeviceController::class, 'popular'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
+    $group->post('/sales', [DeviceController::class, 'syncSales'])
+        ->add(new RoleGuard('sales.create'));
+    // The same as on the web POS.
+    $group->get('/sales/products', [SalesController::class, 'searchProducts']);
+    $group->get('/sales/options', [SalesController::class, 'options']);
+    $group->get('/sales/mine', [SaleEditController::class, 'mine'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/sales/{id:[0-9]+}', [SaleEditController::class, 'show']);
+    $group->post('/sales/{id:[0-9]+}/edit-requests', [SaleEditController::class, 'store'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/sale-edits/{id:[0-9]+}/cancel', [SaleEditController::class, 'cancel'])
+        ->add(new RoleGuard('sales.create'));
+    foreach (['state' => 'get', 'summary' => 'get', 'open' => 'post', 'skip' => 'post', 'close' => 'post'] as $action => $method) {
+        $group->$method("/drawer/{$action}", [DrawerController::class, $action])
+            ->add(new RoleGuard('sales.create'));
+    }
+})->add(new ReadOnlyGuard())->add(new DeviceAuthMiddleware());
 
 // ---- Sign-in through RVC-ONE (SSO) ----
 $app->get('/auth/login', [SsoController::class, 'start']);
@@ -458,6 +493,22 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('migrations.manage'));
     $group->post('/admin/backups/{id:[a-z0-9_-]+}/delete', [BackupController::class, 'delete'])
         ->add(new RoleGuard('migrations.manage'));
+
+    // อุปกรณ์ POS (Android): pairing by code, who each device sells as, sales it could not book.
+    $group->get('/devices', [DeviceAdminController::class, 'index'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/devices/pair', [DeviceAdminController::class, 'pair'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->put('/devices/{id:[0-9]+}', [DeviceAdminController::class, 'update'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/devices/{id:[0-9]+}/revoke', [DeviceAdminController::class, 'revoke'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->get('/devices/{id:[0-9]+}/sales', [DeviceAdminController::class, 'sales'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/device-sales/{id:[0-9]+}/retry', [DeviceAdminController::class, 'retry'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/device-sales/{id:[0-9]+}/resolve', [DeviceAdminController::class, 'resolve'])
+        ->add(new RoleGuard('devices.manage'));
 
     $group->get('/admin/audit-logs', [AuditController::class, 'index'])
         ->add(new RoleGuard('audit.view'));

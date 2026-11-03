@@ -33,6 +33,7 @@ const ICONS = {
     migrations: svg('<ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14a9 3 0 0 0 18 0V5"></path><path d="M3 12a9 3 0 0 0 18 0"></path>'),
     security: svg('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path>'),
     backup: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path>'),
+    devices: svg('<rect x="5" y="2" width="14" height="20" rx="2"></rect><path d="M11 18h2"></path><path d="M9 7h6M9 11h6"></path>'),
     audit: svg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path>'),
 };
 
@@ -71,6 +72,7 @@ const PAGES = [
         { key: 'migrations', label: 'จัดการฐานข้อมูล (Migrations)', perm: 'migrations.manage' },
         { key: 'security', label: 'ตรวจสอบความปลอดภัย', perm: 'migrations.manage' },
         { key: 'backup', label: 'แบ็คอัพและกู้คืนข้อมูล', perm: 'migrations.manage' },
+        { key: 'devices', label: 'อุปกรณ์ POS (Android)', perm: 'devices.manage' },
         { key: 'audit', label: 'ประวัติการแก้ไข', perm: 'audit.view' },
     ]},
 ];
@@ -105,6 +107,7 @@ const PAGE_TITLES = {
     migrations: ['รายงานและระบบ', 'จัดการฐานข้อมูล (Migrations)'],
     security: ['รายงานและระบบ', 'ตรวจสอบความปลอดภัย / ค้นหา web shell'],
     backup: ['รายงานและระบบ', 'แบ็คอัพและกู้คืนข้อมูล (รูปภาพ ฐานข้อมูล ไฟล์อื่น ๆ)'],
+    devices: ['รายงานและระบบ', 'จับคู่และจัดการอุปกรณ์ POS (แอป Android)'],
     audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
 };
 

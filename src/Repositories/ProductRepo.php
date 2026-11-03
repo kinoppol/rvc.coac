@@ -61,6 +61,8 @@ class ProductRepo
              VALUES (?, ?, ?, NOW(), NOW())
              ON DUPLICATE KEY UPDATE product_id = VALUES(product_id), pack_size = VALUES(pack_size), last_seen_at = NOW()'
         )->execute([$productId, $barcode, $packSize]);
+        // The Android POS fetches only products changed since its last sync (DeviceController::catalog).
+        $this->db->prepare('UPDATE products SET updated_at = NOW() WHERE id = ?')->execute([$productId]);
     }
 
     /**
