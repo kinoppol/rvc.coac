@@ -92,6 +92,46 @@ class ProductRepo
     }
 
     /**
+     * A store product booked at cost 0 (stock that was on the shelf, cost not known) gets the
+     * cost found out later: the product's piece cost, and every past sale line of it still at
+     * cost 0 (POS and imported sales alike), so the profit of past days is counted right.
+     *
+     * @return array{lines:int, qty:int, cost:float}
+     */
+    public function setKnownCost(int $productId, float $cost, ?int $userId, ?string $ip): array
+    {
+        $old = $this->find($productId);
+        if (!$old || $old['consignor_id'] !== null) {
+            throw new \RuntimeException('ระบุต้นทุนได้เฉพาะสินค้าของร้าน');
+        }
+        if ((float) $old['cost_price'] >= 0.005) {
+            throw new \RuntimeException('สินค้านี้มีต้นทุนแล้ว (ต้นทุนคิดจากใบซื้อ) ระบุต้นทุนได้เฉพาะสินค้าที่ต้นทุนเป็น 0');
+        }
+        $cost = round($cost, 2);
+        if ($cost <= 0 || $cost > 1000000) {
+            throw new \RuntimeException('ต้นทุน/ชิ้นไม่ถูกต้อง');
+        }
+        $stmt = $this->db->prepare(
+            'SELECT COUNT(*) AS line_count, COALESCE(SUM(qty), 0) AS qty FROM sale_items
+             WHERE product_id = ? AND consignor_id IS NULL AND cost_amount = 0 AND qty > 0'
+        );
+        $stmt->execute([$productId]);
+        $past = $stmt->fetch();
+        $this->db->prepare(
+            'UPDATE sale_items SET cost_amount = ROUND(qty * ?, 2), fee_amount = ROUND(qty * unit_price - qty * ?, 2)
+             WHERE product_id = ? AND consignor_id IS NULL AND cost_amount = 0 AND qty > 0'
+        )->execute([$cost, $cost, $productId]);
+        $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
+        $out = ['lines' => (int) $past['line_count'], 'qty' => (int) $past['qty'], 'cost' => round((int) $past['qty'] * $cost, 2)];
+        $this->audit->log('products', $productId, 'update', ['cost_price' => 0.0], [
+            'cost_price' => $cost,
+            'note' => 'ระบุต้นทุนที่สืบทราบภายหลัง และเติมต้นทุนให้ยอดขายย้อนหลังที่ต้นทุนเป็น 0',
+            'past_sales' => $out,
+        ], $userId, $ip);
+        return $out;
+    }
+
+    /**
      * Admin correction of a consigned product's prices: what the consignor gets per piece and
      * the shelf price. The store's fee becomes the difference, so later sales credit the
      * consignor exactly $cost per piece; past sales and ledger entries are left as they were.

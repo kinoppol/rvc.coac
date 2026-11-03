@@ -284,6 +284,14 @@ class InventoryController
                 }
                 $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
             }
+            // A cost found out later for a product booked at cost 0: admins and managers, store goods.
+            $known = null;
+            if (isset($body['known_cost']) && $body['known_cost'] !== '' && !$consigned) {
+                if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+                    throw new \RuntimeException('เฉพาะผู้ดูแลระบบและผู้จัดการเท่านั้นที่ระบุต้นทุนได้');
+                }
+                $known = $repo->setKnownCost($id, (float) $body['known_cost'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            }
             // Consigned goods: what the consignor gets and the shelf price, admins only (checked above).
             if ($consigned && isset($body['cost_price'], $body['sale_price'])) {
                 $cost = (float) $body['cost_price'];
@@ -299,7 +307,7 @@ class InventoryController
             throw $e;
         }
         $p = $repo->find($id);
-        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'sale_price' => (float) $p['sale_price'], 'pack_barcodes' => $repo->packBarcodes($id)]]);
+        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'sale_price' => (float) $p['sale_price'], 'pack_barcodes' => $repo->packBarcodes($id), 'known_cost' => $known]]);
     }
 
     /**

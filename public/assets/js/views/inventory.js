@@ -32,6 +32,7 @@ const FILTERS = [
     ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
     ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
+    ['nocost', 'ไม่ทราบต้นทุน', (p) => p.consignor_id == null && !(Number(p.cost_price) > 0)],
     // Same / almost the same name of the same owner (the test needs the loaded list: set in render).
     ['dup', 'สินค้าซ้ำซ้อน', null],
 ];
@@ -272,7 +273,8 @@ export async function render(container, { navigate, permissions, user }) {
             editing = {
                 id: p.id, name: p.name, barcode: p.barcode || '', packs: packRows(p.pack_barcodes), consigned, consignorName: p.consignor_name,
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
-                priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price),
+                priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price), knownCost: '',
+                soldQty: Number(p.qty_sold),
                 pastQty: Number(p.store_sold_qty), claimPast: true,
                 // Consigned goods (admin): what the consignor gets and the shelf price, per piece.
                 cpCost: String(Number(p.cost_price)), cpPrice: String(Number(p.sale_price)),
@@ -633,7 +635,8 @@ export async function render(container, { navigate, permissions, user }) {
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
           <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}</td>
-          <td class="num">${money(p.cost_price)}</td>
+          <td class="num">${money(p.cost_price)}${canSetPrice && p.consignor_id == null && !(Number(p.cost_price) > 0)
+              ? `<div><button type="button" class="btn secondary sm" data-edit="${p.id}" style="margin-top:4px" title="ใส่ต้นทุนที่สืบทราบภายหลัง กำไรย้อนหลังจะคำนวณใหม่">ระบุต้นทุน</button></div>` : ''}</td>
           <td class="num">${money(p.sale_price)}</td>
           <td class="num">${p.margin_percent}%</td>
           <td class="num">${money(p.stock_cost_value)}</td>
@@ -664,6 +667,7 @@ export async function render(container, { navigate, permissions, user }) {
                 <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
                 <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
               </label>` : ''}
+              ${canSetPrice && !e.consigned && !(e.costPrice > 0) ? knownCostHtml(e) : ''}
               ${e.consigned ? consignPriceHtml(e) : packsHtml(e)}
               ${canConsign && !e.consigned ? consignHtml(e) : ''}
               ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
@@ -714,6 +718,25 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="btn secondary sm" id="bc-add" style="margin-top:8px">+ เพิ่มบาร์โค้ดแพ็ค</button>
               <div class="muted" style="font-size:12.5px;margin-top:6px">ราคาขายยกแพ็ค: สแกนบาร์โค้ดแพ็คที่หน้าขายจะขายทั้งแพ็คในราคานี้ (หรือกดปุ่ม "ยกแพ็ค" ที่หน้าขาย) · เว้นว่างถ้าขายแยกชิ้นเท่านั้น
                 · ใส่ส่วนลด/แพ็คแล้วระบบคำนวณราคายกแพ็คให้ (ราคา/ชิ้น × ชิ้น/แพ็ค − ส่วนลด) — ราคายกแพ็คที่บันทึกไม่เปลี่ยนตามราคาชิ้นที่แก้ภายหลัง</div>`;
+    }
+
+    /** Store goods booked at cost 0 (cost not known then): the cost found out later. */
+    function knownCostHtml(e) {
+        const cost = Number(e.knownCost);
+        return `
+              <div class="hint" style="margin:0 0 16px;display:block">
+                <label class="field" style="display:block">ต้นทุน/ชิ้น (บาท) <span class="pill warn" style="font-size:11.5px">ยังไม่ทราบต้นทุน (0)</span>
+                  <input id="bc-known-cost" type="number" min="0" step="0.01" value="${escapeHtml(e.knownCost)}" placeholder="ใส่ต้นทุนที่สืบทราบ" style="width:180px">
+                </label>
+                <div class="muted" style="font-size:12.5px;margin-top:6px" id="bc-known-hint">${knownCostHint(e, cost)}</div>
+              </div>`;
+    }
+
+    function knownCostHint(e, cost) {
+        const base = 'บันทึกแล้วยอดขายย้อนหลังทุกรายการของสินค้านี้ที่ต้นทุนเป็น 0 (ขายหน้าร้านและนำเข้าจาก POS) จะคิดต้นทุนตามนี้ กำไรย้อนหลังในรายงาน/แดชบอร์ดจะถูกคำนวณใหม่';
+        if (!(cost > 0)) return base;
+        const price = Number(e.priceInput) || e.salePrice;
+        return `${base} · ขายไปแล้ว ${count(e.soldQty)} ชิ้น ≈ ต้นทุน ฿${money(e.soldQty * cost)} · กำไร/ชิ้น ฿${money(price - cost)}${price < cost ? ' ⚠️ ต่ำกว่าทุน' : ''}`;
     }
 
     /** Cost and margin next to the piece price being set. */
@@ -837,6 +860,10 @@ export async function render(container, { navigate, permissions, user }) {
                 draw();
             }
         });
+        container.querySelector('#bc-known-cost')?.addEventListener('input', (ev) => {
+            e.knownCost = ev.target.value;
+            container.querySelector('#bc-known-hint').textContent = knownCostHint(e, Number(ev.target.value));
+        });
         container.querySelector('#bc-price')?.addEventListener('input', (ev) => {
             e.priceInput = ev.target.value;
             if (Number(ev.target.value) > 0) e.salePrice = Number(ev.target.value);
@@ -898,6 +925,11 @@ export async function render(container, { navigate, permissions, user }) {
                 return;
             }
             const priceChanged = setPrice && Math.abs(Number(e.priceInput) - Number(p0.sale_price)) >= 0.005;
+            const knownCost = setPrice && !(e.costPrice > 0) && e.knownCost !== '' ? Number(e.knownCost) : null;
+            if (knownCost !== null && !(knownCost > 0)) { e.error = 'ต้นทุน/ชิ้นต้องมากกว่า 0'; draw(); return; }
+            if (knownCost !== null && !await confirmDialog(
+                `ตั้งต้นทุน «${e.name.trim()}» เป็น ฿${money(knownCost)}/ชิ้น และคิดต้นทุนนี้ให้ยอดขายย้อนหลังทุกรายการที่ต้นทุนเป็น 0 — กำไรย้อนหลังจะลดลงตามต้นทุน`,
+                { title: 'ระบุต้นทุนย้อนหลัง?', okText: 'บันทึกต้นทุน' })) return;
             if (priceChanged && Number(e.priceInput) < e.costPrice
                 && !await confirmDialog(`ราคาขาย ฿${money(e.priceInput)} ต่ำกว่าต้นทุน ฿${money(e.costPrice)} ต่อชิ้น ต้องการบันทึกหรือไม่?`, { title: 'ราคาขายต่ำกว่าทุน', okText: 'บันทึก' })) return;
             let consignor = null;
@@ -922,6 +954,7 @@ export async function render(container, { navigate, permissions, user }) {
                     name: e.name.trim(),
                     barcode: e.barcode.trim(),
                     ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
+                    ...(knownCost !== null ? { known_cost: knownCost } : {}),
                     ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),
                     // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
                     pack_barcodes: e.packs.flatMap((p) => {
@@ -945,6 +978,14 @@ export async function render(container, { navigate, permissions, user }) {
                     return;
                 }
                 editing = null;
+                if (out.data.known_cost) {
+                    const k = out.data.known_cost;
+                    await load(); // cost, stock value, profit and totals follow the cost
+                    alertDialog(k.lines
+                        ? `ตั้งต้นทุน ฿${money(knownCost)}/ชิ้นแล้ว · เติมต้นทุนให้ยอดขายย้อนหลัง ${count(k.lines)} รายการ (${count(k.qty)} ชิ้น) รวม ฿${money(k.cost)}`
+                        : `ตั้งต้นทุน ฿${money(knownCost)}/ชิ้นแล้ว (ยังไม่มียอดขายที่ต้องเติมต้นทุน)`, { title: 'บันทึกต้นทุนแล้ว' });
+                    return;
+                }
                 if (priceChanged || cpChanged) {
                     await load(); // margin, stock value and totals follow the new price
                     return;
