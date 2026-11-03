@@ -1,4 +1,4 @@
-import { api } from '../api.js';
+import { api, getCsrfToken } from '../api.js';
 import { escapeHtml, fmtDateTime, money } from '../util.js';
 import { confirmDialog, alertDialog, promptDialog } from '../dialog.js';
 
@@ -6,6 +6,8 @@ import { confirmDialog, alertDialog, promptDialog } from '../dialog.js';
 // 6-character code, the admin types it here and picks the account the device sells as.
 // Also lists paired devices (rename, change account, revoke) and the sales a device sent
 // that the server could not book (retry, or settle by hand). See PosDeviceService.
+// The app's .apk is uploaded here (in 1 MB pieces, past PHP's upload limit) and anyone can
+// download it from api/app/pos.apk — a link and QR-Code to open on the phone. See AppReleaseService.
 
 const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน' };
@@ -18,10 +20,15 @@ export async function render(container, { params = {} } = {}) {
     let busy = false;
     let editing = null; // id of the device row being edited
     let form = { code: (params.code || '').toUpperCase(), name: '', user_id: '' };
+    let release = null; // the current .apk: {version, size, sha256, note, uploaded_at, uploaded_by}
+    let apk = { file: null, version: '', note: '', busy: false, error: null };
     // The address the app connects to: this page's, without the hash.
     const serverUrl = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
+    const apkUrl = `${serverUrl}api/app/pos.apk`;
+    const fileSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`);
 
     async function load() {
+        api.get('/app/pos.json').then((r) => { release = r.data; drawApp(); }).catch(() => {});
         try {
             const res = await api.get('/devices');
             devices = res.data;
@@ -77,8 +84,97 @@ export async function render(container, { params = {} } = {}) {
           </tr>`;
     }
 
+    function appHtml() {
+        const dis = apk.busy ? 'disabled' : '';
+        return `
+          <h2>แอป Android POS (ไฟล์ติดตั้ง .apk)</h2>
+          ${release ? `
+            <p style="margin:6px 0 10px">เวอร์ชัน <b>${escapeHtml(release.version)}</b> · ${fileSize(release.size)} · อัปโหลด ${escapeHtml(fmtDateTime(release.uploaded_at))} โดย ${escapeHtml(release.uploaded_by || '-')}
+              ${release.note ? `<br><span class="muted" style="font-size:13px">${escapeHtml(release.note)}</span>` : ''}</p>
+            <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
+              <div style="flex:1 1 360px">
+                <a class="btn" href="${escapeHtml(apkUrl)}" download>⬇ ดาวน์โหลดแอป (.apk)</a>
+                <p class="muted" style="font-size:12.5px;margin:10px 0 0">สแกน QR-Code ด้วยกล้องของเครื่อง Android หรือเปิดลิงก์ <code style="word-break:break-all">${escapeHtml(apkUrl)}</code>
+                  แล้วแตะไฟล์ที่ดาวน์โหลดเพื่อติดตั้ง — ครั้งแรกเครื่องจะถามให้ "อนุญาตให้ติดตั้งแอปที่ไม่รู้จัก" สำหรับเบราว์เซอร์ที่ใช้ดาวน์โหลด ให้กดอนุญาต
+                  · ติดตั้งเวอร์ชันใหม่ทับได้เลย ข้อมูลและการจับคู่ในเครื่องยังอยู่</p>
+                <p class="muted" style="font-size:11.5px;margin:6px 0 0;word-break:break-all">SHA-256 ${escapeHtml(release.sha256)}</p>
+              </div>
+              <div style="text-align:center;flex:0 0 180px">
+                <div id="d-apk-qr" style="width:160px;height:160px;margin:0 auto;background:#fff;border-radius:8px;padding:6px"></div>
+                <div class="muted" style="font-size:12px;margin-top:6px">สแกนเพื่อดาวน์โหลดแอป</div>
+              </div>
+            </div>` : '<p class="muted" style="margin:6px 0 10px">ยังไม่มีไฟล์ติดตั้งแอป — อัปโหลดไฟล์ .apk ด้านล่าง แล้วปุ่มดาวน์โหลดและ QR-Code จะแสดงที่นี่</p>'}
+          <details ${release ? '' : 'open'} style="margin-top:14px">
+            <summary style="cursor:pointer;font-weight:600">${release ? 'อัปโหลดเวอร์ชันใหม่' : 'อัปโหลดไฟล์ติดตั้ง (.apk)'}</summary>
+            <div class="form-grid" style="margin-top:10px">
+              <label class="field" style="grid-column:1/-1">ไฟล์ .apk * <input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" ${dis}></label>
+              <label class="field">เวอร์ชัน * <input id="apk-version" maxlength="30" placeholder="เช่น 1.0.1" value="${escapeHtml(apk.version)}" ${dis}></label>
+              <label class="field">หมายเหตุ <input id="apk-note" maxlength="500" placeholder="เช่น แก้การพิมพ์ใบเสร็จ" value="${escapeHtml(apk.note)}" ${dis}></label>
+              <div class="actions-row" style="grid-column:1/-1;align-items:center">
+                <button type="button" class="btn" id="apk-upload" ${dis}>${apk.busy ? 'กำลังอัปโหลด…' : 'อัปโหลด'}</button>
+                <span id="apk-progress" class="muted" style="font-size:13px"></span>
+              </div>
+            </div>
+            ${apk.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(apk.error)}</div>` : ''}
+          </details>`;
+    }
+
+    /** Redraws only the app section, so the pairing form keeps what was typed. */
+    function drawApp() {
+        const box = container.querySelector('#d-app');
+        if (!box) return;
+        box.innerHTML = appHtml();
+        box.querySelector('#apk-file').addEventListener('change', (e) => {
+            apk.file = e.target.files[0] || null;
+            // app-release-1.2.0.apk → 1.2.0
+            const v = apk.file?.name.match(/(\d+\.\d+(?:\.\d+)?)/);
+            if (v && !apk.version) box.querySelector('#apk-version').value = apk.version = v[1];
+        });
+        box.querySelector('#apk-version').addEventListener('input', (e) => { apk.version = e.target.value; });
+        box.querySelector('#apk-note').addEventListener('input', (e) => { apk.note = e.target.value; });
+        box.querySelector('#apk-upload').addEventListener('click', uploadApk);
+        if (release) drawQr('#d-apk-qr', apkUrl);
+    }
+
+    async function uploadApk() {
+        if (apk.busy) return;
+        const file = apk.file;
+        if (!file) { apk.error = 'กรุณาเลือกไฟล์ .apk'; return drawApp(); }
+        if (!/\.apk$/i.test(file.name)) { apk.error = 'ต้องเป็นไฟล์ .apk'; return drawApp(); }
+        if (!apk.version.trim()) { apk.error = 'กรุณาระบุเวอร์ชันของแอป'; return drawApp(); }
+        apk.busy = true; apk.error = null; drawApp();
+        const progress = (text) => { const el = container.querySelector('#apk-progress'); if (el) el.textContent = text; };
+        const id = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+        const CHUNK = 1048576; // AppReleaseService::CHUNK
+        try {
+            for (let i = 0, off = 0; off < file.size; i++, off += CHUNK) {
+                const res = await fetch(`./api/devices/app/chunk?id=${id}&index=${i}`, {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/octet-stream', 'X-CSRF-Token': getCsrfToken() || '' },
+                    body: file.slice(off, off + CHUNK),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || `อัปโหลดไม่สำเร็จ (${res.status})`);
+                const done = Math.min(file.size, off + CHUNK);
+                progress(`${Math.round((done / file.size) * 100)}% · ${fileSize(done)} / ${fileSize(file.size)}`);
+            }
+            progress('กำลังตรวจไฟล์…');
+            release = (await api.post('/devices/app/finish', { upload_id: id, size: file.size, version: apk.version.trim(), note: apk.note })).data;
+            apk = { file: null, version: '', note: '', busy: false, error: null };
+            drawApp();
+            await alertDialog(`อัปโหลดแอปเวอร์ชัน ${release.version} แล้ว ดาวน์โหลดได้จากปุ่มและ QR-Code ในหน้านี้`, { title: 'อัปโหลดสำเร็จ' });
+        } catch (e) {
+            apk.busy = false;
+            apk.error = e.message;
+            drawApp();
+        }
+    }
+
     function draw() {
+        const appBox = container.querySelector('#d-app'); // kept as is: a chosen file or an upload in progress
         container.innerHTML = `
+        <section class="card card-pad" id="d-app"></section>
+
         <section class="card card-pad">
           <h2>จับคู่อุปกรณ์ POS (Android)</h2>
           <p class="muted" style="font-size:13px;margin:4px 0 12px">เปิดแอป POS บนอุปกรณ์ ใส่ที่อยู่เซิร์ฟเวอร์ (หรือสแกน QR-Code ด้านขวา) แล้วแอปจะแสดงรหัสจับคู่ 6 ตัว กรอกรหัสนั้นที่นี่ภายใน 10 นาที
@@ -134,15 +230,17 @@ export async function render(container, { params = {} } = {}) {
         container.querySelectorAll('[data-detail]').forEach((b) => b.addEventListener('click', () => detail(Number(b.dataset.detail))));
         container.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('click', () => retry(Number(b.dataset.retry))));
         container.querySelectorAll('[data-resolve]').forEach((b) => b.addEventListener('click', () => resolve(Number(b.dataset.resolve))));
-        drawQr();
+        drawQr('#d-qr', serverUrl);
+        if (appBox) container.querySelector('#d-app').replaceWith(appBox);
+        else drawApp();
     }
 
-    async function drawQr() {
-        const box = container.querySelector('#d-qr');
+    async function drawQr(selector, text) {
+        const box = container.querySelector(selector);
         try {
             const { default: qrcode } = await import(QR_LIB);
             const qr = qrcode(0, 'M');
-            qr.addData(serverUrl);
+            qr.addData(text);
             qr.make();
             box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 1, scalable: true });
         } catch (e) {

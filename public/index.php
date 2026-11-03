@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Controllers\AiController;
 use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
+use App\Controllers\AppReleaseController;
 use App\Controllers\CapitalController;
 use App\Controllers\ClosingController;
 use App\Controllers\DrawerController;
@@ -117,7 +118,10 @@ $app->post('/api/auth/qr', [AuthController::class, 'qrStart']);
 $app->get('/api/auth/qr/status', [AuthController::class, 'qrStatus']);
 $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
 
-// ---- Android POS app (docs/android-pos-app.md): pairing is open, the rest needs the device token ----
+// ---- Android POS app (docs/android-pos-app.md): the app file is open to download (useless until paired) ----
+$app->get('/api/app/pos.apk', [AppReleaseController::class, 'download']);
+$app->get('/api/app/pos.json', [AppReleaseController::class, 'info']);
+// Pairing is open, the rest needs the device token.
 $app->post('/api/device/v1/pair/start', [DeviceController::class, 'pairStart']);
 $app->post('/api/device/v1/pair/status', [DeviceController::class, 'pairStatus']);
 $app->group('/api/device/v1', function ($group) {
@@ -496,6 +500,10 @@ $app->group('/api', function ($group) {
 
     // อุปกรณ์ POS (Android): pairing by code, who each device sells as, sales it could not book.
     $group->get('/devices', [DeviceAdminController::class, 'index'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/devices/app/chunk', [AppReleaseController::class, 'chunk'])
+        ->add(new RoleGuard('devices.manage'));
+    $group->post('/devices/app/finish', [AppReleaseController::class, 'finish'])
         ->add(new RoleGuard('devices.manage'));
     $group->post('/devices/pair', [DeviceAdminController::class, 'pair'])
         ->add(new RoleGuard('devices.manage'));

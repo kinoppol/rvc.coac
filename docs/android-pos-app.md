@@ -312,6 +312,21 @@ businessDay(at):
 `GET /sales/options`, `GET /sales/mine?from&to`, `GET /sales/{id}`, `POST /sales/{id}/edit-requests`, `POST /sale-edits/{id}/cancel`
 — รูปแบบเหมือน API ของหน้าเว็บ (`/api/...`) ทุกประการ
 
+### 5.7 แจกจ่ายและอัปเดตแอป (ไม่ต้องมีโทเคน)
+ผู้ดูแลอัปโหลดไฟล์ .apk ที่หน้า "อุปกรณ์ POS (Android)" ของเว็บ พนักงานดาวน์โหลดจากปุ่มหรือ QR-Code ในหน้านั้น
+(ที่อยู่อยู่นอก `/api/device/v1`):
+
+| คำขอ | ใช้ |
+|---|---|
+| `GET {server}api/app/pos.json` | `{"data": {"version": "1.2.3", "version_code": null, "size": 2600235, "sha256": "…", "note": "…", "uploaded_at": "…", "uploaded_by": "…", "url": "api/app/pos.apk"}}` — `data` เป็น `null` ถ้ายังไม่มีไฟล์ |
+| `GET {server}api/app/pos.apk` | ไฟล์ติดตั้งล่าสุด (`application/vnd.android.package-archive`) — 404 ถ้ายังไม่มี |
+
+แอปควรเช็ค `pos.json` ตอนเปิดแอป/ทุกวันเมื่อออนไลน์ ถ้า `version` ใหม่กว่า `BuildConfig.VERSION_NAME`
+(เทียบแบบ semver) ให้แสดงแถบ "มีแอปเวอร์ชันใหม่" → ดาวน์โหลดด้วย `DownloadManager` ตรวจ SHA-256 ให้ตรง
+แล้วเปิดตัวติดตั้งผ่าน `FileProvider` + `ACTION_VIEW` (ต้องขอ `REQUEST_INSTALL_PACKAGES`)
+— ห้ามอัปเดตระหว่างมีตะกร้าค้างหรือยอดขายยังส่งไม่หมดโดยไม่เตือน · ต้องเซ็นทุกเวอร์ชันด้วยคีย์เดียวกัน
+และเพิ่ม `versionCode` ทุกครั้ง ไม่เช่นนั้นติดตั้งทับไม่ได้ (ข้อมูลในเครื่องจะหายถ้าต้องถอนแอปก่อน)
+
 ## 6. ข้อมูลในเครื่องและการซิงก์
 
 ### 6.1 ตาราง Room (ขั้นต่ำ)
