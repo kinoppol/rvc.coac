@@ -251,7 +251,7 @@ if ($step === 'db') {
             $pdo->exec("CREATE DATABASE IF NOT EXISTS `$dbNameEsc` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
 
             $appCfg = Config::isInstalled() ? (require Config::configPath())['app'] : [
-                'name' => 'ระบบฝากขาย ร้านค้าสหการ',
+                'name' => 'ระบบบริหารบัญชี ร้านค้าสหการ',
                 'timezone' => 'Asia/Bangkok',
                 'key' => bin2hex(random_bytes(32)),
             ];
@@ -502,7 +502,7 @@ function renderLayout(string $title, callable $body): void
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title><?= h($title) ?> — ตัวติดตั้งระบบฝากขาย ร้านค้าสหการ</title>
+        <title><?= h($title) ?> — ตัวติดตั้งระบบบริหารบัญชี ร้านค้าสหการ</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>

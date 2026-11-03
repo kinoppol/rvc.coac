@@ -11,7 +11,7 @@ return [
     ],
     'app' => [
         'key' => '', // random secret, used to sign consignor portal tokens & CSRF
-        'name' => 'ระบบฝากขาย ร้านค้าสหการ',
+        'name' => 'ระบบบริหารบัญชี ร้านค้าสหการ',
         'timezone' => 'Asia/Bangkok',
     ],
     // RVC-ONE (SSO + user-sync API). Every key is optional: missing ones use the

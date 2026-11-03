@@ -99,7 +99,7 @@ const PAGE_TITLES = {
     mypassbook: ['ผู้ฝากขาย', 'สมุดบัญชีของฉัน'],
     myproducts: ['ผู้ฝากขาย', 'สินค้าที่ฉันฝากขาย'],
     reports: ['รายงานและระบบ', 'รายงานสรุป'],
-    settings: ['รายงานและระบบ', 'ตั้งค่าระบบฝากขาย'],
+    settings: ['รายงานและระบบ', 'ตั้งค่าระบบบริหารบัญชี'],
     ai: ['รายงานและระบบ', 'ตั้งค่าผู้ช่วย AI'],
     aiusage: ['รายงานและระบบ', 'การใช้งานและค่าใช้จ่ายผู้ช่วย AI'],
     migrations: ['รายงานและระบบ', 'จัดการฐานข้อมูล (Migrations)'],
@@ -178,7 +178,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
           <div class="logo">สห</div>
           <div>
             <div class="name">ร้านค้าสหการ</div>
-            <div class="sub">ระบบฝากขาย</div>
+            <div class="sub">ระบบบริหารบัญชี</div>
           </div>
         </div>
         <nav id="side-nav">

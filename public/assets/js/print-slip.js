@@ -49,7 +49,7 @@ export async function printConsignSlip(req, quote) {
   .foot { margin-top: 24px; font-size: 11px; color: #777; text-align: right; }
 </style></head><body>
   <div class="head">
-    <div><h1>ใบฝากขายสินค้า</h1><div class="sub">ร้านค้าสหการ · ระบบฝากขาย</div></div>
+    <div><h1>ใบฝากขายสินค้า</h1><div class="sub">ร้านค้าสหการ · ระบบบริหารบัญชี</div></div>
     <div class="meta">เลขที่ <b>${escapeHtml(req.request_no)}</b><br>
       วันที่แจ้ง ${escapeHtml(fmtDateTime(req.created_at))}<br>
       สถานะ: ${escapeHtml(STATUS[req.status] || req.status)}${req.receive_doc_no ? `<br>ใบรับฝากเลขที่ ${escapeHtml(req.receive_doc_no)}` : ''}</div>
@@ -253,7 +253,7 @@ export function printPassbook(consignor, entries, balance) {
   .sign .line { border-top: 1px dotted #111; padding-top: 4px; }
 </style></head><body>
   <div class="book">
-    <div class="book-head"><h1>สมุดคู่ฝาก · ร้านค้าสหการ</h1><span>ระบบฝากขายสินค้า</span></div>
+    <div class="book-head"><h1>สมุดคู่ฝาก · ร้านค้าสหการ</h1><span>ระบบบริหารบัญชี</span></div>
     <div class="acct">
       <div><small>ชื่อบัญชี</small><b>${escapeHtml(consignor.name)}</b></div>
       <div><small>เลขที่บัญชี (รหัสผู้ฝาก)</small><span class="no">${escapeHtml(consignor.code)}</span></div>

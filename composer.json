@@ -1,6 +1,6 @@
 {
     "name": "rvc/coac",
-    "description": "ระบบฝากขาย ร้านค้าสหการ - Consignment sales accounting system",
+    "description": "ระบบบริหารบัญชี ร้านค้าสหการ - Consignment sales accounting system",
     "type": "project",
     "require": {
         "php": ">=8.1",

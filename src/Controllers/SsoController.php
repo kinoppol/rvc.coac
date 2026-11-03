@@ -53,7 +53,7 @@ class SsoController
         $this->clearState();
         if (($request->getQueryParams()['error'] ?? '') === 'access_denied') {
             return $this->page($response, 200, 'ยกเลิกการเข้าสู่ระบบ',
-                'คุณไม่ได้อนุญาตให้ระบบฝากขาย ร้านค้าสหการ เข้าถึงบัญชี RVC-ONE จึงยังไม่ได้เข้าสู่ระบบ');
+                'คุณไม่ได้อนุญาตให้ระบบบริหารบัญชี ร้านค้าสหการ เข้าถึงบัญชี RVC-ONE จึงยังไม่ได้เข้าสู่ระบบ');
         }
         return $this->page($response, 400, 'ไม่สามารถเข้าสู่ระบบได้',
             'ลิงก์เข้าสู่ระบบไม่ถูกต้อง กรุณาเริ่มเข้าสู่ระบบผ่าน RVC-ONE ใหม่อีกครั้ง');
@@ -122,12 +122,12 @@ class SsoController
         }
         if ($user === null) {
             return $this->page($response, 403, 'ยังไม่มีสิทธิ์ใช้งาน',
-                'บัญชี RVC-ONE ของคุณยังไม่ได้รับสิทธิ์ใช้งานระบบฝากขาย ร้านค้าสหการ '
+                'บัญชี RVC-ONE ของคุณยังไม่ได้รับสิทธิ์ใช้งานระบบบริหารบัญชี ร้านค้าสหการ '
                 . 'กรุณาแจ้งผู้ดูแลระบบให้เพิ่มสิทธิ์ (RVC-ONE ID: ' . $oaId . ')');
         }
         if (!UserRepo::canSignIn($user)) {
             return $this->page($response, 403, 'บัญชีถูกปิดการใช้งาน',
-                'บัญชีของคุณในระบบฝากขาย ร้านค้าสหการ ถูกปิดการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
+                'บัญชีของคุณในระบบบริหารบัญชี ร้านค้าสหการ ถูกปิดการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
         }
         if (!$users->rolesOf($user)) {
             return $this->page($response, 403, 'ยังไม่มีสิทธิ์ใช้งาน',
@@ -196,14 +196,14 @@ class SsoController
             <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>{$title} - ระบบฝากขาย ร้านค้าสหการ</title>
+            <title>{$title} - ระบบบริหารบัญชี ร้านค้าสหการ</title>
             <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
             <link rel="stylesheet" href="{$app}assets/css/app.css">
             </head>
             <body>
             <div class="auth-wrap"><div class="auth-card">
               <h1>{$title}</h1>
-              <p class="sub">ระบบฝากขาย ร้านค้าสหการ</p>
+              <p class="sub">ระบบบริหารบัญชี ร้านค้าสหการ</p>
               <p style="margin:0 0 20px;line-height:1.6">{$message}</p>
               <div style="display:flex;flex-direction:column;gap:10px">
                 {$retryLink}

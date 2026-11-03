@@ -360,7 +360,8 @@ class AiController
 
     private function systemPrompt(array $user, AiToolbox $toolbox, bool $hasTools, bool $vision): string
     {
-        $appName = (string) Config::get('app.name', 'ระบบฝากขาย ร้านค้าสหการ');
+        // Installs made before the rename still carry the old name in config/config.php.
+        $appName = str_replace('ระบบฝากขาย', 'ระบบบริหารบัญชี', (string) Config::get('app.name', 'ระบบบริหารบัญชี ร้านค้าสหการ'));
         $role = self::ROLE_LABEL[$user['role']] ?? $user['role'];
         $perms = implode(', ', $toolbox->permissions());
         $now = date('Y-m-d H:i');

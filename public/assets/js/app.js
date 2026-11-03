@@ -209,7 +209,7 @@ function renderLogin(message) {
     <div class="auth-wrap">
       <div class="auth-card">
         <h1>เข้าสู่ระบบ</h1>
-        <p class="sub">ระบบฝากขาย ร้านค้าสหการ</p>
+        <p class="sub">ระบบบริหารบัญชี ร้านค้าสหการ</p>
         ${message ? `<div class="error-box" style="margin-bottom:14px">${escapeHtml(message)}</div>` : ''}
         ${body}
         ${qrLogin ? `
