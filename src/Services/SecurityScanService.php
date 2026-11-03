@@ -542,13 +542,15 @@ final class SecurityScanService
         $recentAdmins = array_filter($admins, fn ($a) => strtotime((string) $a['created_at']) > time() - 7 * 86400);
 
         $changes = $this->db->query(
-            "SELECT a.created_at, a.table_name, a.action, a.record_id, a.ip_address, u.username
+            "SELECT a.created_at, a.table_name, a.action, a.record_id, a.ip_address, a.new_data, u.username
              FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
              WHERE a.table_name IN ('users', 'role_permissions', 'security') AND a.created_at >= NOW() - INTERVAL 14 DAY
              ORDER BY a.id DESC LIMIT 30"
         )->fetchAll(PDO::FETCH_ASSOC);
         $changeItems = array_map(fn ($c) => [
-            'file' => substr((string) $c['created_at'], 0, 16) . ' · ' . $c['table_name'] . ' #' . $c['record_id'] . ' ' . $c['action'],
+            'file' => substr((string) $c['created_at'], 0, 16) . ' · ' . $c['table_name'] . ' #' . $c['record_id'] . ' '
+                // Events outside create/update/delete/cancel are logged as an update naming the event (AuditLogger).
+                . ((json_decode((string) $c['new_data'], true) ?: [])['event'] ?? $c['action']),
             'note' => 'โดย ' . ($c['username'] ?? '-') . ($c['ip_address'] ? ' · IP ' . $c['ip_address'] : ''),
         ], $changes);
 

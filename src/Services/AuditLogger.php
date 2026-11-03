@@ -12,6 +12,8 @@ use PDO;
  */
 class AuditLogger
 {
+    public const ACTIONS = ['create', 'update', 'delete', 'cancel'];
+
     public function __construct(private PDO $db)
     {
     }
@@ -25,6 +27,12 @@ class AuditLogger
         ?int $userId,
         ?string $ip
     ): void {
+        // audit_logs.action holds only these (migration 0027). Other events (security baseline,
+        // repair mode, quarantine, backup restore…) are kept as an update naming the event.
+        if (!in_array($action, self::ACTIONS, true)) {
+            $new = ['event' => $action] + ($new ?? []);
+            $action = 'update';
+        }
         $stmt = $this->db->prepare(
             'INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, user_id, ip_address, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, NOW())'
