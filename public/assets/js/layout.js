@@ -67,11 +67,7 @@ const PAGES = [
     { group: 'รายงานและระบบ', items: [
         { key: 'reports', label: 'รายงานสรุป', perm: 'reports.view' },
         { key: 'settings', label: 'ตั้งค่าระบบ', perm: 'settings.view' },
-        { key: 'ai', label: 'ตั้งค่าผู้ช่วย AI', perm: 'ai.manage' },
         { key: 'aiusage', label: 'การใช้งานผู้ช่วย AI', perm: 'ai.usage' },
-        { key: 'migrations', label: 'จัดการฐานข้อมูล (Migrations)', perm: 'migrations.manage' },
-        { key: 'security', label: 'ตรวจสอบความปลอดภัย', perm: 'migrations.manage' },
-        { key: 'backup', label: 'แบ็คอัพและกู้คืนข้อมูล', perm: 'migrations.manage' },
         { key: 'devices', label: 'อุปกรณ์ POS (Android)', perm: 'devices.manage' },
         { key: 'audit', label: 'ประวัติการแก้ไข', perm: 'audit.view' },
     ]},

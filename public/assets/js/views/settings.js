@@ -36,11 +36,17 @@ const TABS = [
     { key: 'perf', label: 'ประสิทธิภาพ', edit: true },
     { key: 'disk', label: 'พื้นที่ดิสก์', edit: true, admin: true },
     { key: 'history', label: 'ประวัติการเปลี่ยนแปลง' },
+    // Admin-only pages that used to have their own menu items (รายงานและระบบ): each is its own
+    // view module, shown here as a tab. Their old routes (#/ai, #/migrations …) land here (app.js).
+    { key: 'ai', label: 'ผู้ช่วย AI', perm: 'ai.manage', view: 'ai' },
+    { key: 'migrations', label: 'ฐานข้อมูล (Migrations)', perm: 'migrations.manage', view: 'migrations' },
+    { key: 'backup', label: 'แบ็คอัพและกู้คืน', perm: 'migrations.manage', view: 'backup' },
+    { key: 'security', label: 'ตรวจสอบความปลอดภัย', perm: 'migrations.manage', view: 'security' },
 ];
 
 export async function render(page, { user, permissions, params = {} }) {
     const canEdit = permissions.includes('settings.edit');
-    const tabs = TABS.filter((t) => (!t.edit || canEdit) && (!t.admin || user?.role === 'admin'));
+    const tabs = TABS.filter((t) => (!t.edit || canEdit) && (!t.admin || user?.role === 'admin') && (!t.perm || permissions.includes(t.perm)));
     let tab = tabs.some((t) => t.key === params.tab) ? params.tab : 'fees';
     page.innerHTML = `<div class="tabs" style="margin-bottom:16px">${tabs.map((t) =>
         `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}</div><div></div>`;
@@ -65,6 +71,11 @@ export async function render(page, { user, permissions, params = {} }) {
         if (key === 'rvcone') return renderOaPanel(pane);
         if (key === 'perf') return renderPerfPanel(pane);
         if (key === 'disk') return renderDiskPanel(pane);
+        const view = TABS.find((t) => t.key === key)?.view;
+        if (view) {
+            const mod = await import(`./${view}.js`);
+            return mod.render(pane, { user, permissions, params });
+        }
         await load();
     }
     page.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => show(b.dataset.tab)));

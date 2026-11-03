@@ -19,6 +19,9 @@ const ROUTE_PERMS = {
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 
+// Pages that are tabs of ตั้งค่าระบบ (views/settings.js) rather than menu items of their own.
+const SETTINGS_TABS = ['ai', 'migrations', 'backup', 'security'];
+
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
     dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', closing: 'report', wages: 'report',
@@ -51,6 +54,11 @@ async function loadView({ key, params }) {
     }
     const view = document.getElementById('view');
     if (!view) return;
+    // Admin pages now shown as tabs of ตั้งค่าระบบ: old links and bookmarks land on their tab.
+    if (SETTINGS_TABS.includes(key)) {
+        history.replaceState(null, '', `#/settings?${new URLSearchParams({ ...params, tab: key })}`);
+        return loadView({ key: 'settings', params: { ...params, tab: key } });
+    }
 
     if (state.permissions.length && ROUTE_PERMS[key] && !state.permissions.includes(ROUTE_PERMS[key])) {
         view.innerHTML = `<div class="card card-pad">ไม่มีสิทธิ์เข้าถึงหน้านี้</div>`;
