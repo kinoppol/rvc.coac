@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Services\AttachmentService;
+use App\Services\DiskUsageService;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use App\Support\RequestLog;
@@ -17,6 +18,47 @@ class PerfController
     use JsonResponse;
 
     private const THUMB_BATCH = 20;
+
+    /** GET /admin/disk — disk space now, the daily readings and the growth rate (admin). */
+    public function disk(Request $request, Response $response): Response
+    {
+        if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        $service = new DiskUsageService(Db::connection());
+        $history = $service->history();
+        return $this->json($response, ['data' => [
+            'now' => $service->measure(),
+            'history' => $history,
+            'forecast' => [
+                'week' => DiskUsageService::forecast($history, 7),
+                'month' => DiskUsageService::forecast($history, 30),
+                'quarter' => DiskUsageService::forecast($history, 90),
+            ],
+            'recording' => $history !== [] || $this->tableExists('disk_usage_daily'),
+        ]]);
+    }
+
+    /** POST /admin/disk/record — save today's reading now (admin). */
+    public function recordDisk(Request $request, Response $response): Response
+    {
+        if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        try {
+            (new DiskUsageService(Db::connection()))->record();
+        } catch (\PDOException $e) {
+            return $this->error($response, 'ยังบันทึกไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0060) ก่อน', 422);
+        }
+        return $this->json($response, ['ok' => true]);
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $stmt = Db::connection()->prepare('SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?');
+        $stmt->execute([$table]);
+        return (bool) $stmt->fetchColumn();
+    }
 
     /** GET /admin/perf?date=YYYY-MM-DD — the day's request timings, slow ones flagged. */
     public function requests(Request $request, Response $response): Response

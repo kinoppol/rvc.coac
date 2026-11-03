@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 import { renderPerfPanel } from './settings-perf.js';
+import { renderDiskPanel } from './settings-disk.js';
 import { skPage } from '../skeleton.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
@@ -33,12 +34,13 @@ const TABS = [
     { key: 'time', label: 'เขตเวลา (Time zone)' },
     { key: 'roles', label: 'สิทธิ์ตามบทบาท' },
     { key: 'perf', label: 'ประสิทธิภาพ', edit: true },
+    { key: 'disk', label: 'พื้นที่ดิสก์', edit: true, admin: true },
     { key: 'history', label: 'ประวัติการเปลี่ยนแปลง' },
 ];
 
 export async function render(page, { user, permissions, params = {} }) {
     const canEdit = permissions.includes('settings.edit');
-    const tabs = TABS.filter((t) => !t.edit || canEdit);
+    const tabs = TABS.filter((t) => (!t.edit || canEdit) && (!t.admin || user?.role === 'admin'));
     let tab = tabs.some((t) => t.key === params.tab) ? params.tab : 'fees';
     page.innerHTML = `<div class="tabs" style="margin-bottom:16px">${tabs.map((t) =>
         `<button type="button" class="tab-btn" data-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}</div><div></div>`;
@@ -62,6 +64,7 @@ export async function render(page, { user, permissions, params = {} }) {
         if (key === 'users') return renderUsersPanel(pane, { user });
         if (key === 'rvcone') return renderOaPanel(pane);
         if (key === 'perf') return renderPerfPanel(pane);
+        if (key === 'disk') return renderDiskPanel(pane);
         await load();
     }
     page.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => show(b.dataset.tab)));

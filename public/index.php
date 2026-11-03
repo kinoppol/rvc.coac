@@ -38,6 +38,7 @@ use App\Middleware\AuthMiddleware;
 use App\Middleware\ReadOnlyGuard;
 use App\Middleware\CsrfMiddleware;
 use App\Middleware\RoleGuard;
+use App\Services\DiskUsageService;
 use App\Services\SettingsService;
 use App\Support\AppShell;
 use App\Support\Config;
@@ -453,6 +454,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('settings.edit'));
     $group->post('/admin/thumbnails', [PerfController::class, 'thumbnails'])
         ->add(new RoleGuard('settings.edit'));
+    $group->get('/admin/disk', [PerfController::class, 'disk'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->post('/admin/disk/record', [PerfController::class, 'recordDisk'])
+        ->add(new RoleGuard('settings.edit'));
 
     $group->post('/attachments', [AttachmentController::class, 'store']);
     $group->get('/attachments/{token:[a-f0-9]{32}}', [AttachmentController::class, 'show']);
@@ -529,6 +534,10 @@ $app->add(function (Request $request, $handler) use ($sessionWait) {
     $total = (microtime(true) - (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000;
     $response = $response->withHeader('X-App-Build', AppShell::build())->withHeader('Server-Timing', sprintf('session;desc="session wait";dur=%.0f, total;dur=%.0f', $sessionWait * 1000, $total));
     RequestLog::write($request->getMethod(), $request->getUri()->getPath(), $total, $sessionWait * 1000, $response->getStatusCode(), (int) ($_SESSION['user_id'] ?? 0));
+    // Disk space: one reading a day, taken after the first signed-in request of the day is answered.
+    if (!empty($_SESSION['user_id'])) {
+        DiskUsageService::recordDaily(fn () => Db::connection());
+    }
     // session_start() sends "Pragma: no-cache" and an Expires in 1981. Chrome reads that
     // Pragma as no-cache, so a cacheable response (a product photo) would still be asked
     // for again on every load (a 304 round trip each). Drop them where we allow caching.
