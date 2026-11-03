@@ -271,7 +271,19 @@ class PosDeviceService
      */
     public function seller(array $device, ?int $userId, bool $allowRemoved = false): array
     {
-        $userId = $userId ?: (int) $device['user_id'];
+        if (!$userId) {
+            // No profile named: the default one, or else the first seller who can still sell
+            // (so a closed default account does not lock the whole device out).
+            $first = null;
+            foreach ([(int) $device['user_id'], ...array_column($this->members((int) $device['id']), 'id')] as $id) {
+                $r = $this->seller($device, $id);
+                $first ??= $r;
+                if (isset($r['user'])) {
+                    return $r;
+                }
+            }
+            return $first;
+        }
         $member = null;
         foreach ($this->members((int) $device['id'], true) as $m) {
             if ($m['id'] === $userId) {
