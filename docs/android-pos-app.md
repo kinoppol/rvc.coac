@@ -389,6 +389,19 @@ businessDay(at):
 - หน้าเว็บแสดงเครื่องว่า "ออนไลน์" ถ้าเห็นภายใน 2.5 เท่าของ `ping_seconds` (อย่างน้อย 5 นาที)
 - หน้าตั้งค่าในแอป: รายการ `sync_levels` แสดง `label` + `description` และบอกว่าตั้งล่าสุดจากไหน (`changed_by`: web/app)
 
+### 5.10 รับฝากสินค้าและตรวจนับสต๊อก (ออนไลน์)
+ใช้ API เดียวกับหน้าเว็บผ่านโทเคนเครื่อง สิทธิ์ตามบัญชีของผู้ใช้งานอยู่ (`X-Device-User`) — แอปแสดงเมนูเฉพาะผู้มีสิทธิ์
+- **รับฝากสินค้า** (`receive.create`; ย้อนหลัง `receive.backdate`): `GET /consignors/options`, `POST /receive/quote`,
+  `GET /receive/history?consignor_id=&q=`, `POST /receive/existing`, `POST /receive`, `GET /receive/requests`,
+  `POST /receive/requests/{id}/reject`, `GET /receive/docs?q=`, `GET /receive/docs/{id}`, `POST /receive/docs/{id}/cancel` (ผู้ดูแลระบบ)
+- **ตรวจนับสต๊อก** (`stockcount.create`; ส่งรายงาน `stockcount.submit`; อนุมัติ/ส่งกลับ `stockcount.approve`):
+  `GET /stockcounts`, `GET /stockcounts/{id}`, `POST /stockcounts/start`, `GET /stockcounts/{id}/lookup?code=`,
+  `GET /stockcounts/{id}/search?q=`, `POST /stockcounts/{id}/count` (ต้องมีรูป `photo`), `POST /stockcounts/{id}/barcode`,
+  `POST /stockcounts/{id}/submit|approve|reopen|cancel`, `POST /products/{id}/photo`
+- **นับสต๊อกทันที** (ไม่มีรอบเปิด, `stockcount.approve`): `GET /inventory/lookup`, `GET /inventory/search`,
+  `POST /products/{id}/quick-count`, `POST /inventory/{id}/assign-barcode` (`purchase.create`)
+- บาร์โค้ดที่ร้าน/ผู้ฝากสร้างเอง (ไม่ใช่ EAN-13) ใช้ได้ตามปกติ: แอปค้นหาก่อนเสมอ เตือนเฉพาะรหัสที่ไม่พบและดูเหมือน EAN-13 ที่อ่านผิด
+
 ## 6. ข้อมูลในเครื่องและการซิงก์
 
 ### 6.1 ตาราง Room (ขั้นต่ำ)

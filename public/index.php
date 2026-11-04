@@ -150,6 +150,63 @@ $app->group('/api/device/v1', function ($group) {
         $group->$method("/drawer/{$action}", [DrawerController::class, $action])
             ->add(new RoleGuard('sales.create'));
     }
+
+    // Receiving consignors' goods and counting stock on the device: the web's endpoints and permissions.
+    $group->get('/consignors/options', [ConsignorController::class, 'options'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/quote', [ReceiveController::class, 'quote'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive', [ReceiveController::class, 'store'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/existing', [ReceiveController::class, 'existing'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/history', [ReceiveController::class, 'history'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/docs', [ReceiveController::class, 'documents'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/docs/{id:[0-9]+}', [ReceiveController::class, 'document'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/docs/{id:[0-9]+}/cancel', [ReceiveController::class, 'cancel'])
+        ->add(new RoleGuard('receive.create'));
+    $group->get('/receive/requests', [ReceiveController::class, 'requests'])
+        ->add(new RoleGuard('receive.create'));
+    $group->post('/receive/requests/{id:[0-9]+}/reject', [ReceiveController::class, 'rejectRequest'])
+        ->add(new RoleGuard('receive.create'));
+
+    $group->get('/stockcounts', [StockCountController::class, 'index'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);
+    $group->get('/stockcounts/{id:[0-9]+}', [StockCountController::class, 'show'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/start', [StockCountController::class, 'start'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/{id:[0-9]+}/search', [StockCountController::class, 'search'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/count', [StockCountController::class, 'countOne'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/barcode', [StockCountController::class, 'assignBarcode'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/products/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/cancel', [StockCountController::class, 'cancel'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/{id:[0-9]+}/submit', [StockCountController::class, 'submit'])
+        ->add(new RoleGuard('stockcount.submit'));
+    $group->post('/stockcounts/{id:[0-9]+}/approve', [StockCountController::class, 'approve'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/stockcounts/{id:[0-9]+}/reopen', [StockCountController::class, 'reopen'])
+        ->add(new RoleGuard('stockcount.approve'));
+    // Counting one product with no round open (sets its stock at once), as on the web's inventory page.
+    $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->get('/inventory/lookup', [InventoryController::class, 'lookup'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->get('/inventory/search', [InventoryController::class, 'search'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/inventory/{id:[0-9]+}/assign-barcode', [InventoryController::class, 'assignBarcode'])
+        ->add(new RoleGuard('purchase.create'));
 })->add(new ReadOnlyGuard())->add(new DeviceAuthMiddleware());
 
 // ---- Sign-in through RVC-ONE (SSO) ----
