@@ -186,7 +186,14 @@ class ProductRepo
             ['cost_price' => $cost, 'sale_price' => $price, 'fee_per_unit' => $fee, 'round_per_unit' => $round], $userId, $ip);
     }
 
-    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null, bool $allowConsigned = false): void
+    /**
+     * @param array{barcode?:?string, packs?:string[]}|null $orig what the editor showed when it was opened.
+     *        Given, barcodes are only changed where the user changed them: a piece barcode left as it
+     *        was keeps whatever is saved now (e.g. one linked on a phone meanwhile), one changed over a
+     *        piece barcode that changed meanwhile is refused, and only pack barcodes the editor showed
+     *        can be removed. Null: the lists given are the whole new state.
+     */
+    public function updateBarcodes(int $productId, ?string $barcode, array $packs, ?int $userId, ?string $ip, ?string $name = null, bool $allowConsigned = false, ?array $orig = null): void
     {
         $old = $this->find($productId);
         if (!$old || ($old['consignor_id'] !== null && !$allowConsigned)) {
@@ -201,6 +208,20 @@ class ProductRepo
         }
         $name = mb_substr($name, 0, 191);
         $barcode = trim((string) $barcode) ?: null;
+        $removable = null; // pack barcodes this save may remove (null: any)
+        if ($orig !== null) {
+            $origCode = trim((string) ($orig['barcode'] ?? '')) ?: null;
+            $current = trim((string) $old['barcode']) ?: null;
+            if ($barcode === $origCode) {
+                $barcode = $current; // not touched in the editor: keep what is saved now
+            } elseif ($current !== $origCode) {
+                throw new \RuntimeException(sprintf(
+                    'บาร์โค้ดชิ้นของสินค้านี้ถูกเปลี่ยนเป็น %s ระหว่างที่เปิดหน้าแก้ไขอยู่ (เช่น ผูกจากมือถือ) กรุณาปิดแล้วเปิดหน้าแก้ไขใหม่ แล้วแก้อีกครั้ง',
+                    $current ?? '(ไม่มี)'
+                ));
+            }
+            $removable = array_map(fn ($c) => trim((string) $c), (array) ($orig['packs'] ?? []));
+        }
         $clean = [];
         $noCode = []; // pack size => price: packs sold whole that have no barcode of their own
         foreach ($packs as $p) {
@@ -252,7 +273,9 @@ class ProductRepo
         $keep = array_map('strval', array_keys($clean));
         $del = $this->db->prepare('DELETE FROM product_pack_barcodes WHERE product_id = ? AND barcode = ?');
         foreach ($oldPacks as $p) {
-            if ($p['barcode'] !== null && !in_array($p['barcode'], $keep, true)) {
+            // A pack barcode added since the editor was opened (not in $removable) stays.
+            if ($p['barcode'] !== null && !in_array($p['barcode'], $keep, true)
+                && ($removable === null || in_array((string) $p['barcode'], $removable, true))) {
                 $del->execute([$productId, $p['barcode']]);
             }
         }
@@ -288,7 +311,7 @@ class ProductRepo
      * Links one more barcode to a product: the piece barcode (pack size 1,
      * replacing the old one) or, for store goods only, a pack barcode.
      */
-    public function assignBarcode(int $productId, string $code, int $packSize, ?int $userId, ?string $ip): void
+    public function assignBarcode(int $productId, string $code, int $packSize, ?int $userId, ?string $ip, bool $replace = false): void
     {
         $old = $this->find($productId);
         if (!$old) {
@@ -297,6 +320,18 @@ class ProductRepo
         $code = trim($code);
         if ($code === '' || mb_strlen($code) > 64) {
             throw new \RuntimeException('บาร์โค้ดไม่ถูกต้อง');
+        }
+        // Taking the piece barcode away (replaced, or moved to a pack) only when the user said so.
+        $oldCode = trim((string) $old['barcode']);
+        if (!$replace && $oldCode !== '' && $oldCode !== $code && $packSize === 1) {
+            throw new \App\Support\NeedsConfirmation(
+                "«{$old['name']}» มีบาร์โค้ดชิ้น {$oldCode} อยู่แล้ว ถ้าผูก {$code} เป็นบาร์โค้ดชิ้น บาร์โค้ดเดิมจะถูกแทนที่ (สแกน {$oldCode} ที่ POS จะไม่พบสินค้านี้)"
+            );
+        }
+        if (!$replace && $oldCode === $code && $packSize > 1) {
+            throw new \App\Support\NeedsConfirmation(
+                "{$code} เป็นบาร์โค้ดชิ้นของ «{$old['name']}» อยู่ ถ้าเปลี่ยนเป็นบาร์โค้ดแพ็ค สินค้านี้จะไม่มีบาร์โค้ดชิ้น"
+            );
         }
         if ($packSize === 1) {
             if ($old['barcode'] === $code) {
@@ -382,7 +417,7 @@ class ProductRepo
      * @param int[] $dupIds
      * @return array{merged:int, refunded:float}
      */
-    public function merge(int $keepId, array $dupIds, \App\Services\LedgerService $ledger, \App\Services\DocumentNumberService $docs, ?int $userId, ?string $ip): array
+    public function merge(int $keepId, array $dupIds, \App\Services\LedgerService $ledger, \App\Services\DocumentNumberService $docs, ?int $userId, ?string $ip, ?string $useBarcode = null): array
     {
         $dupIds = array_values(array_unique(array_filter(array_map('intval', $dupIds), fn ($id) => $id > 0 && $id !== $keepId)));
         if (!$dupIds) {
@@ -418,6 +453,17 @@ class ProductRepo
                 $codes[$c] = $id;
             }
         }
+        // Different ones: the user picks which goes on ($useBarcode); none of them is lost.
+        if (count($codes) > 1) {
+            $useBarcode = trim((string) $useBarcode);
+            if ($useBarcode === '') {
+                throw new \App\Support\NeedsConfirmation('รายการที่จะรวมมีบาร์โค้ดชิ้นหลายอัน (' . implode(', ', array_map('strval', array_keys($codes))) . ') กรุณาเลือกบาร์โค้ดที่จะใช้ต่อ');
+            }
+            if (!array_key_exists($useBarcode, $codes)) {
+                throw new \RuntimeException("บาร์โค้ด {$useBarcode} ไม่ใช่บาร์โค้ดของรายการที่จะรวม กรุณารีเฟรชหน้า");
+            }
+            $codes = [$useBarcode => $codes[$useBarcode]] + $codes;
+        }
         $barcode = $codes ? (string) array_key_first($codes) : null;
         $held = array_slice($codes, 1, null, true);
 
@@ -436,6 +482,11 @@ class ProductRepo
             foreach (['receive_items', 'return_items', 'sale_items', 'purchase_items', 'stock_count_items',
                       'stock_count_photos', 'pos_item_mappings', 'product_pack_barcodes'] as $table) {
                 $this->db->prepare("UPDATE $table SET product_id = ? WHERE product_id = ?")->execute([$keepId, $id]);
+            }
+            // Product split documents (migration 0061): pieces split into / out of the duplicate.
+            if (\App\Support\Db::hasColumn($this->db, 'product_splits', 'id')) {
+                $this->db->prepare('UPDATE product_split_items SET product_id = ? WHERE product_id = ?')->execute([$keepId, $id]);
+                $this->db->prepare('UPDATE product_splits SET source_product_id = ? WHERE source_product_id = ?')->execute([$keepId, $id]);
             }
             // Backups the duplicate already had come along (before migration 0059 there are none).
             try {

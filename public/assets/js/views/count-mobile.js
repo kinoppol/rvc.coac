@@ -51,7 +51,7 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
         lookup: (code) => api.get(`/inventory/lookup?code=${encodeURIComponent(code)}`),
         search: (q) => api.get(`/inventory/search?q=${encodeURIComponent(q)}`),
         count: (b) => api.post(`/products/${b.product_id}/quick-count`, { counted_qty: b.counted_qty, photo: b.photo, note: b.photo_note }),
-        barcode: (b) => api.post(`/inventory/${b.product_id}/assign-barcode`, { barcode: b.barcode, pack_size: b.pack_size }),
+        barcode: (b) => api.post(`/inventory/${b.product_id}/assign-barcode`, { barcode: b.barcode, pack_size: b.pack_size, replace: !!b.replace }),
     } : {
         lookup: (code) => api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`),
         search: (q) => api.get(`/stockcounts/${stockCount.id}/search?q=${encodeURIComponent(q)}`),
@@ -365,7 +365,20 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
         }
         busy = true;
         try {
-            const res = await ep.barcode({ product_id: p.id, barcode: code, pack_size: size });
+            const body = { product_id: p.id, barcode: code, pack_size: size };
+            let res;
+            try {
+                res = await ep.barcode(body);
+            } catch (e) {
+                // 409: this would replace / move the product's piece barcode: only on a yes.
+                if (e.status !== 409) throw e;
+                if (!window.confirm(`${e.message}\n\nยืนยันทำต่อ?`)) {
+                    message = { kind: 'bad', text: 'ไม่ได้ผูกบาร์โค้ด (บาร์โค้ดเดิมยังอยู่)' };
+                    closeSheet();
+                    return;
+                }
+                res = await ep.barcode({ ...body, replace: true });
+            }
             beep('saved');
             linkFor = null;
             closeSheet();

@@ -587,7 +587,7 @@ export async function render(container, { permissions = [], user } = {}) {
         m.el.querySelectorAll('[data-item-edit]').forEach((b) => b.addEventListener('click', () => {
             const it = d.items.find((x) => Number(x.id) === Number(b.dataset.itemEdit));
             m.edit = {
-                id: Number(it.id), name: it.name, barcode: it.barcode || '', qty: String(it.qty),
+                id: Number(it.id), name: it.name, barcode: it.barcode || '', origBarcode: it.barcode || '', qty: String(it.qty),
                 cost_price: String(Number(it.current_cost)), sale_price: String(Number(it.current_price)),
                 mfg_date: it.mfg_date || '', expiry_date: it.expiry_date || '',
             };
@@ -678,11 +678,16 @@ export async function render(container, { permissions = [], user } = {}) {
         else if (ed.expiry_date && ed.mfg_date && ed.expiry_date < ed.mfg_date) m.error = 'วันหมดอายุต้องไม่ก่อนวันที่ผลิต';
         else m.error = null;
         if (m.error) { drawDoc(); return; }
+        // Clearing the piece barcode: only when meant (scanning it at the POS will no longer find the product).
+        if (ed.origBarcode && !ed.barcode.trim() && !await confirmDialog(
+            `ลบบาร์โค้ดชิ้น ${ed.origBarcode} ออกจาก «${ed.name.trim()}»? หลังลบสแกนบาร์โค้ดนี้ที่ POS จะไม่พบสินค้า`,
+            { title: 'ลบบาร์โค้ดชิ้น?', okText: 'ลบบาร์โค้ด', danger: true }
+        )) return;
         m.busy = true;
         drawDoc();
         try {
             m.doc = (await api.put(`/receive/items/${ed.id}`, {
-                name: ed.name.trim(), barcode: ed.barcode.trim(), qty: Number(ed.qty), cost_price: cost, sale_price: price,
+                name: ed.name.trim(), barcode: ed.barcode.trim(), orig_barcode: ed.origBarcode, qty: Number(ed.qty), cost_price: cost, sale_price: price,
                 mfg_date: ed.mfg_date, expiry_date: ed.expiry_date,
             })).data;
             m.edit = null;

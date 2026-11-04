@@ -235,7 +235,16 @@ export function openInventoryMobile({ canLink, canPhoto, onClose }) {
             if (pack && !(n >= 2)) { err.hidden = false; err.textContent = 'กรุณาระบุจำนวนชิ้นต่อแพ็ค (2 ขึ้นไป)'; return; }
             ev.target.disabled = true;
             try {
-                const res = await api.post(`/inventory/${p.id}/assign-barcode`, { barcode: code, pack_size: n });
+                const body = { barcode: code, pack_size: n };
+                let res;
+                try {
+                    res = await api.post(`/inventory/${p.id}/assign-barcode`, body);
+                } catch (e) {
+                    // 409: this would replace / move the product's piece barcode: only on a yes.
+                    if (e.status !== 409) throw e;
+                    if (!window.confirm(`${e.message}\n\nยืนยันทำต่อ?`)) { ev.target.disabled = false; return; }
+                    res = await api.post(`/inventory/${p.id}/assign-barcode`, { ...body, replace: true });
+                }
                 product = res.data;
                 scannedPack = n;
                 unknown = null;

@@ -158,11 +158,14 @@ class StockCountController
         try {
             (new ProductRepo($db, new AuditLogger($db)))->assignBarcode(
                 $productId, (string) ($body['barcode'] ?? ''), max(1, (int) ($body['pack_size'] ?? 1)),
-                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null
+                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, !empty($body['replace'])
             );
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
+            if ($e instanceof \App\Support\NeedsConfirmation) {
+                return $this->error($response, $e->getMessage(), 409);
+            }
             if ($e instanceof \RuntimeException) {
                 return $this->error($response, $e->getMessage(), 422);
             }

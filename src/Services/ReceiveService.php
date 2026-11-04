@@ -360,6 +360,20 @@ class ReceiveService
                 throw new \RuntimeException('กรุณากรอกชื่อสินค้า');
             }
             $barcode = array_key_exists('barcode', $data) ? (trim((string) $data['barcode']) ?: null) : $product['barcode'];
+            // What the form showed when opened: left as it was keeps what is saved now (a barcode
+            // linked meanwhile is not wiped); changed over one that changed meanwhile is refused.
+            if (array_key_exists('barcode', $data) && array_key_exists('orig_barcode', $data)) {
+                $origCode = trim((string) $data['orig_barcode']) ?: null;
+                $current = trim((string) $product['barcode']) ?: null;
+                if ($barcode === $origCode) {
+                    $barcode = $product['barcode'];
+                } elseif ($current !== $origCode) {
+                    throw new \RuntimeException(sprintf(
+                        'บาร์โค้ดชิ้นของสินค้านี้ถูกเปลี่ยนเป็น %s ระหว่างที่เปิดแก้ไขอยู่ กรุณาปิดแล้วเปิดใบรับฝากใหม่ แล้วแก้อีกครั้ง',
+                        $current ?? '(ไม่มี)'
+                    ));
+                }
+            }
             if ($barcode !== null && $barcode !== $product['barcode']) {
                 $clash = $this->db->prepare(
                     'SELECT p.name FROM products p WHERE p.barcode = ? AND p.id <> ? AND NOT (p.consignor_id <=> ?)

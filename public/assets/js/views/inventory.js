@@ -272,6 +272,8 @@ export async function render(container, { navigate, permissions, user }) {
             if (canConsign && !consigned && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
             editing = {
                 id: p.id, name: p.name, barcode: p.barcode || '', packs: packRows(p.pack_barcodes), consigned, consignorName: p.consignor_name,
+                // As shown when opened: the server keeps barcodes added meanwhile (e.g. from a phone) instead of wiping them.
+                origBarcode: p.barcode || '', origPacks: p.pack_barcodes.map((b) => b.barcode).filter(Boolean),
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
                 priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price), knownCost: '',
                 soldQty: Number(p.qty_sold),
@@ -533,7 +535,8 @@ export async function render(container, { navigate, permissions, user }) {
         // received last goes on, the others are held for checking (no other product may use them).
         const byLatest = [...group].sort((a, b) => (`${b.last_purchase || ''}|${String(b.id).padStart(12, '0')}` > `${a.last_purchase || ''}|${String(a.id).padStart(12, '0')}` ? 1 : -1));
         const codes = [...new Set(byLatest.map((x) => (x.barcode || '').trim()).filter(Boolean))];
-        const useCode = codes[0] || null;
+        // Several: the user picks the one that goes on (the latest row's by default); the rest are held.
+        let useCode = codes[0] || null;
         const heldCodes = codes.slice(1);
         const salesDiffer = group.some((x) => money(x.sale_price) !== money(after.sale_price));
         // Photo: the latest one taken goes on (as the server picks it), the others are kept as backups.
@@ -558,8 +561,10 @@ export async function render(container, { navigate, permissions, user }) {
                   <td class="muted" style="white-space:nowrap">${x.id}${x.id === group[0].id ? ' <span style="font-size:11px">(เก่าสุด)</span>' : ''}</td>
                   <td style="white-space:nowrap">${photoCell(x)}</td>
                   <td>${escapeHtml(x.name)}</td>
-                  <td style="font-size:12px;white-space:nowrap">${escapeHtml(x.barcode || '—')}${heldCodes.length && x.barcode
-                      ? (x.barcode.trim() === useCode ? '<div><span class="pill ok" style="font-size:11px">● ใช้ต่อ</span></div>' : '<div><span class="pill warn" style="font-size:11px">⏸ เก็บไว้ตรวจสอบ</span></div>') : ''}</td>
+                  <td style="font-size:12px;white-space:nowrap">${heldCodes.length && x.barcode
+                      ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400"><input type="radio" name="merge-code" value="${escapeHtml(x.barcode.trim())}" ${x.barcode.trim() === useCode ? 'checked' : ''}> ${escapeHtml(x.barcode)}</label>
+                         <div data-merge-pill="${escapeHtml(x.barcode.trim())}">${x.barcode.trim() === useCode ? '<span class="pill ok" style="font-size:11px">● ใช้ต่อ</span>' : '<span class="pill warn" style="font-size:11px">⏸ เก็บไว้ตรวจสอบ</span>'}</div>`
+                      : escapeHtml(x.barcode || '—')}</td>
                   <td style="font-size:12px;white-space:nowrap">${x.last_purchase ? fmtDate(x.last_purchase) : '—'}</td>
                   <td class="num" style="white-space:nowrap">฿${money(x.cost_price)}${isLatest ? ' <span class="pill" style="font-size:11px">● ล่าสุด ใช้ต่อ</span>' : ''}</td>
                   <td class="num" style="${saleOff ? 'color:var(--muted);text-decoration:line-through' : ''}">฿${money(x.sale_price)}</td>
@@ -567,7 +572,7 @@ export async function render(container, { navigate, permissions, user }) {
                 </tr>`;
             }).join('')}
             <tr style="border-top:2px solid var(--border)"><td colspan="4"><b>หลังรวม</b> <span class="muted" style="font-size:12px">(รหัส ${p.id})</span></td>
-              <td style="font-size:12px"><b>${escapeHtml(useCode || '—')}</b></td><td></td>
+              <td style="font-size:12px"><b data-merge-use>${escapeHtml(useCode || '—')}</b></td><td></td>
               <td class="num"><b>฿${money(after.cost_price)}</b></td><td class="num"><b>฿${money(after.sale_price)}</b></td>
               <td class="num"><b>${count(sum('qty_received'))}</b></td><td class="num"><b>${count(sum('qty_sold'))}</b></td><td class="num"><b>${count(sum('qty_stock'))}</b></td></tr>
             </tbody>
@@ -575,21 +580,34 @@ export async function render(container, { navigate, permissions, user }) {
           ${costsDiffer ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ต้นทุนไม่เท่ากัน (ราคาส่งต่างกันหรือมีการปรับราคา) — หลังรวมใช้ต้นทุนของรายการที่ซื้อ/รับล่าสุด <b>฿${money(after.cost_price)}</b> ต่อจากนี้
             · ต้นทุนเดิมเก็บเป็นประวัติในเอกสารซื้อ/รับแต่ละใบ (ดูในบัตรสต๊อก) และกำไรของยอดที่ขายไปแล้วคิดตามต้นทุนของช่วงเวลานั้น ไม่เปลี่ยน</div></div>` : ''}
           ${salesDiffer ? `<div class="error-box" style="margin-top:8px;font-size:13px">ราคาขายไม่เท่ากัน — หลังรวมขายที่ ฿${money(after.sale_price)} (ราคาที่ขีดฆ่าจะไม่ใช้ต่อ)</div>` : ''}
-          ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน — หลังรวมใช้ <b>${escapeHtml(useCode)}</b> ของรายการที่ซื้อ/รับล่าสุด
-            · ${heldCodes.map(escapeHtml).join(', ')} เก็บไว้ตรวจสอบที่รายการนี้ ใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก (ถ้าเป็นการบันทึกผิดพลาด)</div>` : ''}
+          ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน ${codes.length} อัน — <b>เลือกบาร์โค้ดที่จะใช้ต่อ</b> ในคอลัมน์บาร์โค้ด (ตั้งไว้เป็นของรายการที่ซื้อ/รับล่าสุด)
+            · บาร์โค้ดที่เหลือเก็บไว้ทั้งหมด (รอตรวจสอบที่รายการนี้) ไม่หาย และใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก</div>` : ''}
           ${group.some((x) => x.name !== p.name) ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ชื่อสินค้าสะกดต่างกันเล็กน้อย — ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกัน หลังรวมใช้ชื่อ <b>«${escapeHtml(p.name)}»</b> ของรายการหลัก
             (ถ้าต้องการชื่ออื่น กด "รวมเข้ารายการนี้แทน" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
           ${withPhoto.length > 1 ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>มีรูปสินค้า ${withPhoto.length} รูป — หลังรวมใช้รูปล่าสุด (รายการ ${usePhoto.id}) รูปอื่นเก็บเป็นรูปสำรอง ไม่ลบ ดูหรือเปลี่ยนกลับได้ในหน้ารายละเอียดสินค้า</div></div>` : ''}
           ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
+        // The barcode picked in the dialog (its radios live in the dialog's markup).
+        const onPick = (ev) => {
+            if (ev.target?.name !== 'merge-code') return;
+            useCode = ev.target.value;
+            document.querySelectorAll('[data-merge-pill]').forEach((el) => {
+                el.innerHTML = el.dataset.mergePill === useCode
+                    ? '<span class="pill ok" style="font-size:11px">● ใช้ต่อ</span>' : '<span class="pill warn" style="font-size:11px">⏸ เก็บไว้ตรวจสอบ</span>';
+            });
+            document.querySelectorAll('input[name="merge-code"]').forEach((r) => { r.checked = r.value === useCode; });
+            const use = document.querySelector('[data-merge-use]');
+            if (use) use.textContent = useCode;
+        };
+        document.addEventListener('change', onPick);
         const ok = await confirmDialog(
             `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
             + ` เอกสารรับฝาก/ขาย/ตรวจนับ และบาร์โค้ดของรายการ ${others.map((x) => x.id).join(', ')} จะย้ายมาที่รายการหลัก แล้วลบรายการซ้ำทิ้ง`
             + (p.consignor_id != null ? ' · ค่าทำข้อมูลที่เก็บจากรายการซ้ำจะคืนเข้าบัญชีผู้ฝาก' : ''),
-            { title: 'รวมรายการสินค้าซ้ำ?', okText: 'รวมรายการ', danger: !older, html: table, width: 920 }
-        );
+            { title: 'รวมรายการสินค้าซ้ำ?', okText: heldCodes.length ? 'รวมรายการ (ใช้บาร์โค้ดที่เลือก)' : 'รวมรายการ', danger: !older, html: table, width: 920 }
+        ).finally(() => document.removeEventListener('change', onPick));
         if (!ok) return;
         try {
-            const r = await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id) });
+            const r = await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id), ...(heldCodes.length ? { barcode: useCode } : {}) });
             await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}${r.held?.length ? ` · บาร์โค้ด ${r.held.join(', ')} เก็บไว้ตรวจสอบ` : ''}`, { title: 'รวมรายการแล้ว' });
             await load();
         } catch (err) {
@@ -956,11 +974,23 @@ export async function render(container, { navigate, permissions, user }) {
                 );
                 if (!ok) return;
             }
+            // Barcodes taken off in the editor: only when meant (scanning them will no longer find the product).
+            const keptPacks = new Set(e.packs.flatMap((p) => p.codes.map((c) => c.trim())).filter(Boolean));
+            const gone = [
+                ...(e.origBarcode && e.barcode.trim() !== e.origBarcode ? [`บาร์โค้ดชิ้น ${e.origBarcode}${e.barcode.trim() ? ` (แทนที่ด้วย ${e.barcode.trim()})` : ''}`] : []),
+                ...e.origPacks.filter((c) => !keptPacks.has(c)).map((c) => `บาร์โค้ดแพ็ค ${c}`),
+            ];
+            if (gone.length && !await confirmDialog(
+                `จะลบออกจาก «${e.name.trim()}»: ${gone.join(', ')} — หลังบันทึกสแกนบาร์โค้ดเดิมจะไม่พบสินค้านี้`,
+                { title: 'ลบ/เปลี่ยนบาร์โค้ด?', okText: 'บันทึก', danger: true }
+            )) return;
             e.busy = true; e.error = null; draw();
             try {
                 const out = await api.put(`/inventory/${e.id}/barcodes`, {
                     name: e.name.trim(),
                     barcode: e.barcode.trim(),
+                    orig_barcode: e.origBarcode,
+                    orig_pack_barcodes: e.origPacks,
                     ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
                     ...(knownCost !== null ? { known_cost: knownCost } : {}),
                     ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),

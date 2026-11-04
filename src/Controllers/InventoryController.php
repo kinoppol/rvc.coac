@@ -103,10 +103,13 @@ class InventoryController
         $db->beginTransaction();
         try {
             $repo->assignBarcode($id, (string) ($body['barcode'] ?? ''), max(1, (int) ($body['pack_size'] ?? 1)),
-                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, !empty($body['replace']));
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
+            if ($e instanceof \App\Support\NeedsConfirmation) {
+                return $this->error($response, $e->getMessage(), 409);
+            }
             if ($e instanceof \RuntimeException) {
                 return $this->error($response, $e->getMessage(), 422);
             }
@@ -275,7 +278,11 @@ class InventoryController
         try {
             $repo->updateBarcodes(
                 $id, $body['barcode'] ?? null, $consigned ? [] : (array) ($body['pack_barcodes'] ?? []), (int) $user['id'],
-                $request->getServerParams()['REMOTE_ADDR'] ?? null, !$consigned && isset($body['name']) ? (string) $body['name'] : null, $consigned
+                $request->getServerParams()['REMOTE_ADDR'] ?? null, !$consigned && isset($body['name']) ? (string) $body['name'] : null, $consigned,
+                // What the editor showed when opened: barcodes added meanwhile (e.g. from a phone) are not wiped.
+                array_key_exists('orig_barcode', $body)
+                    ? ['barcode' => $body['orig_barcode'], 'packs' => array_map('strval', (array) ($body['orig_pack_barcodes'] ?? []))]
+                    : null
             );
             // The piece sale price: admins and managers only, store goods only.
             if (isset($body['sale_price']) && $body['sale_price'] !== '' && !$consigned) {
@@ -421,10 +428,14 @@ class InventoryController
         $repo = new ProductRepo($db, new AuditLogger($db));
         $db->beginTransaction();
         try {
-            $result = $repo->merge($keepId, $ids, new LedgerService($db), new DocumentNumberService($db), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $result = $repo->merge($keepId, $ids, new LedgerService($db), new DocumentNumberService($db), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                isset($body['barcode']) ? (string) $body['barcode'] : null);
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
+            if ($e instanceof \App\Support\NeedsConfirmation) {
+                return $this->error($response, $e->getMessage(), 409);
+            }
             if ($e instanceof \RuntimeException) {
                 return $this->error($response, $e->getMessage(), 422);
             }

@@ -159,7 +159,7 @@ class ReceiveController
         if (($user['role'] ?? '') !== 'admin') {
             return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขรายการรับฝากได้', 403);
         }
-        $body = array_intersect_key((array) $request->getParsedBody(), array_flip(['name', 'barcode', 'qty', 'cost_price', 'sale_price', 'mfg_date', 'expiry_date']));
+        $body = array_intersect_key((array) $request->getParsedBody(), array_flip(['name', 'barcode', 'orig_barcode', 'qty', 'cost_price', 'sale_price', 'mfg_date', 'expiry_date']));
         try {
             $doc = self::service(Db::connection())->updateItem((int) $args['id'], $body, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
         } catch (\RuntimeException $e) {
