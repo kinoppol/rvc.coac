@@ -85,6 +85,8 @@ class InventoryService
      */
     private function stockEvents(?int $productId): array
     {
+        $in = $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?';
+        $splits = \App\Services\ProductSplitService::available($this->db);
         $stmt = $this->db->prepare(sprintf(
             "SELECT * FROM (
                 SELECT pi.product_id, pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
@@ -127,13 +129,29 @@ class InventoryService
                 JOIN stock_counts sc ON sc.id = sci.stock_count_id
                 LEFT JOIN users u ON u.id = sc.approved_by
                 WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
+              %4\$s
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
             $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?',
             // Cancelled receive / return documents (migration 0050) moved nothing.
             \App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '',
-            \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : ''
+            \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '',
+            // Splits (migration 0061): pieces out of the source product, into each piece product.
+            $splits ? "UNION ALL
+                SELECT sp.source_product_id, sp.created_at, DATE(sp.created_at), 'split', sp.doc_no, NULL, u.full_name, -sp.qty,
+                       sp.unit_cost, -ROUND(sp.qty * sp.unit_cost, 2), NULL, NULL, NULL, 2, sp.id
+                FROM product_splits sp
+                LEFT JOIN users u ON u.id = sp.user_id
+                WHERE sp.source_product_id IN ($in) AND sp.cancelled_at IS NULL
+              UNION ALL
+                SELECT spi.product_id, sp.created_at, DATE(sp.created_at), 'split', sp.doc_no, src.name, u.full_name, spi.qty,
+                       spi.unit_cost, ROUND(spi.qty * spi.unit_cost, 2), NULL, NULL, NULL, 1, spi.id
+                FROM product_split_items spi
+                JOIN product_splits sp ON sp.id = spi.split_id
+                JOIN products src ON src.id = sp.source_product_id
+                LEFT JOIN users u ON u.id = sp.user_id
+                WHERE spi.product_id IN ($in) AND sp.cancelled_at IS NULL" : ''
         ));
-        $stmt->execute($productId === null ? [] : array_fill(0, 5, $productId));
+        $stmt->execute($productId === null ? [] : array_fill(0, $splits ? 7 : 5, $productId));
         return $stmt->fetchAll();
     }
 
@@ -167,7 +185,8 @@ class InventoryService
         ];
         $docIn = 0;
         foreach ($events as $e) {
-            if ($e['kind'] === 'purchase' || $e['kind'] === 'receive') {
+            // Pieces split in from a pack are counted in the piece product's qty_received.
+            if ($e['kind'] === 'purchase' || $e['kind'] === 'receive' || ($e['kind'] === 'split' && (int) $e['qty'] > 0)) {
                 $docIn += (int) $e['qty'];
             }
         }
@@ -220,11 +239,11 @@ class InventoryService
 
         // Stock card summary: opening + received - sold - returned +/- adjustments = closing (qty and cost).
         $totals = [];
-        foreach (['opening', 'received', 'sold', 'returned', 'adjusted'] as $k) {
+        foreach (['opening', 'received', 'sold', 'returned', 'adjusted', 'split'] as $k) {
             $totals[$k] = ['qty' => 0, 'value' => 0.0];
         }
         $bucket = ['opening' => 'opening', 'purchase' => 'received', 'receive' => 'received', 'sale' => 'sold', 'pos' => 'sold',
-                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted'];
+                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted', 'split' => 'split'];
         foreach ($rows as $r) {
             $k = $bucket[$r['kind']];
             $sign = in_array($k, ['sold', 'returned'], true) ? -1 : 1;
@@ -313,7 +332,7 @@ class InventoryService
             $inByCreation = 0;
             $late = 0;
             foreach ($events as $e) {
-                if ($e['kind'] === 'purchase' || $e['kind'] === 'receive') {
+                if ($e['kind'] === 'purchase' || $e['kind'] === 'receive' || ($e['kind'] === 'split' && (int) $e['qty'] > 0)) {
                     $docIn += (int) $e['qty'];
                     if ((string) $e['date'] <= $created) {
                         $inByCreation += (int) $e['qty'];
@@ -570,6 +589,36 @@ class InventoryService
                     ], 'rows' => $all(
                         'SELECT p.name AS product, ri.qty, ri.sale_price, ROUND(ri.qty * ri.sale_price, 2) AS amount
                          FROM return_items ri JOIN products p ON p.id = ri.product_id WHERE ri.return_document_id = ? ORDER BY ri.id',
+                        (int) $d['id']
+                    )]],
+                ];
+
+            case 'split':
+                if (!\App\Services\ProductSplitService::available($this->db)) {
+                    return null;
+                }
+                $d = $one(
+                    "SELECT sp.*, p.name AS source_name, u.full_name, cu.full_name AS canceller FROM product_splits sp
+                     JOIN products p ON p.id = sp.source_product_id LEFT JOIN users u ON u.id = sp.user_id
+                     LEFT JOIN users cu ON cu.id = sp.cancelled_by WHERE sp.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                return [
+                    'title' => 'ใบแยกสินค้า ' . $d['doc_no'] . ($d['cancelled_at'] ? ' (ยกเลิกแล้ว)' : ''),
+                    'note' => ($d['cancelled_at'] ? 'ยกเลิกเมื่อ ' . $dateTime($d['cancelled_at']) . ' โดย ' . ($d['canceller'] ?? '-') . ' เหตุผล: ' . $d['cancel_reason'] . ' · ' : '') . sprintf(
+                        'แยกจาก %s จำนวน %s ชิ้น ต้นทุน ฿%s/ชิ้น · บันทึกโดย %s เมื่อ %s%s',
+                        $d['source_name'], number_format((int) $d['qty']), number_format((float) $d['unit_cost'], 2),
+                        $d['full_name'] ?? '-', $dateTime($d['created_at']), $d['note'] ? ' · หมายเหตุ: ' . $d['note'] : ''
+                    ),
+                    'sections' => [['title' => 'สินค้าที่แยกออกมา', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['barcode', 'บาร์โค้ดชิ้น', 'text'], ['created', 'ที่มา', 'text'],
+                        ['qty', 'จำนวน', 'qty'], ['unit_cost', 'ทุน/ชิ้น', 'money'], ['value', 'มูลค่าทุน', 'money'],
+                    ], 'rows' => $all(
+                        "SELECT p.name AS product, p.barcode, IF(i.created_product, 'สร้างใหม่', 'สินค้าที่มีอยู่') AS created, i.qty, i.unit_cost,
+                                ROUND(i.qty * i.unit_cost, 2) AS value
+                         FROM product_split_items i JOIN products p ON p.id = i.product_id WHERE i.split_id = ? ORDER BY i.id",
                         (int) $d['id']
                     )]],
                 ];

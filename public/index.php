@@ -26,6 +26,7 @@ use App\Controllers\OaAdminController;
 use App\Controllers\PerfController;
 use App\Controllers\PortalController;
 use App\Controllers\PosImportController;
+use App\Controllers\ProductSplitController;
 use App\Controllers\PurchaseController;
 use App\Controllers\ReceiveController;
 use App\Controllers\ReportsController;
@@ -428,6 +429,12 @@ $app->group('/api', function ($group) {
     $group->post('/inventory/{id:[0-9]+}/photo/restore', [InventoryController::class, 'restorePhoto'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/merge', [InventoryController::class, 'merge'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->get('/inventory/{id:[0-9]+}/split', [ProductSplitController::class, 'info'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->post('/inventory/{id:[0-9]+}/split', [ProductSplitController::class, 'split'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->post('/inventory/splits/{id:[0-9]+}/cancel', [ProductSplitController::class, 'cancel'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/claim-sales', [InventoryController::class, 'claimStoreSales'])
         ->add(new RoleGuard('purchase.create'));

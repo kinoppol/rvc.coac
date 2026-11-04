@@ -4,6 +4,7 @@ import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 import { openPoBuilder } from '../po-builder.js';
+import { openSplitModal } from '../split-modal.js';
 import { openInventoryMobile } from '../inventory-mobile.js';
 import { openMobileCount } from './count-mobile.js';
 
@@ -207,6 +208,7 @@ export async function render(container, { navigate, permissions, user }) {
         });
         bindLink();
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
+        container.querySelectorAll('[data-split]').forEach((b) => b.addEventListener('click', () => openSplitModal(b.dataset.split, { onDone: load })));
         container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.claim);
             const ok = await confirmDialog(
@@ -654,7 +656,8 @@ export async function render(container, { navigate, permissions, user }) {
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
-          <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}</td>
+          <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}${canEdit && p.consignor_id == null
+              ? `<div><button type="button" class="link-btn" data-split="${p.id}" style="font-size:12px;font-weight:400" title="สินค้าแพ็คที่ข้างในมีหลายแบบ แต่ละแบบมีบาร์โค้ดของตัวเอง (คละรส คละสี): แยกจำนวนชิ้นออกเป็นสินค้าแต่ละแบบ">แยกสินค้า</button></div>` : ''}</td>
           <td class="num">${money(p.cost_price)}${canSetPrice && p.consignor_id == null && !(Number(p.cost_price) > 0)
               ? `<div><button type="button" class="btn secondary sm" data-edit="${p.id}" style="margin-top:4px" title="ใส่ต้นทุนที่สืบทราบภายหลัง กำไรย้อนหลังจะคำนวณใหม่">ระบุต้นทุน</button></div>`
               : canSetPrice && p.consignor_id == null && !p.last_purchase
