@@ -31,7 +31,7 @@ class ProductSplitService
     private function assertAvailable(): void
     {
         if (!self::available($this->db)) {
-            throw new \RuntimeException('ยังแยกสินค้าไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0061) ก่อน');
+            throw new \RuntimeException('ยังแยกสินค้าไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0063) ก่อน');
         }
     }
 

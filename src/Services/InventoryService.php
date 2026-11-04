@@ -135,7 +135,7 @@ class InventoryService
             // Cancelled receive / return documents (migration 0050) moved nothing.
             \App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '',
             \App\Support\Db::hasColumn($this->db, 'return_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '',
-            // Splits (migration 0061): pieces out of the source product, into each piece product.
+            // Splits (migration 0063): pieces out of the source product, into each piece product.
             $splits ? "UNION ALL
                 SELECT sp.source_product_id, sp.created_at, DATE(sp.created_at), 'split', sp.doc_no, NULL, u.full_name, -sp.qty,
                        sp.unit_cost, -ROUND(sp.qty * sp.unit_cost, 2), NULL, NULL, NULL, 2, sp.id
