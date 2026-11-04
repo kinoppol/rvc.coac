@@ -241,7 +241,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.purchase_out)}`) : ''}
             ${line('<b>เงินสดที่ควรมีในลิ้นชักตอนปิดยอด</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
             ${dr.counted_cash !== null ? `
-              ${line('<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>', `<b>฿ ${money(dr.counted_cash)}</b>`)}
+              ${countedHtml(m, dr, line)}
               ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}
             ${f.cash_out || f.payout_out ? `
               ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 3)</span>', `฿ ${money(f.cash_out)}`) : ''}
@@ -469,6 +469,8 @@ export async function render(container, { user, permissions = [] } = {}) {
         wirePay(m);
         m.el.querySelector('[data-open-edit]')?.addEventListener('click', () => editOpening(m));
         m.el.querySelector('[data-open-undo]')?.addEventListener('click', () => undoOpening(m));
+        m.el.querySelector('[data-counted-edit]')?.addEventListener('click', () => editCounted(m));
+        m.el.querySelector('[data-counted-undo]')?.addEventListener('click', () => undoCounted(m));
     }
 
     async function skip(item, on) {
@@ -542,9 +544,61 @@ export async function render(container, { user, permissions = [] } = {}) {
         await postOpening(m, { amount: null, reason: String(note).trim() });
     }
 
-    async function postOpening(m, body) {
+    /* ---- Cash counted at closing: the staff's count, corrected by whoever sums up the day (with a reason) ---- */
+
+    function countedHtml(m, dr, line) {
+        const adj = dr.counted_adjust;
+        const hist = dr.counted_history || [];
+        const label = '<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>';
+        const btns = m.can_submit ? `<span class="no-print" style="display:inline-flex;gap:6px;margin-left:8px">
+            <button type="button" class="btn sm secondary" data-counted-edit>${adj ? 'แก้อีกครั้ง' : 'แก้ยอด'}</button>
+            ${adj ? '<button type="button" class="btn sm secondary" data-counted-undo>ยกเลิกการแก้ไข</button>' : ''}</span>` : '';
+        const histHtml = hist.length ? `<tr class="no-print"><td colspan="2" style="padding-top:2px">
+            <details style="font-size:12px"><summary class="muted" style="cursor:pointer">ประวัติการแก้เงินที่นับตอนปิดยอด (${hist.length})</summary>
+            ${hist.map((h) => `<div class="muted" style="margin:3px 0 0 14px">${fmtDateTime(h.created_at)} · ${escapeHtml(h.user_name || '-')} ·
+              ${h.amount === null ? 'ยกเลิกการแก้ไข' : `แก้เป็น ฿${money(h.amount)}`}${h.reason ? ` · ${escapeHtml(h.reason)}` : ''}</div>`).join('')}
+            </details></td></tr>` : '';
+        if (!adj) {
+            return `${line(`${label}${btns}`, `<b>฿ ${money(dr.counted_cash)}</b>`)}${histHtml}`;
+        }
+        return `
+            ${line('<span class="muted">เงินที่มีอยู่จริงในลิ้นชัก ที่พนักงานนับตอนปิดยอด</span>', `<span class="muted" style="text-decoration:line-through">฿ ${money(dr.counted_staff)}</span>`)}
+            ${line(`${label} <span class="pill warn" style="font-size:11.5px">ผู้สรุปบัญชีแก้</span>${btns}
+              <div class="muted" style="font-size:12px;margin-top:2px">เหตุผล: ${escapeHtml(adj.reason || '-')} · ${escapeHtml(adj.user_name || '-')} ${fmtDateTime(adj.created_at)}
+                · ต่างจากที่นับ ${signed(adj.amount - dr.counted_staff)}</div>`, `<b>฿ ${money(dr.counted_cash)}</b>`)}
+            ${histHtml}`;
+    }
+
+    async function editCounted(m) {
+        const dr = m.figures.drawer;
+        const amount = await promptDialog(`พนักงานนับได้ ฿${money(dr.counted_staff)}${dr.counted_adjust ? ` · ตอนนี้ใช้ ฿${money(dr.counted_cash)}` : ''} · ควรมี ฿${money(dr.should_have)}`, {
+            title: 'แก้เงินที่มีอยู่จริงในลิ้นชักตอนปิดยอด (บาท)', okText: 'ถัดไป', value: String(dr.counted_cash), required: 'กรุณากรอกจำนวนเงิน',
+        });
+        if (amount === null || amount === undefined || docModalGone(m)) return;
+        const v = Number(String(amount).replace(/,/g, ''));
+        if (!Number.isFinite(v) || v < 0) {
+            alertDialog('จำนวนเงินไม่ถูกต้อง', { tone: 'error' });
+            return;
+        }
+        const reason = await promptDialog(`แก้จาก ฿${money(dr.counted_staff)} (พนักงานนับ) เป็น ฿${money(v)}`, {
+            title: 'เหตุผลที่แก้', okText: 'บันทึก', placeholder: 'เช่น นับใหม่แล้วได้ไม่ตรง ธนบัตรติดกัน', required: 'กรุณาระบุเหตุผล', multiline: true,
+        });
+        if (reason === null || reason === undefined || docModalGone(m)) return;
+        await postOpening(m, { amount: v, reason: String(reason).trim() }, 'counted');
+    }
+
+    async function undoCounted(m) {
+        const dr = m.figures.drawer;
+        const note = await promptDialog(`กลับไปใช้ยอดที่พนักงานนับ ฿${money(dr.counted_staff)} (แทน ฿${money(dr.counted_cash)})`, {
+            title: 'ยกเลิกการแก้เงินที่นับตอนปิดยอด?', okText: 'ยกเลิกการแก้ไข', placeholder: 'หมายเหตุ (ไม่บังคับ)', danger: true,
+        });
+        if (note === null || note === undefined || docModalGone(m)) return;
+        await postOpening(m, { amount: null, reason: String(note).trim() }, 'counted');
+    }
+
+    async function postOpening(m, body, what = 'opening') {
         try {
-            const r = (await api.post(`/closing/${m.date}/opening`, body)).data;
+            const r = (await api.post(`/closing/${m.date}/${what}`, body)).data;
             if (docModalGone(m)) return;
             // The float kept for the next day follows the opening cash unless it was typed in.
             const keepFloat = m.editing && Number(m.form.float_kept) === Number(m.figures.float_kept);

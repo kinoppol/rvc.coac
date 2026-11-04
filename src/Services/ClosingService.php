@@ -276,6 +276,61 @@ class ClosingService
             $userId, $ip);
     }
 
+    /**
+     * Corrections of the cash counted in the drawer at closing by whoever sums up the day, newest
+     * first (amount null = the correction was taken back). Empty before migration 0064.
+     */
+    public function countedAdjusts(string $date): array
+    {
+        try {
+            $stmt = $this->db->prepare(
+                'SELECT a.id, a.amount, a.reason, a.created_at, u.full_name AS user_name FROM closing_counted_adjusts a
+                 LEFT JOIN users u ON u.id = a.user_id WHERE a.business_date = ? ORDER BY a.id DESC'
+            );
+            $stmt->execute([$date]);
+        } catch (\PDOException $e) {
+            return [];
+        }
+        return array_map(fn ($r) => ['amount' => $r['amount'] === null ? null : (float) $r['amount']] + $r, $stmt->fetchAll());
+    }
+
+    /** Sets ($amount) or takes back (null) the correction of the cash counted at closing; the staff's count is kept. */
+    public function adjustCounted(string $date, ?float $amount, string $reason, int $userId, ?string $ip): void
+    {
+        $drawer = $this->db->prepare('SELECT id, counted_cash FROM cash_drawers WHERE business_date = ?');
+        $drawer->execute([$date]);
+        $d = $drawer->fetch();
+        if (!$d) {
+            throw new \RuntimeException('วันนี้ไม่ได้ระบุเงินในลิ้นชัก จึงแก้เงินที่นับตอนปิดยอดไม่ได้');
+        }
+        if ($d['counted_cash'] === null) {
+            throw new \RuntimeException('ยังไม่ได้นับเงินปิดยอดลิ้นชัก ให้ปิดยอดลิ้นชักก่อน');
+        }
+        $reason = mb_substr(trim($reason), 0, 255);
+        $current = $this->countedAdjusts($date)[0] ?? null;
+        if ($amount !== null) {
+            $amount = round($amount, 2);
+            if ($amount < 0 || $amount > 10000000) {
+                throw new \RuntimeException('จำนวนเงินไม่ถูกต้อง');
+            }
+            if ($reason === '') {
+                throw new \RuntimeException('กรุณาระบุเหตุผลที่แก้เงินที่มีอยู่จริงในลิ้นชัก');
+            }
+        } elseif ($current === null || $current['amount'] === null) {
+            throw new \RuntimeException('ยังไม่มีการแก้เงินที่นับตอนปิดยอดที่จะยกเลิก');
+        }
+        try {
+            $this->db->prepare('INSERT INTO closing_counted_adjusts (business_date, amount, reason, user_id, created_at) VALUES (?, ?, ?, ?, NOW())')
+                ->execute([$date, $amount, $reason !== '' ? $reason : null, $userId]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('ยังแก้ไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0064) ก่อน');
+        }
+        $this->audit->log('cash_drawers', (int) $d['id'], 'update',
+            ['closing_counted_cash' => $current['amount'] ?? null],
+            ['closing_date' => $date, 'closing_counted_cash' => $amount, 'staff_counted_cash' => (float) $d['counted_cash'], 'reason' => $reason],
+            $userId, $ip);
+    }
+
     /** The change left in the drawer for the next day, as saved with the day's summary (null = not set). */
     private function savedFloat(string $date): ?float
     {
@@ -315,6 +370,13 @@ class ClosingService
                 $drawer['opening_cash'] = $adjust['amount'];
             }
         }
+        // Likewise the cash counted at closing: as the staff counted it, unless corrected.
+        $countedHistory = $counted !== null ? $this->countedAdjusts($date) : [];
+        $countedAdjust = isset($countedHistory[0]) && $countedHistory[0]['amount'] !== null ? $countedHistory[0] : null;
+        $countedStaff = $counted;
+        if ($countedAdjust) {
+            $counted = $countedAdjust['amount'];
+        }
         // Goods bought with drawer money left it during the day, so the count at closing is already short of them;
         // wages and consignors paid from the drawer come out of that count afterwards.
         $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash - $purchaseOut, 2) : null;
@@ -346,7 +408,10 @@ class ClosingService
                 'should_have' => $atClose,
                 // Left in the drawer after wages and consignors were paid from it (from the count once closed).
                 'after_pay' => $afterPay,
-                'counted_cash' => $counted,
+                'counted_cash' => $counted, // the one used: corrected, else as counted
+                'counted_staff' => $countedStaff,
+                'counted_adjust' => $countedAdjust,
+                'counted_history' => $countedHistory,
                 'expected_cash' => $drawer['expected_cash'] !== null ? (float) $drawer['expected_cash'] : null,
                 'cash_diff' => $drawer['cash_diff'] !== null ? (float) $drawer['cash_diff'] : null,
                 'closed_at' => $drawer['closed_at'],

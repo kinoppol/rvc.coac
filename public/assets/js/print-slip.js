@@ -424,7 +424,8 @@ export function printClosingReport(r, { weekday, status, send }) {
         ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
         ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 5)', n(f.purchase_out))}
         ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
-        ${dr.counted_cash !== null ? `${row('เงินที่นับได้จริงตอนปิดยอด', n(dr.counted_cash))}
+        ${dr.counted_cash !== null ? `${dr.counted_adjust ? row('เงินที่นับได้จริงตอนปิดยอด ที่พนักงานนับ', n(dr.counted_staff)) : ''}
+          ${row(dr.counted_adjust ? `เงินที่นับได้จริงตอนปิดยอด (ผู้สรุปบัญชีแก้: ${escapeHtml(dr.counted_adjust.reason || '-')})` : 'เงินที่นับได้จริงตอนปิดยอด', n(dr.counted_cash))}
           ${shortOver('เงิน', dr.counted_cash - dr.should_have)}` : row('เงินที่นับได้จริงตอนปิดยอด', 'ยังไม่ได้นับ')}
         ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 3)', n(f.cash_out))}
         ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 4)', n(f.payout_out || 0))}
