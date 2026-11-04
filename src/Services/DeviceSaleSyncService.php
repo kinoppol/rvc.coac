@@ -34,8 +34,39 @@ class DeviceSaleSyncService
      * @param string[] $notes warnings to keep with the sale
      * @return array{client_uuid:string, status:string, sale?:array, error?:string, warnings?:string[]}
      *         status: synced | duplicate | failed (kept for an admin) | rejected (online: fix and send again) | drawer_required
+     *
+     * A clash with another till (same document number, deadlock) is tried again. Any other error
+     * of one sale stays with that sale — it never fails the whole batch, or the device would send
+     * the same batch for ever and nothing behind it would get through.
      */
     public function process(array $device, array $user, array $sale, ?string $ip, array $notes = []): array
+    {
+        for ($try = 1; ; $try++) {
+            try {
+                return $this->book($device, $user, $sale, $ip, $notes);
+            } catch (\Throwable $e) {
+                $uuid = strtolower(trim((string) ($sale['client_uuid'] ?? '')));
+                $clash = $e instanceof \PDOException && in_array($e->errorInfo[1] ?? null, [1062, 1205, 1213], true);
+                if ($clash && $try < 3) {
+                    usleep(100000 * $try);
+                    continue;
+                }
+                if ($clash) {
+                    return ['client_uuid' => $uuid, 'status' => 'rejected', 'error' => 'กำลังบันทึกรายการนี้อยู่ ส่งใหม่อีกครั้ง'];
+                }
+                error_log(sprintf('[pos-device %d] sale %s: %s at %s:%d', $device['id'], $uuid, $e->getMessage(), $e->getFile(), $e->getLine()));
+                $error = 'เซิร์ฟเวอร์บันทึกรายการนี้ไม่ได้: ' . $e->getMessage();
+                if (empty($sale['offline'])) {
+                    return ['client_uuid' => $uuid, 'status' => 'rejected', 'error' => $error];
+                }
+                $soldAt = $this->soldAt($sale['sold_at'] ?? null) ?? new \DateTimeImmutable();
+                $this->keepFailed((int) $device['id'], $uuid, (int) $user['id'], $soldAt, (string) json_encode($sale, JSON_UNESCAPED_UNICODE), $error);
+                return ['client_uuid' => $uuid, 'status' => 'failed', 'error' => $error];
+            }
+        }
+    }
+
+    private function book(array $device, array $user, array $sale, ?string $ip, array $notes): array
     {
         $uuid = strtolower(trim((string) ($sale['client_uuid'] ?? '')));
         if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
@@ -183,8 +214,13 @@ class DeviceSaleSyncService
                 $this->db->rollBack();
             }
             if ($e instanceof \PDOException && ($e->errorInfo[1] ?? null) === 1062) {
-                // Booked by a request running alongside this one.
-                return $this->booked($deviceId, $uuid) ?? ['client_uuid' => $uuid, 'status' => 'rejected', 'error' => 'กำลังบันทึกรายการนี้อยู่ ส่งใหม่อีกครั้ง'];
+                // Booked by a request running alongside this one; otherwise a document number
+                // taken at the same moment by another till: process() tries again.
+                $done = $this->booked($deviceId, $uuid);
+                if ($done) {
+                    return $done;
+                }
+                throw $e;
             }
             if (!$e instanceof \RuntimeException || $e instanceof \PDOException) {
                 throw $e;

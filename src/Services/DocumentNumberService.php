@@ -23,8 +23,10 @@ class DocumentNumberService
         $datePart = substr((string) $beYear, -2) . $now->format('md');
         $prefix = $type . '-' . $datePart . '-';
 
+        // Past 999 a day the sequence grows a digit: "1000" sorts below "999" as text, so the
+        // longest number is the latest (otherwise every later document reuses -1000).
         $stmt = $this->db->prepare(
-            "SELECT $column FROM $table WHERE $column LIKE ? ORDER BY $column DESC LIMIT 1"
+            "SELECT $column FROM $table WHERE $column LIKE ? ORDER BY CHAR_LENGTH($column) DESC, $column DESC LIMIT 1"
         );
         $stmt->execute([$prefix . '%']);
         $last = $stmt->fetchColumn();

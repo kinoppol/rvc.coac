@@ -246,9 +246,10 @@ class DeviceController
         if (!$sales) {
             return $this->error($response, 'ไม่มีรายการขาย', 422);
         }
-        if (count($sales) > DeviceSaleSyncService::MAX_BATCH) {
-            return $this->error($response, 'ส่งได้ครั้งละไม่เกิน ' . DeviceSaleSyncService::MAX_BATCH . ' รายการ', 413);
-        }
+        // Too many at once: book the first ones (results name them) and leave the rest queued,
+        // rather than turn the whole queue away for ever.
+        $remaining = max(0, count($sales) - DeviceSaleSyncService::MAX_BATCH);
+        $sales = array_slice($sales, 0, DeviceSaleSyncService::MAX_BATCH);
         $db = Db::connection();
         $service = new DeviceSaleSyncService($db, new AuditLogger($db));
         $device = $request->getAttribute('device');
@@ -273,7 +274,7 @@ class DeviceController
             }
             $results[] = $service->process($device, $seller['user'], $sale, $this->ip($request), $notes);
         }
-        return $this->json($response, ['results' => $results, 'server_time' => date(DATE_ATOM)]);
+        return $this->json($response, ['results' => $results, 'remaining' => $remaining, 'server_time' => date(DATE_ATOM)]);
     }
 
     /**
