@@ -154,8 +154,9 @@ class SaleService
             $upd->execute([$totalQty, round($totalValue, 2), $saleId]);
 
             $change = 0.0;
+            $paymentWarning = null;
             if (isset($opts['payments'])) {
-                $change = $this->recordPayments($saleId, round($totalValue, 2), $opts['payments']);
+                [$change, $paymentWarning] = $this->recordPayments($saleId, round($totalValue, 2), $opts['payments']);
             }
 
             $this->audit->log('sales', $saleId, 'create', null, [
@@ -169,6 +170,7 @@ class SaleService
             return [
                 'id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
                 'change' => $change, 'business_date' => $businessDate, 'after_hours' => $afterHours,
+                'payment_warning' => $paymentWarning,
             ];
         } catch (\Throwable $e) {
             if ($own) {
@@ -216,12 +218,21 @@ class SaleService
     }
 
     /**
+     * Change of this much or more is not believable: no one hands over a whole extra ฿1,000 note (the largest).
+     * Such a cash figure is a slip at the till — typically a barcode scanned into the cash box while paying.
+     */
+    public const MAX_CHANGE = 1000.0;
+
+    /**
      * Saves how a POS sale was paid. Non-cash amounts are taken as exact; cash
      * covers the rest and may be more than that (the difference is change).
+     * The cash received only works out the change: the accounts take the cash due. A cash figure
+     * giving change of MAX_CHANGE or more is taken as a slip and not kept (received = due, no change),
+     * so the sale is still saved; the warning says what was keyed in.
      * @param array{methods:string[], mixed:bool, lines:array<int,array{method:string, amount:float}>} $payments
-     * @return float change to give back
+     * @return array{0:float, 1:?string} change to give back, and a warning when the cash figure was dropped
      */
-    private function recordPayments(int $saleId, float $total, array $payments): float
+    private function recordPayments(int $saleId, float $total, array $payments): array
     {
         $byMethod = [];
         foreach ($payments['lines'] as $p) {
@@ -259,8 +270,15 @@ class SaleService
             }
         }
         $change = isset($byMethod['cash']) ? round($cash - $cashDue, 2) : 0.0;
+        $warning = null;
+        if ($change >= self::MAX_CHANGE) {
+            $warning = 'จำนวนเงินสดที่รับมาผิดปกติ ฿' . number_format($cash, 2) . ' (อาจสแกนบาร์โค้ดเข้าช่องรับเงิน) — บันทึกเป็นรับเงินพอดี ฿'
+                . number_format($cashDue, 2) . ' ไม่มีเงินทอน (ยอดขายและเงินเข้าลิ้นชักไม่เปลี่ยน)';
+            $cash = $cashDue;
+            $change = 0.0;
+        }
         $this->db->prepare('UPDATE sales SET cash_received = ?, change_amount = ? WHERE id = ?')
             ->execute([isset($byMethod['cash']) ? $cash : null, $change, $saleId]);
-        return $change;
+        return [$change, $warning];
     }
 }

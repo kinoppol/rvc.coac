@@ -186,6 +186,9 @@ class DeviceSaleSyncService
                 'allow_short_stock' => $allowShort,
                 'note' => $offline ? 'ขายออฟไลน์จากอุปกรณ์ ' . $device['name'] : null,
             ]);
+            if (!empty($result['payment_warning'])) {
+                $warnings[] = $result['payment_warning'];
+            }
             if (isset($sale['total_value']) && is_numeric($sale['total_value']) && abs((float) $sale['total_value'] - $result['total_value']) > 0.004) {
                 $warnings[] = 'ยอดขายบนอุปกรณ์ ฿' . number_format((float) $sale['total_value'], 2) . ' ไม่ตรงกับที่บันทึก ฿' . number_format($result['total_value'], 2);
             }
