@@ -2,6 +2,7 @@ import { escapeHtml } from './util.js';
 
 // In-app replacements for window.alert / confirm / prompt: styled like the
 // other modals, usable by touch, and they return Promises instead of blocking.
+// strict: true closes them only with their buttons (not a tap outside or Esc).
 
 let openCount = 0;
 
@@ -12,7 +13,7 @@ export function isDialogOpen() {
 
 const TONE_ICON = { info: 'i', warn: '?', danger: '!', error: '!' };
 
-function open({ title, message, okText, cancelText, tone, input, html, width }) {
+function open({ title, message, okText, cancelText, tone, input, html, width, strict }) {
     return new Promise((resolve) => {
         const prev = document.activeElement;
         const el = document.createElement('div');
@@ -71,7 +72,7 @@ function open({ title, message, okText, cancelText, tone, input, html, width }) 
             if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
-                cancel();
+                if (!strict) cancel();
             } else if (e.key === 'Enter' && !(e.target.tagName === 'TEXTAREA' && !e.ctrlKey && !e.metaKey)) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -89,7 +90,7 @@ function open({ title, message, okText, cancelText, tone, input, html, width }) 
         }
         document.addEventListener('keydown', onKey, true);
         el.addEventListener('click', (e) => {
-            if (e.target === el) cancel();
+            if (e.target === el) { if (!strict) cancel(); }
             else if (e.target.closest('[data-ok]')) ok();
             else if (e.target.closest('[data-cancel]')) cancel();
         });
@@ -105,16 +106,16 @@ function open({ title, message, okText, cancelText, tone, input, html, width }) 
 }
 
 /** Shows a message; resolves when it is closed. */
-export function alertDialog(message, { title = 'แจ้งเตือน', okText = 'ตกลง', tone = 'info' } = {}) {
-    return open({ title, message, okText, tone }).then(() => undefined);
+export function alertDialog(message, { title = 'แจ้งเตือน', okText = 'ตกลง', tone = 'info', strict = false } = {}) {
+    return open({ title, message, okText, tone, strict }).then(() => undefined);
 }
 
 /**
  * Resolves to true when the user confirms. danger: true styles the confirm button red.
  * html: trusted markup shown under the message (escape any data in it); width: the box in px.
  */
-export function confirmDialog(message, { title = 'ยืนยันการทำรายการ', okText = 'ยืนยัน', cancelText = 'ยกเลิก', danger = false, html = '', width = 0 } = {}) {
-    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'warn', html, width });
+export function confirmDialog(message, { title = 'ยืนยันการทำรายการ', okText = 'ยืนยัน', cancelText = 'ยกเลิก', danger = false, html = '', width = 0, strict = false } = {}) {
+    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'warn', html, width, strict });
 }
 
 /**
@@ -123,7 +124,7 @@ export function confirmDialog(message, { title = 'ยืนยันการท
  */
 export function promptDialog(message, {
     title = 'กรอกข้อมูล', okText = 'ตกลง', cancelText = 'ยกเลิก', value = '', placeholder = '',
-    required = false, multiline = false, danger = false,
+    required = false, multiline = false, danger = false, strict = false,
 } = {}) {
-    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'info', input: { value, placeholder, required, multiline } });
+    return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'info', input: { value, placeholder, required, multiline }, strict });
 }
