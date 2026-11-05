@@ -10,6 +10,7 @@ import { openProductModal, dailySeries, TREND_RANGES, addDays, thDay } from './p
 
 export const COMPARE_MAX = 10;
 // Distinct hues that read on both the light and the dark theme.
+const MODEL_KEY = 'trendCompare.aiModel';
 const COLORS = ['#2f6fed', '#e8590c', '#12a150', '#c026d3', '#0e9fb8', '#c99a06', '#dc3545', '#6f4ee8', '#6aa30d', '#e0458f'];
 
 export async function openTrendCompare(productIds, navigate, { canAi = false } = {}) {
@@ -43,7 +44,16 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
     let smooth = true;
     let bars = true;
     // AI analysis: its own short conversation, kept while the window is open.
-    const ai = { busy: false, error: null, messages: [], model: null, started: 0 };
+    const ai = { busy: false, error: null, messages: [], model: null, started: 0, failed: null, prompts: new Set(), models: null, modelId: 'auto' };
+    try { ai.modelId = localStorage.getItem(MODEL_KEY) || 'auto'; } catch (e) { /* private mode */ }
+    if (canAi) {
+        // Models this role may use; one that is busy or rate-limited can be swapped for another here.
+        api.get('/ai/models').then((r) => {
+            ai.models = r.data || [];
+            if (ai.modelId !== 'auto' && !ai.models.some((m) => String(m.id) === String(ai.modelId))) ai.modelId = 'auto';
+            if (document.body.contains(box)) syncModelSelects();
+        }).catch(() => { ai.models = []; });
+    }
 
     const days = () => {
         const start = range ? addDays(today, -(range - 1)) : earliest;
@@ -95,8 +105,10 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
           <div class="modal-head"><h2>เปรียบเทียบแนวโน้มการขาย (${count(items.length)} รายการ)</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
           <div class="modal-body" style="padding-top:12px">
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">
-              ${canAi ? `<button type="button" class="btn sm" data-ai-run ${ai.busy ? 'disabled' : ''} style="margin-right:auto"
-                title="ให้ผู้ช่วย AI ดึงข้อมูลการขาย สต๊อก และประวัติการซื้อจากระบบ แล้ววิเคราะห์จุดน่าสนใจ แนะนำว่าควรซื้อตัวไหนเพิ่มและเพิ่มเท่าไร">✨ วิเคราะห์ด้วยผู้ช่วย AI</button>` : ''}
+              ${canAi ? `<div style="display:flex;gap:6px;align-items:center;margin-right:auto;flex-wrap:wrap">
+                <button type="button" class="btn sm" data-ai-run ${ai.busy ? 'disabled' : ''}
+                  title="ให้ผู้ช่วย AI ดึงข้อมูลการขาย สต๊อก และประวัติการซื้อจากระบบ แล้ววิเคราะห์จุดน่าสนใจ แนะนำว่าควรซื้อตัวไหนเพิ่มและเพิ่มเท่าไร">✨ วิเคราะห์ด้วยผู้ช่วย AI</button>
+                ${modelSelectHtml()}</div>` : ''}
               <div class="tabs" role="group" aria-label="ช่วงเวลา">${TREND_RANGES.map(([n, l]) => `<button type="button" class="tab-btn ${n === range ? 'active' : ''}" data-range="${n}">${l}</button>`).join('')}</div>
               <div class="tabs" role="group" aria-label="เส้นกราฟ">${[[true, 'เฉลี่ย 7 วัน'], [false, 'รายวัน']].map(([v, l]) => `<button type="button" class="tab-btn ${v === smooth ? 'active' : ''}" data-smooth="${v ? 1 : 0}">${l}</button>`).join('')}</div>
               <button type="button" class="tab-btn ${bars ? 'active' : ''}" data-bars aria-pressed="${bars}" title="แท่งยอดขายจริงแต่ละวันของแต่ละสินค้า (สีเดียวกับเส้น) อยู่ด้านหลังเส้น">แท่งรายวัน</button>
@@ -114,7 +126,9 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         box.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => { range = Number(b.dataset.range); draw(); }));
         box.querySelectorAll('[data-smooth]').forEach((b) => b.addEventListener('click', () => { smooth = b.dataset.smooth === '1'; draw(); }));
-        box.querySelector('[data-ai-run]')?.addEventListener('click', () => askAi(firstPrompt()));
+        box.querySelector('[data-ai-run]')?.addEventListener('click', () => { const t = firstPrompt(); ai.prompts.add(t); askAi(t); });
+        box.querySelector('[data-ai-retry]')?.addEventListener('click', () => askAi(ai.failed));
+        syncModelSelects();
         box.querySelector('[data-ai-form]')?.addEventListener('submit', (e) => {
             e.preventDefault();
             const t = e.target.querySelector('textarea').value.trim();
@@ -141,20 +155,45 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
             + `${NL}ตอบกระชับ อ่านง่าย`;
     }
 
+    /** "Auto" (the admin's default) or any model this role may use; ones without tools cannot read the data. */
+    function modelSelectHtml() {
+        const list = ai.models || [];
+        const opt = (m) => `<option value="${m.id}" ${String(m.id) === String(ai.modelId) ? 'selected' : ''} ${m.supports_tools ? '' : 'disabled'}>${escapeHtml(m.label)}${m.provider_name ? ` · ${escapeHtml(m.provider_name)}` : ''}${m.supports_tools ? '' : ' (ดึงข้อมูลจากระบบไม่ได้)'}</option>`;
+        return `<select data-ai-model aria-label="โมเดลผู้ช่วย AI" title="ถ้าโมเดลไม่พร้อมทำงาน (เช่น เรียกใช้ถี่เกินไป) ให้เลือกโมเดลอื่นแล้วกดอีกครั้ง" style="max-width:260px;font-size:13px;padding:5px 8px" ${ai.busy ? 'disabled' : ''}>
+          <option value="auto" ${ai.modelId === 'auto' ? 'selected' : ''}>อัตโนมัติ (โมเดลเริ่มต้นของระบบ)</option>
+          ${ai.models === null ? '<option disabled>กำลังโหลดรายการโมเดล...</option>' : list.map(opt).join('')}</select>`;
+    }
+    function syncModelSelects() {
+        box.querySelectorAll('[data-ai-model]').forEach((sel) => { sel.outerHTML = modelSelectHtml(); });
+        box.querySelectorAll('[data-ai-model]').forEach((sel) => sel.addEventListener('change', () => {
+            ai.modelId = sel.value;
+            try { localStorage.setItem(MODEL_KEY, ai.modelId); } catch (e) { /* private mode */ }
+            syncModelSelects();
+        }));
+    }
+
     function aiHtml() {
         if (!canAi || (!ai.messages.length && !ai.busy && !ai.error)) return '';
-        const shown = ai.messages.filter((m, i) => i > 0 && (m.role === 'user' || (m.role === 'assistant' && m.content)));
+        const shown = ai.messages.filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content));
         const secs = ai.busy ? Math.floor((Date.now() - ai.started) / 1000) : 0;
+        // The long built-in analysis prompt shows as a short line; typed follow-ups show as written.
+        const q = (text) => (ai.prompts.has(text) ? `✨ วิเคราะห์สินค้าที่เปรียบเทียบ ${count(items.length)} รายการ` : escapeHtml(text));
         return `<section class="tc-ai">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
             <div style="font-weight:600">✨ ผลวิเคราะห์จากผู้ช่วย AI</div>
-            ${ai.model ? `<span class="muted" style="font-size:11.5px">โมเดล ${escapeHtml(ai.model)}</span>` : ''}
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              ${ai.model ? `<span class="muted" style="font-size:11.5px">ตอบโดย ${escapeHtml(ai.model)}</span>` : ''}
+              ${modelSelectHtml()}
+            </div>
           </div>
           ${shown.map((m) => (m.role === 'user'
-              ? `<div class="tc-ai-q">${escapeHtml(m.content)}</div>`
+              ? `<div class="tc-ai-q">${q(m.content)}</div>`
               : `<div class="ai-bubble tc-ai-a">${markdown(m.content)}</div>`)).join('')}
           ${ai.busy ? `<div class="muted" style="font-size:13px;padding:8px 0">กำลังดึงข้อมูลจากระบบและวิเคราะห์... <span data-ai-secs>${secs}</span> วินาที</div>` : ''}
-          ${ai.error ? `<div class="error-box" style="margin-top:6px">${escapeHtml(ai.error)}</div>` : ''}
+          ${ai.error ? `<div class="error-box" style="margin-top:6px">${escapeHtml(ai.error)}
+              ${ai.failed ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+                <button type="button" class="btn sm" data-ai-retry>ลองใหม่</button>
+                <span style="font-size:12.5px">โมเดลอาจไม่พร้อมทำงานชั่วคราว เลือกโมเดลอื่นด้านบนแล้วกด ลองใหม่ ได้</span></div>` : ''}</div>` : ''}
           ${!ai.busy && ai.messages.length ? `<form data-ai-form style="display:flex;gap:6px;margin-top:8px;align-items:flex-end">
             <textarea rows="1" placeholder="ถามต่อ เช่น ถ้างบซื้อมี 500 บาท ควรซื้ออะไรบ้าง" style="flex:1;resize:vertical;min-height:36px"></textarea>
             <button type="submit" class="btn sm">ถาม</button></form>` : ''}
@@ -167,7 +206,9 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
         ai.busy = true;
         ai.error = null;
         ai.started = Date.now();
-        const history = [...ai.messages, { role: 'user', content: text }];
+        ai.failed = null;
+        const before = ai.messages;
+        const history = [...before, { role: 'user', content: text }];
         ai.messages = history;
         draw();
         box.querySelector('.tc-ai')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -176,13 +217,21 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
             if (el) el.textContent = Math.floor((Date.now() - ai.started) / 1000);
         }, 1000);
         try {
-            const res = await api.post('/ai/chat', { model: 'auto', messages: history });
-            ai.messages = res.messages || history;
-            ai.model = res.model_used?.label || ai.model;
-            if (!ai.messages.some((m, i) => i >= history.length && m.role === 'assistant' && m.content)) ai.error = 'ผู้ช่วย AI ไม่ได้ตอบกลับ ลองกดอีกครั้ง';
+            const res = await api.post('/ai/chat', { model: ai.modelId === 'auto' ? 'auto' : Number(ai.modelId), messages: history });
+            const answered = (res.messages || []).some((m, i) => i >= history.length && m.role === 'assistant' && m.content);
+            if (answered) {
+                ai.messages = res.messages;
+                ai.model = res.model_used?.label || ai.model;
+            } else {
+                ai.messages = before;
+                ai.failed = text;
+                ai.error = 'ผู้ช่วย AI ไม่ได้ตอบกลับ';
+            }
         } catch (e) {
+            // Back to the conversation before this question, so a retry (maybe on another model) sends it once.
+            ai.messages = before;
+            ai.failed = text;
             ai.error = e.message;
-            if (e.data?.messages) ai.messages = e.data.messages;
         }
         clearInterval(aiTick);
         ai.busy = false;
