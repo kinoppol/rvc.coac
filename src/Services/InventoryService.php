@@ -45,7 +45,10 @@ class InventoryService
                            SUM(CASE WHEN consignor_id IS NULL THEN qty END) AS store_qty
                     FROM sale_items GROUP BY product_id
                 ) sl ON sl.product_id = p.id
-                WHERE " . ($withConsigned ? '(p.consignor_id IS NULL OR p.qty_stock <> 0 OR sl.store_qty > 0)' : 'p.consignor_id IS NULL');
+                WHERE " . (!$withConsigned ? 'p.consignor_id IS NULL'
+                    // A search finds consigned lots at 0 too (sold out / returned stays in stock records);
+                    // the plain list keeps to lots still holding stock.
+                    : ($search !== '' ? '1 = 1' : '(p.consignor_id IS NULL OR p.qty_stock <> 0 OR sl.store_qty > 0)'));
         $params = [];
         if ($search !== '') {
             $sql .= ' AND (p.name LIKE ? OR p.barcode = ? OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))';

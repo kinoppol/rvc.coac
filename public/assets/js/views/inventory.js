@@ -214,7 +214,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
             ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(res.data.filter(filterFn(k)).length)})</button>`).join('')}
           </div>
-          ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
+          ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ — ค้นหาชื่อ/บาร์โค้ดจะพบล็อตที่หมดหรือคืนผู้ฝากแล้วด้วย (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
           <div class="table-wrap sticky-page"><table>
