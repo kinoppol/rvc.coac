@@ -61,3 +61,19 @@ export function qs(obj) {
     }
     return parts.length ? '?' + parts.join('&') : '';
 }
+
+/** 1,284 → "1.3K": y-axis ticks and the cap label stay short. */
+export function compact(v) {
+    if (Math.abs(v) >= 1e6) return `${+(v / 1e6).toFixed(1)}M`;
+    if (Math.abs(v) >= 1e3) return `${+(v / 1e3).toFixed(1)}K`;
+    return String(Math.round(v));
+}
+
+/** Clean axis top and step (1/2/2.5/5 × 10^k) for about four gridlines. */
+export function niceScale(max) {
+    if (max <= 0) return { top: 100, step: 25 };
+    const raw = max / 4;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+    return { top: Math.ceil(max / step) * step, step };
+}

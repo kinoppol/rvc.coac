@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { money, count, escapeHtml, fmtDate, fmtDateTime } from './util.js';
+import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO, compact, niceScale } from './util.js';
 import { alertDialog } from './dialog.js';
 import { skBlock } from './skeleton.js';
 import { openDetailModal } from './detail-modal.js';
@@ -28,6 +28,55 @@ const GROUPS = [
     ['damage', 'สินค้าเสียหาย', (r) => r.kind === 'damage'],
 ];
 
+// ---- Daily sales trend (pieces or baht per day, with a 7-day average) ----
+
+const TREND_RANGES = [[14, '14 วัน'], [30, '30 วัน'], [90, '90 วัน'], [0, 'ทั้งหมด']];
+const addDays = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const thDay = (ymd, opts) => new Date(`${ymd}T00:00:00Z`).toLocaleDateString('th-TH', { timeZone: 'UTC', ...opts });
+
+/** One entry per day from the first stock movement to today: net pieces sold, baht, bills, closing balance. */
+function dailySeries(d) {
+    const rows = d.movements.filter((r) => r.date);
+    if (!rows.some((r) => r.kind === 'sale' || r.kind === 'pos')) return null;
+    const today = todayISO();
+    const first = rows.reduce((m, r) => (r.date < m ? r.date : m), today);
+    const day = new Map();
+    const close = new Map();
+    for (const r of rows) {
+        close.set(r.date, r.balance); // movements run in document-date order: the last one is the day's close
+        if (r.kind !== 'sale' && r.kind !== 'pos') continue;
+        const e = day.get(r.date) || { qty: 0, amount: 0, bills: new Set() };
+        const q = -Number(r.qty); // a refund line comes back as a negative sale
+        e.qty += q;
+        e.amount += q * Number(r.sale_price || 0);
+        if (r.doc_no) e.bills.add(r.doc_no);
+        day.set(r.date, e);
+    }
+    const priceAt = new Map();
+    for (const c of d.price_changes || []) {
+        if (c.old_price === null || c.new_price === null || Math.abs(c.old_price - c.new_price) < 0.005) continue;
+        const k = String(c.at).slice(0, 10);
+        priceAt.set(k, [...(priceAt.get(k) || []), c]);
+    }
+    const out = [];
+    let bal = 0;
+    for (let k = first; k <= today; k = addDays(k, 1)) {
+        if (close.has(k)) bal = close.get(k);
+        const e = day.get(k);
+        out.push({
+            key: k, qty: e ? e.qty : 0, amount: e ? Math.round(e.amount * 100) / 100 : 0, bills: e ? e.bills.size : 0,
+            balance: bal, prices: priceAt.get(k) || [],
+        });
+    }
+    // Trailing 7-day average (shorter at the very start, before 7 days exist).
+    out.forEach((b, i) => {
+        const w = out.slice(Math.max(0, i - 6), i + 1);
+        b.avgQty = w.reduce((s, x) => s + x.qty, 0) / w.length;
+        b.avgAmount = w.reduce((s, x) => s + x.amount, 0) / w.length;
+    });
+    return out;
+}
+
 function info(label, value) {
     return `<div class="pm-info"><div class="muted">${escapeHtml(label)}</div><div>${value}</div></div>`;
 }
@@ -37,7 +86,8 @@ export async function openProductModal(productId, navigate) {
     box.className = 'modal-backdrop';
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:960px"><div class="modal-body">' + skBlock(6, 8) + '</div></div>';
     document.body.appendChild(box);
-    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+    let ro = null;
+    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (ro) ro.disconnect(); };
     const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-backdrop')].pop() === box) close(); };
     document.addEventListener('keydown', onKey);
 
@@ -103,6 +153,166 @@ export async function openProductModal(productId, navigate) {
           <div class="muted" style="font-size:11.5px;margin-top:4px">มูลค่าคงเหลือคิดจากต้นทุนเฉลี่ยปัจจุบัน ฿${money(p.cost_price)}/ชิ้น · ต้นทุนขายตามที่บันทึกไว้ในแต่ละบิล</div>`;
     }
 
+    const series = dailySeries(d);
+    let trendRange = 30;
+    let trendMetric = 'qty';
+
+    /** Last 7 days against the 7 before: the headline of the trend. */
+    function trendDelta() {
+        if (series.length < 14) return '';
+        const v = (b) => (trendMetric === 'qty' ? b.qty : b.amount);
+        const last = series.slice(-7).reduce((s, b) => s + v(b), 0);
+        const prev = series.slice(-14, -7).reduce((s, b) => s + v(b), 0);
+        const fmt = (x) => (trendMetric === 'qty' ? `${(x / 7).toFixed(1)} ชิ้น/วัน` : `฿${money(x / 7)}/วัน`);
+        if (!prev && !last) return '<span class="muted">14 วันล่าสุดไม่มียอดขาย</span>';
+        if (!prev) return `<span style="color:var(--ok);font-weight:600">▲ 7 วันล่าสุด ${fmt(last)}</span> <span class="muted">(7 วันก่อนหน้าไม่มียอดขาย)</span>`;
+        const pct = ((last - prev) / prev) * 100;
+        const up = pct >= 0;
+        return `<span style="color:var(${up ? '--ok' : '--bad'});font-weight:600">${up ? '▲ เพิ่มขึ้น' : '▼ ลดลง'} ${Math.abs(pct).toFixed(1)}%</span>
+          <span class="muted">7 วันล่าสุดเฉลี่ย ${fmt(last)} เทียบ 7 วันก่อนหน้า ${fmt(prev)}</span>`;
+    }
+
+    function trendHtml() {
+        if (!series) return '';
+        const shown = trendRange ? series.slice(-trendRange) : series;
+        const qty = shown.reduce((s, b) => s + b.qty, 0);
+        const amount = shown.reduce((s, b) => s + b.amount, 0);
+        return `<section class="pm-trend">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+            <div>
+              <div style="font-weight:600;font-size:14px">แนวโน้มการขายรายวัน</div>
+              <div class="muted" style="font-size:12.5px;margin-top:2px">${count(shown.length)} วัน: ขาย ${count(qty)} ชิ้น · ฿${money(amount)} · เฉลี่ย ${(qty / shown.length).toFixed(1)} ชิ้น/วัน</div>
+              <div style="font-size:12.5px;margin-top:2px">${trendDelta()}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <div class="tabs" role="group" aria-label="ช่วงเวลา">${TREND_RANGES.map(([n, l]) => `<button type="button" class="tab-btn ${n === trendRange ? 'active' : ''}" data-trange="${n}">${l}</button>`).join('')}</div>
+              <div class="tabs" role="group" aria-label="หน่วย">${[['qty', 'ชิ้น'], ['amount', 'บาท']].map(([k, l]) => `<button type="button" class="tab-btn ${k === trendMetric ? 'active' : ''}" data-tmetric="${k}">${l}</button>`).join('')}</div>
+            </div>
+          </div>
+          <div class="pm-trend-chart" style="position:relative;margin-top:8px"></div>
+          <div class="pm-trend-legend muted">
+            <span><i style="background:var(--pri)"></i>ยอดขายต่อวัน</span>
+            <span><i style="height:2px;background:var(--warn)"></i>เฉลี่ย 7 วัน</span>
+            <span><i style="background:var(--bad);opacity:.18"></i>สินค้าหมด (คงเหลือ 0)</span>
+            <span><i style="width:0;border-left:1.5px dashed var(--muted)"></i>ปรับราคาขาย</span>
+          </div>
+        </section>`;
+    }
+
+    /** Columns per day, a 7-day average line, out-of-stock days shaded and price changes marked. */
+    function trendChart() {
+        const host = box.querySelector('.pm-trend-chart');
+        if (!host) return;
+        const bs = trendRange ? series.slice(-trendRange) : series;
+        const val = (b) => (trendMetric === 'qty' ? b.qty : b.amount);
+        const avg = (b) => (trendMetric === 'qty' ? b.avgQty : b.avgAmount);
+        const W = Math.max(host.clientWidth, 280);
+        const H = 190;
+        const m = { l: 40, r: 8, t: 16, b: 24 };
+        const pw = W - m.l - m.r;
+        const ph = H - m.t - m.b;
+        const max = Math.max(0, ...bs.map((b) => Math.max(val(b), avg(b))));
+        const { top, step } = niceScale(trendMetric === 'qty' ? Math.max(max, 4) : max);
+        const band = pw / bs.length;
+        const bw = Math.max(1, Math.min(18, band * 0.62, band - 1));
+        const y = (v) => m.t + ph - (Math.max(v, 0) / top) * ph;
+        const base = m.t + ph;
+        const today = todayISO();
+        const every = Math.max(1, Math.ceil(44 / band));
+        const fmtV = (v) => (trendMetric === 'qty' ? `${v.toFixed(1)} ชิ้น` : `฿${money(v)}`);
+
+        const grid = [];
+        for (let v = 0; v <= top + 1e-9; v += step) {
+            grid.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>
+              <text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${compact(v)}</text>`);
+        }
+        let prevMonth = '';
+        const cols = bs.map((b, i) => {
+            const x0 = m.l + band * i;
+            const cx = x0 + band / 2;
+            const out = b.balance <= 0 ? `<rect x="${x0}" y="${m.t}" width="${band}" height="${ph}" fill="var(--bad)" opacity=".08"/>` : '';
+            const price = b.prices.length ? `<line x1="${cx}" x2="${cx}" y1="${m.t}" y2="${base}" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="3 3"/>
+              <text x="${cx}" y="${m.t - 4}" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--muted)">฿</text>` : '';
+            let col = '';
+            const v = val(b);
+            if (v > 0) {
+                const h = Math.max(1, base - y(v));
+                const r = Math.min(3, bw / 2, h);
+                const xl = cx - bw / 2;
+                const yt = base - h;
+                col = `<path fill="var(--pri)" d="M${xl},${base} V${yt + r} Q${xl},${yt} ${xl + r},${yt} H${xl + bw - r} Q${xl + bw},${yt} ${xl + bw},${yt + r} V${base} Z"/>`;
+            }
+            let label = '';
+            if (i % every === 0) {
+                const mo = b.key.slice(0, 7);
+                const txt = mo !== prevMonth ? thDay(b.key, { day: 'numeric', month: 'short' }) : thDay(b.key, { day: 'numeric' });
+                prevMonth = mo;
+                label = `<text x="${cx}" y="${H - 7}" text-anchor="middle" font-size="11" fill="${b.key === today ? 'var(--text)' : 'var(--muted)'}" font-weight="${b.key === today ? 700 : 400}">${escapeHtml(txt)}</text>`;
+            }
+            return `${out}${price}${col}${label}`;
+        }).join('');
+        const line = bs.map((b, i) => `${i ? 'L' : 'M'}${(m.l + band * i + band / 2).toFixed(1)},${y(avg(b)).toFixed(1)}`).join(' ');
+        const hits = bs.map((b, i) => `<rect data-ti="${i}" x="${m.l + band * i}" y="${m.t}" width="${band}" height="${ph}" fill="transparent"/>`).join('');
+
+        host.innerHTML = `
+          <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="กราฟยอดขายรายวันของ ${escapeHtml(p.name)}" style="display:block;overflow:visible">
+            ${grid.join('')}
+            <rect class="pt-hover" x="0" y="${m.t}" width="0" height="${ph}" fill="var(--hover)" pointer-events="none"/>
+            ${cols}
+            ${bs.length > 1 ? `<path d="${line}" fill="none" stroke="var(--warn)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" pointer-events="none"/>` : ''}
+            <line x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}" stroke="var(--border)" stroke-width="1"/>
+            ${hits}
+          </svg>
+          <div class="pt-tip" role="tooltip" style="position:absolute;pointer-events:none;display:none;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 11px;font-size:12.5px;box-shadow:0 8px 24px rgba(16,24,40,.18);white-space:nowrap;z-index:2"></div>`;
+
+        const tip = host.querySelector('.pt-tip');
+        const hover = host.querySelector('.pt-hover');
+        const kv = (k, v) => `<div style="display:flex;justify-content:space-between;gap:16px"><span class="muted">${k}</span><span>${v}</span></div>`;
+        const show = (i) => {
+            const b = bs[i];
+            hover.setAttribute('x', m.l + band * i);
+            hover.setAttribute('width', band);
+            tip.innerHTML = `<div style="font-weight:700;margin-bottom:3px">${escapeHtml(thDay(b.key, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</div>
+              ${kv('ขาย', `<b>${count(b.qty)} ชิ้น</b>`)}
+              ${kv('ยอดเงิน', `฿${money(b.amount)}`)}
+              ${b.bills ? kv('บิล', count(b.bills)) : ''}
+              ${kv('เฉลี่ย 7 วัน', fmtV(avg(b)))}
+              ${kv('คงเหลือสิ้นวัน', b.balance <= 0 ? '<span style="color:var(--bad);font-weight:600">หมด</span>' : `${count(b.balance)} ชิ้น`)}
+              ${b.prices.map((c) => `<div style="margin-top:3px">ปรับราคา ฿${money(c.old_price)} → <b>฿${money(c.new_price)}</b></div>`).join('')}`;
+            tip.style.display = 'block';
+            const cx = m.l + band * i + band / 2;
+            tip.style.left = `${Math.min(Math.max(cx - tip.offsetWidth / 2, 0), W - tip.offsetWidth)}px`;
+            tip.style.top = `${Math.max(y(Math.max(val(b), avg(b))) - tip.offsetHeight - 10, 0)}px`;
+        };
+        host.querySelectorAll('[data-ti]').forEach((n) => {
+            n.addEventListener('mouseenter', () => show(Number(n.dataset.ti)));
+            n.addEventListener('click', () => show(Number(n.dataset.ti)));
+        });
+        host.querySelector('svg').addEventListener('mouseleave', () => { tip.style.display = 'none'; hover.setAttribute('width', 0); });
+    }
+
+    /** Range / unit buttons redraw only this section, so the stock table below keeps its scroll. */
+    function bindTrend() {
+        box.querySelectorAll('[data-trange]').forEach((b) => b.addEventListener('click', () => { trendRange = Number(b.dataset.trange); redrawTrend(); }));
+        box.querySelectorAll('[data-tmetric]').forEach((b) => b.addEventListener('click', () => { trendMetric = b.dataset.tmetric; redrawTrend(); }));
+        trendChart();
+    }
+    function redrawTrend() {
+        const sec = box.querySelector('.pm-trend');
+        if (!sec) return;
+        sec.outerHTML = trendHtml();
+        bindTrend();
+    }
+    if (series) {
+        // Redraw at the new width when the window changes size.
+        let lastW = 0;
+        ro = new ResizeObserver(() => {
+            const host = box.querySelector('.pm-trend-chart');
+            if (host && Math.abs(host.clientWidth - lastW) > 4) { lastW = host.clientWidth; trendChart(); }
+        });
+        ro.observe(box.querySelector('.modal'));
+    }
+
     /** Older photos kept at a merge of duplicates / when a new photo was taken; any can be put back. */
     function photoBackupsHtml() {
         const list = d.photo_backups || [];
@@ -162,6 +372,7 @@ export async function openProductModal(productId, navigate) {
             </div>
             ${photoBackupsHtml()}
             ${summaryHtml()}
+            ${trendHtml()}
             ${priceChangesHtml()}
             <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
               <div class="tabs" role="group" aria-label="กรองความเคลื่อนไหว">
@@ -174,6 +385,7 @@ export async function openProductModal(productId, navigate) {
           </div>
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
+        if (series) bindTrend();
         box.querySelectorAll('[data-group]').forEach((b) => b.addEventListener('click', () => { group = b.dataset.group; draw(); }));
         box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => {
             const [kind, docNo] = b.dataset.doc.split('|');

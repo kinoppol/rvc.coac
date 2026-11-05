@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, count, fmtDateTime, escapeHtml } from '../util.js';
+import { money, count, fmtDateTime, escapeHtml, compact, niceScale } from '../util.js';
 import { openDetailModal } from '../detail-modal.js';
 import { skChart } from '../skeleton.js';
 
@@ -112,22 +112,6 @@ const PREV_LABEL = { day: 'วันก่อน', week: 'สัปดาห์�
 
 const asDate = (ymd) => new Date(`${ymd}T00:00:00`);
 const thDate = (ymd, opts) => asDate(ymd).toLocaleDateString('th-TH', opts);
-
-/** 1,284 → "1.3K": y-axis ticks and the cap label stay short. */
-function compact(v) {
-    if (Math.abs(v) >= 1e6) return `${+(v / 1e6).toFixed(1)}M`;
-    if (Math.abs(v) >= 1e3) return `${+(v / 1e3).toFixed(1)}K`;
-    return String(Math.round(v));
-}
-
-/** Clean axis top and step (1/2/2.5/5 × 10^k) for about four gridlines. */
-function niceScale(max) {
-    if (max <= 0) return { top: 100, step: 25 };
-    const raw = max / 4;
-    const mag = 10 ** Math.floor(Math.log10(raw));
-    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
-    return { top: Math.ceil(max / step) * step, step };
-}
 
 function bucketLabel(period, key, { long = false } = {}) {
     if (period === 'day') return long ? `${key}:00–${key}:59 น.` : `${Number(key)}:00`;
