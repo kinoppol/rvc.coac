@@ -782,6 +782,9 @@ class InventoryService
         )->fetch();
 
         $grossProfit = round((float) $sales['sales'] - (float) $sales['cogs'], 2);
+        $damage = \App\Services\DamageService::available($this->db)
+            ? (float) $this->db->query('SELECT COALESCE(SUM(qty * unit_cost), 0) FROM damaged_goods WHERE cancelled_at IS NULL')->fetchColumn()
+            : 0.0;
         return [
             'items' => (int) $stock['items'],
             'out_of_stock' => (int) $stock['out_of_stock'],
@@ -797,7 +800,8 @@ class InventoryService
             'supply_cost' => round((float) $bought['supply_cost'], 2),
             'wage_cost' => $wages = (new WageService($this->db, new AuditLogger($this->db), new DocumentNumberService($this->db)))->total(),
             // Profit after expenses bought for use in the business (bags, straws, ...).
-            'net_profit' => round($grossProfit - (float) $bought['supply_cost'] - $wages, 2),
+            'damage_cost' => round($damage, 2),
+            'net_profit' => round($grossProfit - (float) $bought['supply_cost'] - $wages - $damage, 2),
         ];
     }
 }

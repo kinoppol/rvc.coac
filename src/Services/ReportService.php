@@ -37,7 +37,7 @@ class ReportService
         'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'งบลงทุนคงเหลือ', 'capital_purchases' => 'ซื้อของด้วยเงินลงทุน',
         'other_invest' => 'ลงทุนเพิ่ม (อื่น ๆ)', 'profit_withdrawn' => 'เบิกเงินออกจากกำไร', 'profit_purchases' => 'ซื้อของด้วยเงินกำไร',
         'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)', 'reason' => 'สาเหตุ', 'purchase_doc_no' => 'จากใบซื้อ',
-        'damage_value' => 'มูลค่าทุนที่เสียหาย',
+        'damage_value' => 'มูลค่าทุนที่เสียหาย', 'damage_cost' => 'สินค้าเสียหาย',
     ];
 
     public function __construct(private PDO $db)
@@ -291,6 +291,17 @@ class ReportService
         } catch (\PDOException $e) {
             // migration 0034 not run yet: no wages
         }
+        // Damaged store goods written off stock, at cost, on the day they were found (migration 0066).
+        if (DamageService::available($this->db)) {
+            $stmt = $this->db->prepare(
+                'SELECT damage_date AS d, SUM(qty * unit_cost) AS damage FROM damaged_goods
+                 WHERE cancelled_at IS NULL AND damage_date BETWEEN ? AND ? GROUP BY damage_date'
+            );
+            $stmt->execute([$from, $to]);
+            foreach ($stmt->fetchAll() as $r) {
+                $add($r['d'], 'damage', (float) $r['damage']);
+            }
+        }
 
         $buckets = [];
         foreach (self::periods($from, $to, $group) as $key => $label) {
@@ -320,7 +331,8 @@ class ReportService
                 'total_income' => $income,
                 'supply_cost' => $v('supply'),
                 'wage_cost' => $v('wages'),
-                'net_profit' => round($income - $v('supply') - $v('wages'), 2),
+                'damage_cost' => $v('damage'),
+                'net_profit' => round($income - $v('supply') - $v('wages') - $v('damage'), 2),
             ];
         }
         return $rows;
@@ -363,7 +375,8 @@ class ReportService
         };
         $v = fn (string $k) => fn (array $s) => (float) ($s[$k] ?? 0);
         $income = fn (array $s) => (float) ($s['consign_fee'] ?? 0) + (float) ($s['listing_fee_net'] ?? 0) + (float) ($s['store_sales'] ?? 0);
-        $expense = fn (array $s) => (float) ($s['store_cost'] ?? 0) + (float) ($s['supply_cost'] ?? 0) + (float) ($s['wage_cost'] ?? 0);
+        $expense = fn (array $s) => (float) ($s['store_cost'] ?? 0) + (float) ($s['supply_cost'] ?? 0) + (float) ($s['wage_cost'] ?? 0)
+            + (float) ($s['damage_cost'] ?? 0);
 
         $line('รายได้', 'ค่าฝากขายสินค้า', $v('consign_fee'), 'consign_fee');
         $line('รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $v('listing_fee_net'), 'listing_fee');
@@ -372,6 +385,7 @@ class ReportService
         $line('รายจ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $v('store_cost'), 'store_cost');
         $line('รายจ่าย', 'ค่าวัสดุใช้ในร้าน', $v('supply_cost'), 'supply');
         $line('รายจ่าย', 'ค่าแรงพนักงาน', $v('wage_cost'), 'wages');
+        $line('รายจ่าย', 'สินค้าเสียหาย (ตัดสต๊อก ตามต้นทุน)', $v('damage_cost'), 'damage');
         $line('รายจ่าย', 'รวมรายจ่าย', $expense);
         $line('ผลประกอบการ', 'กำไร (ขาดทุน) สุทธิ', fn (array $s) => $income($s) - $expense($s));
         $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'), 'total_sales');
@@ -599,13 +613,14 @@ class ReportService
             'store_cost' => 'ต้นทุนของสินค้าของร้านเฉพาะชิ้นที่ขายออกไปในช่วงนี้ (ทุนเฉลี่ย ณ ตอนขาย)',
             'supply' => 'ของที่ซื้อมาใช้ในร้าน ไม่ได้ซื้อมาขาย เช่น ถุง หลอด นับตามวันที่ในใบเสร็จ',
             'wages' => 'ค่าแรงที่จ่ายให้พนักงานและผู้จัดการ นับตามวันที่จ่าย (ไม่รวมรายการที่ยกเลิก)',
+            'damage' => 'มูลค่าทุนของสินค้าของร้านที่ชำรุด/ขายไม่ได้ ที่บันทึกตัดสต๊อก นับตามวันที่พบ (ไม่รวมรายการที่ยกเลิก)',
             'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
             'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
             'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
             'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
             'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
             'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน',
-            'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน',
+            'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน + สินค้าเสียหาย',
             'กำไร (ขาดทุน) สุทธิ' => 'รวมรายได้ − รวมรายจ่าย',
             default => '',
         };
@@ -669,6 +684,10 @@ class ReportService
                 $section('รายการจ่ายค่าแรง', [['date', 'วันที่จ่าย', 'date'], ['doc_no', 'เลขที่', 'text'], ['employee', 'พนักงาน', 'text'], ['type', 'ประเภท', 'text'], ['amount', 'จำนวนเงิน', 'money']],
                     array_map(fn ($r) => ['date' => $r['date'], 'doc_no' => $r['doc_no'], 'employee' => $r['employee'], 'type' => $r['type'], 'amount' => $r['wage_cost']], $this->wages($from, $to))),
             ], 'wages'],
+            'damage' => ['สินค้าเสียหาย', [
+                $section('รายการตัดสต๊อก', [['date', 'วันที่พบ', 'date'], ['doc_no', 'เลขที่', 'text'], ['product', 'สินค้า', 'text'], ['reason', 'สาเหตุ', 'text'],
+                    ['supplier', 'ร้าน/ผู้ขาย', 'text'], ['qty', 'จำนวน', 'qty'], ['damage_value', 'มูลค่าทุน', 'money']], $this->damaged($from, $to)),
+            ], 'inventory'],
             'total_sales', 'bills' => [$key === 'bills' ? 'บิลขาย' : 'ยอดขายทั้งร้าน', [
                 $section('แยกตามวัน', [['date', 'วันที่', 'date'], ['bills', 'บิล', 'qty'], ['sales', 'ยอดขาย', 'money']], $q(
                     'SELECT business_date AS date, COUNT(*) AS bills, SUM(total_value) AS sales FROM sales

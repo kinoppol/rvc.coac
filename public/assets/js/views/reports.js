@@ -195,7 +195,7 @@ export async function render(container, { permissions, navigate }) {
           <tbody>${body}</tbody>
         </table></div>
         <div class="muted report-note" style="font-size:12px;padding:10px 16px">รายได้ของร้านจากสินค้าฝากขายคือค่าฝากขายและค่าทำข้อมูลเท่านั้น ยอดขายสินค้าฝากขายส่วนที่เหลือเป็นเงินของผู้ฝาก ·
-          ค่าวัสดุใช้ในร้านนับตามวันที่ในใบเสร็จ · ค่าแรงนับตามวันที่จ่าย · ตัวเลขในวงเล็บคือติดลบ</div>`;
+          ค่าวัสดุใช้ในร้านนับตามวันที่ในใบเสร็จ · ค่าแรงนับตามวันที่จ่าย · สินค้าเสียหายนับตามวันที่พบ (มูลค่าทุน) · ตัวเลขในวงเล็บคือติดลบ</div>`;
     }
 
     function profitCards(rows) {
@@ -207,8 +207,8 @@ export async function render(container, { permissions, navigate }) {
             <div class="sub">${count(sum('bills'))} บิล · ฝากขาย ฿ ${money(sum('consign_sales'))} · ของร้าน ฿ ${money(sum('store_sales'))}</div></div>
           <div class="kpi"><div class="lbl">รายได้รวมของร้าน</div><div class="val">฿ ${money(sum('total_income'))}</div>
             <div class="sub">ค่าฝากขาย ฿ ${money(sum('consign_fee'))} · ค่าทำข้อมูล ฿ ${money(sum('listing_fee_net'))} · กำไรสินค้าของร้าน ฿ ${money(sum('store_gross_profit'))}</div></div>
-          <div class="kpi"><div class="lbl">ค่าใช้จ่าย</div><div class="val">฿ ${money(sum('supply_cost') + sum('wage_cost'))}</div>
-            <div class="sub">ค่าแรง ฿ ${money(sum('wage_cost'))} · วัสดุใช้ในร้าน ฿ ${money(sum('supply_cost'))}</div></div>
+          <div class="kpi"><div class="lbl">ค่าใช้จ่าย</div><div class="val">฿ ${money(sum('supply_cost') + sum('wage_cost') + sum('damage_cost'))}</div>
+            <div class="sub">ค่าแรง ฿ ${money(sum('wage_cost'))} · วัสดุใช้ในร้าน ฿ ${money(sum('supply_cost'))}${sum('damage_cost') ? ` · สินค้าเสียหาย ฿ ${money(sum('damage_cost'))}` : ''}</div></div>
           <div class="kpi"><div class="lbl">กำไรสุทธิ (หลังหักค่าแรง)</div>
             <div class="val" style="color:var(${net < 0 ? '--bad' : '--ok'})">${net < 0 ? '−' : ''}฿ ${money(Math.abs(net))}</div>
             <div class="sub">${net < 0 ? 'ขาดทุน' : 'กำไร'}ในช่วงที่เลือก</div></div>
