@@ -133,6 +133,42 @@ export async function render(container, { navigate, permissions, user }) {
         return key === 'dup' ? (p) => dupsOf(p).length > 1 : FILTERS.find(([k]) => k === key)[2];
     }
 
+    // A redraw (after saving an edit, say) keeps the table where it was: the row worked on (or,
+    // when it has left the filter, the row after it) stays at the same height on screen, so the
+    // next item is right there. The wide table scrolls inside its own box (.boxed), which a fresh
+    // table would otherwise start at the top.
+    let focusRow = null; // id of the row last clicked in
+    function captureView() {
+        const wrap = container.querySelector('.table-wrap.sticky-page');
+        if (!wrap) return null;
+        const boxed = wrap.classList.contains('boxed');
+        const box = boxed ? wrap.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+        const headH = wrap.querySelector('thead')?.offsetHeight || 0;
+        const rows = [...wrap.querySelectorAll('tbody tr[data-row]')];
+        const visible = (r) => { const b = r.getBoundingClientRect(); return b.bottom > box.top + headH && b.top < box.bottom; };
+        let i = rows.findIndex((r) => r.dataset.row === String(focusRow));
+        if (i < 0 || !visible(rows[i])) i = rows.findIndex(visible);
+        return {
+            left: wrap.scrollLeft, top: wrap.scrollTop, winY: window.scrollY,
+            ids: i < 0 ? [] : rows.slice(i, i + 30).map((r) => r.dataset.row),
+            rowTop: i < 0 ? 0 : rows[i].getBoundingClientRect().top,
+        };
+    }
+    function restoreView(v) {
+        const wrap = container.querySelector('.table-wrap.sticky-page');
+        if (!v || !wrap) return;
+        // Box it now (as responsive.js would on the next frame) so it can be scrolled at once.
+        const table = wrap.querySelector(':scope > table');
+        if (table) wrap.classList.toggle('boxed', table.offsetWidth > wrap.clientWidth + 1);
+        wrap.scrollLeft = v.left;
+        wrap.scrollTop = v.top;
+        window.scrollTo(0, v.winY);
+        const row = v.ids.map((id) => wrap.querySelector(`tr[data-row="${id}"]`)).find(Boolean);
+        if (!row) return;
+        const d = row.getBoundingClientRect().top - v.rowTop;
+        if (wrap.classList.contains('boxed')) wrap.scrollTop += d; else window.scrollBy(0, d);
+    }
+
     function draw() {
         const s = res.summary;
         let shown = sorted(res.data.filter(filterFn(filter)));
@@ -143,6 +179,7 @@ export async function render(container, { navigate, permissions, user }) {
             shown = shown.map((p, i) => [at.get(dupsOf(p)[0].id), i, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
         }
         const canBuy = permissions.includes('purchase.create');
+        const view = captureView();
         container.innerHTML = `
         <div id="inv-page" hidden></div>
         <div class="actions-row" style="margin-bottom:12px">
@@ -186,6 +223,11 @@ export async function render(container, { navigate, permissions, user }) {
         </section>
         ${editing ? editHtml() : ''}
         ${link ? linkHtml() : ''}`;
+        restoreView(view);
+        container.querySelector('tbody')?.addEventListener('click', (ev) => {
+            const tr = ev.target.closest('tr[data-row]');
+            if (tr) focusRow = tr.dataset.row;
+        });
 
         const input = container.querySelector('#q');
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { search = input.value.trim(); load(); } });
@@ -768,7 +810,7 @@ export async function render(container, { navigate, permissions, user }) {
         // Only the store's own goods are bought from suppliers.
         const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canConsign
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
-        return `<tr>${pick}
+        return `<tr data-row="${p.id}">${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
             ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
