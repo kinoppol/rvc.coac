@@ -29,7 +29,9 @@ const SORT_KEY = 'inventory.sort';
 const FILTER_KEY = 'inventory.filter';
 const FILTERS = [
     ['all', 'ทั้งหมด', () => true],
-    ['nobarcode', 'ไม่มีบาร์โค้ด', (p) => !(p.barcode || '').trim()],
+    // No piece barcode yet: still to be collected, or marked as an item that really has none.
+    ['nobarcode', 'ยังไม่มีบาร์โค้ด', (p) => !(p.barcode || '').trim() && !Number(p.no_barcode)],
+    ['barcodeless', 'สินค้าไม่มีบาร์โค้ด', (p) => !(p.barcode || '').trim() && !!Number(p.no_barcode)],
     ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
     ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
@@ -37,7 +39,12 @@ const FILTERS = [
     // Same / almost the same name of the same owner (the test needs the loaded list: set in render).
     ['dup', 'สินค้าซ้ำซ้อน', null],
 ];
-const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
+const FILTER_TIPS = {
+    nobarcode: 'สินค้าที่ยังไม่ได้เก็บบาร์โค้ดชิ้น (ตัวสินค้ามีบาร์โค้ดแต่ยังไม่ได้บันทึก) — ถ้าสินค้าไม่มีบาร์โค้ดจริง กด "ไม่มีบาร์โค้ด" ในคอลัมน์บาร์โค้ดชิ้น',
+    barcodeless: 'สินค้าที่ทำเครื่องหมายว่าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด',
+    dup: 'ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)',
+};
+const thCollator =new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
 export async function render(container, { navigate, permissions, user }) {
     let search = '';
@@ -166,7 +173,7 @@ export async function render(container, { navigate, permissions, user }) {
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${k === 'dup' ? ' title="ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)"' : ''}>${l} (${count(res.data.filter(filterFn(k)).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(res.data.filter(filterFn(k)).length)})</button>`).join('')}
           </div>
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
@@ -232,6 +239,10 @@ export async function render(container, { navigate, permissions, user }) {
         }));
         container.querySelectorAll('[data-merge]').forEach((b) => b.addEventListener('click', () => {
             mergeInto(res.data.find((x) => String(x.id) === b.dataset.merge));
+        }));
+        container.querySelectorAll('[data-no-barcode]').forEach((b) => b.addEventListener('click', () => {
+            b.disabled = true;
+            setNoBarcode(b.dataset.noBarcode, b.dataset.on === '1');
         }));
         container.querySelectorAll('[data-held-release]').forEach((b) => b.addEventListener('click', () => releaseHeld(b.dataset.heldRelease, b.dataset.code)));
         container.querySelector('#zc-view')?.addEventListener('click', () => openDetailModal(async () => ({
@@ -729,6 +740,28 @@ export async function render(container, { navigate, permissions, user }) {
         }
     }
 
+    /** No piece barcode: not collected yet, or marked as an item that really has none (either can be switched). */
+    function noBarcodeCell(p) {
+        const can = canEdit && (p.consignor_id == null || canConsign);
+        if (Number(p.no_barcode)) {
+            return `<span class="pill muted" style="font-size:11.5px;white-space:nowrap" title="สินค้านี้ไม่มีบาร์โค้ดจริง ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</span>
+              ${can ? `<div><button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="0" style="font-size:12px;font-weight:400" title="ย้ายกลับไปเป็นสินค้าที่ยังต้องเก็บบาร์โค้ด">ยกเลิก</button></div>` : ''}`;
+        }
+        return `<span title="ยังไม่ได้เก็บบาร์โค้ดชิ้น">—</span>
+          ${can ? `<div><button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ตัวสินค้าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</button></div>` : ''}`;
+    }
+
+    async function setNoBarcode(id, on) {
+        try {
+            await api.post(`/inventory/${id}/no-barcode`, { no_barcode: on });
+            const p = res.data.find((x) => String(x.id) === String(id));
+            if (p) p.no_barcode = on ? 1 : 0;
+            draw();
+        } catch (err) {
+            alertDialog(err.message, { tone: 'error' });
+        }
+    }
+
     function row(p) {
         const dups = canConsign ? dupsOf(p) : [];
         const low = Number(p.qty_stock) <= 3;
@@ -741,7 +774,7 @@ export async function render(container, { navigate, permissions, user }) {
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
             ${dups.length > 1
                 ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อเดียวกัน (หรือสะกดต่างกันเล็กน้อย) ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
-          <td class="muted">${p.barcode ? escapeHtml(p.barcode) : '<span title="ยังไม่มีบาร์โค้ดชิ้น">—</span>'}
+          <td class="muted">${p.barcode ? escapeHtml(p.barcode) : noBarcodeCell(p)}
             ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
               <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>

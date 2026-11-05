@@ -705,6 +705,26 @@ class ProductRepo
         return $out;
     }
 
+    /**
+     * Marks a product as one that really has no barcode (or takes the mark back), so it is
+     * told apart from one whose barcode has not been collected yet. Needs migration 0065.
+     */
+    public function setNoBarcode(int $productId, bool $none, ?int $userId, ?string $ip): void
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'products', 'no_barcode')) {
+            throw new \RuntimeException('ยังทำเครื่องหมายไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0065) ก่อน');
+        }
+        $old = $this->find($productId);
+        if (!$old) {
+            throw new \RuntimeException('ไม่พบสินค้า กรุณารีเฟรชหน้า');
+        }
+        if ($none && trim((string) $old['barcode']) !== '') {
+            throw new \RuntimeException("สินค้านี้มีบาร์โค้ดชิ้น {$old['barcode']} อยู่แล้ว");
+        }
+        $this->db->prepare('UPDATE products SET no_barcode = ?, updated_at = NOW() WHERE id = ?')->execute([$none ? 1 : 0, $productId]);
+        $this->audit->log('products', $productId, 'update', ['no_barcode' => (int) ($old['no_barcode'] ?? 0)], ['no_barcode' => $none ? 1 : 0], $userId, $ip);
+    }
+
     /** An admin has checked a held barcode (a mistyped entry, say): it is free to use again. */
     public function releaseHeld(int $productId, string $barcode, ?int $userId, ?string $ip): void
     {

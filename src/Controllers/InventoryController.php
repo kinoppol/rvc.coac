@@ -41,6 +41,24 @@ class InventoryController
         ]);
     }
 
+    /** Marks a product as really having no barcode, or takes the mark back (body: no_barcode). Consigned goods: admin only. */
+    public function setNoBarcode(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $db = Db::connection();
+        $repo = new ProductRepo($db, new AuditLogger($db));
+        $id = (int) $args['id'];
+        if (($repo->find($id)['consignor_id'] ?? null) !== null && ($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ข้อมูลสินค้าฝากขายได้', 403);
+        }
+        try {
+            $repo->setNoBarcode($id, !empty(((array) $request->getParsedBody())['no_barcode']), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['ok' => true]);
+    }
+
     /** Admin only: a held barcode was checked (e.g. a mistyped entry) and is let go (body: barcode). */
     public function releaseHeldBarcode(Request $request, Response $response, array $args): Response
     {
