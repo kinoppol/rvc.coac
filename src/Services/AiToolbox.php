@@ -120,6 +120,22 @@ class AiToolbox
                     ],
                 ],
             ],
+            'analyze_product_sales' => [
+                'perm' => 'purchase.create',
+                'confirm' => false,
+                'description' => 'ดึงข้อมูลวิเคราะห์การขายของสินค้าที่ระบุ (ไม่เกิน 10 รายการ) จากฐานข้อมูล: ยอดขายรายวันย้อนหลัง ค่าเฉลี่ยต่อวัน'
+                    . ' 7 วันล่าสุดเทียบ 7 วันก่อนหน้า ค่าเฉลี่ยตามวันในสัปดาห์ วันที่ของหมด คงเหลือ จำนวนวันที่ของพอขาย ราคาขาย ต้นทุน กำไร'
+                    . ' ขนาดแพ็ค ประวัติการซื้อเข้า (ร้านที่ซื้อ จำนวน ต้นทุน ระยะห่างระหว่างการซื้อ) สินค้าเสียหาย และการปรับราคา'
+                    . ' ใช้เพื่อวิเคราะห์แนวโน้มและแนะนำการสั่งซื้อเพิ่ม',
+                'parameters' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'product_ids' => ['type' => 'array', 'items' => ['type' => 'integer'], 'description' => 'รหัสสินค้า (id)'],
+                        'days' => ['type' => 'integer', 'description' => 'จำนวนวันย้อนหลัง (ค่าเริ่มต้น 60 สูงสุด 180)'],
+                    ],
+                    'required' => ['product_ids'],
+                ],
+            ],
             'list_withdrawals' => [
                 'perm' => 'withdraw.create',
                 'confirm' => false,
@@ -397,6 +413,7 @@ class AiToolbox
                 'search_consignors' => $this->searchConsignors($args),
                 'get_consignor_passbook' => $this->passbook($args),
                 'search_products' => $this->searchProducts($args),
+                'analyze_product_sales' => $this->analyzeProductSales($args),
                 'list_withdrawals' => $this->listWithdrawals($args),
                 'get_report' => $this->report($args),
                 'create_consignor' => $this->createConsignor($args),
@@ -407,6 +424,130 @@ class AiToolbox
         } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Sales facts per product for trend analysis and reorder advice, built from the stock card
+     * (document dates): daily pieces sold, recent averages, weekday pattern, stock-outs, cover,
+     * purchase history and pack sizes. Figures only; the model draws the conclusions.
+     */
+    private function analyzeProductSales(array $args): array
+    {
+        $ids = array_slice(array_values(array_unique(array_filter(array_map('intval', (array) ($args['product_ids'] ?? []))))), 0, 10);
+        if (!$ids) {
+            return ['error' => 'กรุณาระบุ product_ids'];
+        }
+        $days = max(7, min(180, (int) ($args['days'] ?? 60)));
+        $today = date('Y-m-d');
+        $from = date('Y-m-d', strtotime("-" . ($days - 1) . ' days'));
+        $weekday = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+        $svc = new InventoryService($this->db);
+        $out = [];
+        foreach ($ids as $id) {
+            $d = $svc->movements($id);
+            if (!$d) {
+                $out[] = ['id' => $id, 'error' => 'ไม่พบสินค้า'];
+                continue;
+            }
+            $p = $d['product'];
+            $first = null;
+            $sold = [];
+            $close = [];
+            $revenue = 0.0;
+            $purchases = [];
+            $damaged = 0;
+            foreach ($d['movements'] as $r) {
+                if (!$r['date']) {
+                    continue;
+                }
+                $first ??= $r['date'];
+                $close[$r['date']] = (int) $r['balance'];
+                if (in_array($r['kind'], ['sale', 'pos'], true)) {
+                    $q = -(int) $r['qty'];
+                    $sold[$r['date']] = ($sold[$r['date']] ?? 0) + $q;
+                    if ($r['date'] >= $from) {
+                        $revenue += $q * (float) ($r['sale_price'] ?? 0);
+                    }
+                } elseif ($r['kind'] === 'purchase' || $r['kind'] === 'receive') {
+                    $purchases[] = ['date' => $r['date'], 'supplier' => $r['party'], 'qty' => (int) $r['qty'], 'piece_cost' => $r['unit_cost'] !== null ? round((float) $r['unit_cost'], 2) : null];
+                } elseif ($r['kind'] === 'damage' && $r['date'] >= $from) {
+                    $damaged += abs((int) $r['qty']);
+                }
+            }
+            // One figure per day of the window (from the first movement on), with the closing balance.
+            $daily = [];
+            $wd = array_fill(0, 7, ['qty' => 0, 'days' => 0]);
+            $bal = 0;
+            $outDays = 0;
+            foreach ($close as $k => $b) {
+                if ($k < $from) {
+                    $bal = $b;
+                }
+            }
+            for ($t = strtotime($from); ($k = date('Y-m-d', $t)) <= $today; $t = strtotime('+1 day', $t)) {
+                if (isset($close[$k])) {
+                    $bal = $close[$k];
+                }
+                if ($first === null || $k < $first) {
+                    continue;
+                }
+                $q = $sold[$k] ?? 0;
+                $daily[] = [$k, $q, $bal];
+                if ($bal <= 0) {
+                    $outDays++;
+                }
+                $w = (int) date('w', $t);
+                $wd[$w]['qty'] += $q;
+                $wd[$w]['days']++;
+            }
+            $sum = function (int $a, int $b) use ($sold, $today): int {
+                $s = 0;
+                for ($i = $a; $i < $b; $i++) {
+                    $s += $sold[date('Y-m-d', strtotime("{$today} -{$i} days"))] ?? 0;
+                }
+                return $s;
+            };
+            $n = count($daily);
+            $windowQty = array_sum(array_column($daily, 1));
+            $last14 = $sum(0, 14);
+            $avg14 = round($last14 / max(1, min(14, $n)), 2);
+            $inStockDays = count(array_filter($daily, fn ($x) => $x[2] > 0 || $x[1] > 0));
+            $gaps = [];
+            for ($i = 1; $i < count($purchases); $i++) {
+                $gaps[] = (strtotime($purchases[$i]['date']) - strtotime($purchases[$i - 1]['date'])) / 86400;
+            }
+            $out[] = [
+                'id' => (int) $p['id'],
+                'name' => $p['name'],
+                'owner' => $p['consignor_id'] !== null ? 'ฝากขาย: ' . $p['consignor_name'] . ' (ร้านไม่ได้ซื้อเอง สั่งเพิ่มได้โดยแจ้งผู้ฝาก)' : 'สินค้าของร้าน (ร้านซื้อเอง)',
+                'sale_price' => (float) $p['sale_price'],
+                'cost_price' => (float) $p['cost_price'],
+                'margin_percent' => $p['margin_percent'],
+                'qty_stock' => (int) $p['qty_stock'],
+                'expiry_date' => $p['expiry_date'],
+                'pack_sizes' => array_values(array_unique(array_map(fn ($b) => (int) $b['pack_size'], $p['pack_barcodes']))),
+                'first_movement_date' => $first,
+                'window' => ['from' => $from, 'to' => $today, 'days_with_data' => $n],
+                'sold_in_window' => $windowQty,
+                'revenue_in_window' => round($revenue, 2),
+                'sold_last_7_days' => $sum(0, 7),
+                'sold_previous_7_days' => $sum(7, 14),
+                'sold_last_30_days' => $sum(0, 30),
+                'avg_per_day_window' => $n ? round($windowQty / $n, 2) : 0,
+                'avg_per_day_last_14' => $avg14,
+                'avg_per_day_when_in_stock' => $inStockDays ? round($windowQty / $inStockDays, 2) : 0,
+                'out_of_stock_days_in_window' => $outDays,
+                'days_of_stock_left_at_last_14_rate' => $avg14 > 0 ? round((int) $p['qty_stock'] / $avg14, 1) : null,
+                'avg_by_weekday' => array_combine($weekday, array_map(fn ($x) => $x['days'] ? round($x['qty'] / $x['days'], 2) : null, $wd)),
+                'daily' => ['columns' => ['date', 'sold_qty', 'closing_stock'], 'rows' => $daily],
+                'purchases_recent' => array_slice($purchases, -6),
+                'avg_days_between_purchases' => $gaps ? round(array_sum($gaps) / count($gaps), 1) : null,
+                'damaged_in_window' => $damaged,
+                'price_changes_recent' => array_map(fn ($c) => ['at' => $c['at'], 'old_price' => $c['old_price'], 'new_price' => $c['new_price']], array_slice($d['price_changes'], 0, 5)),
+            ];
+        }
+        return ['today' => $today, 'products' => $out,
+            'note' => 'ยอดขายนับตามวันที่ในเอกสารขาย · closing_stock = คงเหลือสิ้นวัน (0 = ของหมด ยอดขายวันนั้นอาจต่ำกว่าความต้องการจริง) · ร้านเป็นร้านค้าในสถานศึกษา วันหยุดอาจไม่มีการขาย'];
     }
 
     private function navigateTo(array $args): array

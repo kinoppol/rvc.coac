@@ -1093,3 +1093,6 @@ body.tablet-mode .kpi .value { font-size: 26px; }
 .tc-leg.off { opacity: .45; text-decoration: line-through; }
 .tc-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .tc-leg .tc-swatch { margin-right: 0; }
+.tc-ai { margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface2); }
+.tc-ai-a { background: var(--surface); border: 1px solid var(--border); margin-top: 6px; }
+.tc-ai-q { margin: 10px 0 0 auto; max-width: 80%; width: fit-content; background: var(--pri); color: #fff; padding: 7px 12px; border-radius: 14px; font-size: 13.5px; }

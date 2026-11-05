@@ -22,6 +22,7 @@ const TOOL_LABEL = {
     search_consignors: 'ค้นหาผู้ฝากขาย',
     get_consignor_passbook: 'ดูสมุดบัญชีผู้ฝาก',
     search_products: 'ค้นหาสินค้า',
+    analyze_product_sales: 'ดึงข้อมูลการขายเพื่อวิเคราะห์',
     list_withdrawals: 'ดูรายการเบิกเงิน',
     get_report: 'ดึงรายงาน',
     create_consignor: 'ลงทะเบียนผู้ฝากขาย',

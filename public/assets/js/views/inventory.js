@@ -342,7 +342,7 @@ export async function render(container, { navigate, permissions, user }) {
                 alertDialog(`เปรียบเทียบได้ครั้งละไม่เกิน ${COMPARE_MAX} รายการ (เลือกไว้ ${picked.size} รายการ) กรุณาเอาติ๊กออกบางรายการ`, { title: 'เปรียบเทียบแนวโน้มการขาย' });
                 return;
             }
-            openTrendCompare([...picked], navigate);
+            openTrendCompare([...picked], navigate, { canAi: permissions.includes('ai.use') });
         });
         container.querySelector('#dup-check')?.addEventListener('click', checkDuplicates);
         poBtn?.addEventListener('click', () => openPoBuilder(pickedStore(), {

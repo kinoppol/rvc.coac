@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { money, count, escapeHtml, todayISO, compact, niceScale } from './util.js';
 import { alertDialog } from './dialog.js';
 import { skBlock } from './skeleton.js';
+import { markdown } from './markdown.js';
 import { openProductModal, dailySeries, TREND_RANGES, addDays, thDay } from './product-modal.js';
 
 // Sales trend of several products side by side: one line each on a shared day axis
@@ -11,14 +12,15 @@ export const COMPARE_MAX = 10;
 // Distinct hues that read on both the light and the dark theme.
 const COLORS = ['#2f6fed', '#e8590c', '#12a150', '#c026d3', '#0e9fb8', '#c99a06', '#dc3545', '#6f4ee8', '#6aa30d', '#e0458f'];
 
-export async function openTrendCompare(productIds, navigate) {
+export async function openTrendCompare(productIds, navigate, { canAi = false } = {}) {
     const ids = [...new Set(productIds.map(Number))].slice(0, COMPARE_MAX);
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:1040px"><div class="modal-body">' + skBlock(6, 8) + '</div></div>';
     document.body.appendChild(box);
     let ro = null;
-    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (ro) ro.disconnect(); };
+    let aiTick = null;
+    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (ro) ro.disconnect(); clearInterval(aiTick); };
     const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-backdrop')].pop() === box) close(); };
     document.addEventListener('keydown', onKey);
 
@@ -40,6 +42,8 @@ export async function openTrendCompare(productIds, navigate) {
     let metric = 'qty';
     let smooth = true;
     let bars = true;
+    // AI analysis: its own short conversation, kept while the window is open.
+    const ai = { busy: false, error: null, messages: [], model: null, started: 0 };
 
     const days = () => {
         const start = range ? addDays(today, -(range - 1)) : earliest;
@@ -90,7 +94,9 @@ export async function openTrendCompare(productIds, navigate) {
         box.querySelector('.modal').innerHTML = `
           <div class="modal-head"><h2>เปรียบเทียบแนวโน้มการขาย (${count(items.length)} รายการ)</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
           <div class="modal-body" style="padding-top:12px">
-            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center">
+              ${canAi ? `<button type="button" class="btn sm" data-ai-run ${ai.busy ? 'disabled' : ''} style="margin-right:auto"
+                title="ให้ผู้ช่วย AI ดึงข้อมูลการขาย สต๊อก และประวัติการซื้อจากระบบ แล้ววิเคราะห์จุดน่าสนใจ แนะนำว่าควรซื้อตัวไหนเพิ่มและเพิ่มเท่าไร">✨ วิเคราะห์ด้วยผู้ช่วย AI</button>` : ''}
               <div class="tabs" role="group" aria-label="ช่วงเวลา">${TREND_RANGES.map(([n, l]) => `<button type="button" class="tab-btn ${n === range ? 'active' : ''}" data-range="${n}">${l}</button>`).join('')}</div>
               <div class="tabs" role="group" aria-label="เส้นกราฟ">${[[true, 'เฉลี่ย 7 วัน'], [false, 'รายวัน']].map(([v, l]) => `<button type="button" class="tab-btn ${v === smooth ? 'active' : ''}" data-smooth="${v ? 1 : 0}">${l}</button>`).join('')}</div>
               <button type="button" class="tab-btn ${bars ? 'active' : ''}" data-bars aria-pressed="${bars}" title="แท่งยอดขายจริงแต่ละวันของแต่ละสินค้า (สีเดียวกับเส้น) อยู่ด้านหลังเส้น">แท่งรายวัน</button>
@@ -100,6 +106,7 @@ export async function openTrendCompare(productIds, navigate) {
             <div class="tc-legend">${items.map((it, i) => `<button type="button" class="tc-leg ${it.on ? '' : 'off'}" data-toggle="${i}" title="กดเพื่อซ่อน/แสดงเส้นนี้">
               <span class="tc-swatch" style="background:${it.color}"></span>${escapeHtml(it.p.name)}</button>`).join('')}</div>
             ${tableHtml(ks)}
+            ${aiHtml()}
             <div class="muted" style="font-size:12px;margin-top:8px">${smooth ? 'เส้นแสดงค่าเฉลี่ยย้อนหลัง 7 วัน ช่วยให้เห็นทิศทางชัดกว่ายอดรายวัน' : 'เส้นแสดงยอดขายจริงแต่ละวัน'}${bars ? ' · แท่งจาง ๆ ด้านหลังคือยอดขายจริงแต่ละวันของแต่ละสินค้า (สีเดียวกับเส้น)' : ''} · ใช้วันที่ในเอกสารขาย
               · เส้นเริ่มตั้งแต่วันแรกที่สินค้ามีความเคลื่อนไหว · เลือกได้สูงสุด ${COMPARE_MAX} รายการ · กดชื่อสินค้าเพื่อดูบัญชีคุมสินค้า</div>
           </div>
@@ -107,11 +114,82 @@ export async function openTrendCompare(productIds, navigate) {
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         box.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => { range = Number(b.dataset.range); draw(); }));
         box.querySelectorAll('[data-smooth]').forEach((b) => b.addEventListener('click', () => { smooth = b.dataset.smooth === '1'; draw(); }));
+        box.querySelector('[data-ai-run]')?.addEventListener('click', () => askAi(firstPrompt()));
+        box.querySelector('[data-ai-form]')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const t = e.target.querySelector('textarea').value.trim();
+            if (t) askAi(t);
+        });
         box.querySelector('[data-bars]').addEventListener('click', () => { bars = !bars; draw(); });
         box.querySelectorAll('[data-metric]').forEach((b) => b.addEventListener('click', () => { metric = b.dataset.metric; draw(); }));
         box.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', () => { const it = items[Number(b.dataset.toggle)]; it.on = !it.on; draw(); }));
         box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.open, navigate && ((page) => { close(); navigate(page); }))));
         chart(ks);
+    }
+
+    function firstPrompt() {
+        const days = Math.max(range || 180, 30);
+        const NL = String.fromCharCode(10);
+        const list = items.map((it) => `- id ${it.id}: ${it.p.name}`).join(NL);
+        return `วิเคราะห์การขายของสินค้าที่กำลังเปรียบเทียบ ${items.length} รายการนี้${NL}${list}${NL}${NL}`
+            + `ให้เรียกเครื่องมือ analyze_product_sales (product_ids: [${items.map((it) => it.id).join(', ')}], days: ${days}) ก่อน และใช้ตัวเลขจากระบบเท่านั้น ห้ามเดา แล้วตอบเป็น 3 หัวข้อ:${NL}`
+            + `1. **จุดน่าสนใจ** — แนวโน้มของแต่ละรายการ (เพิ่ม/ลด/คงที่) รายการที่ขายดีหรือขายช้า วันในสัปดาห์ที่ขายดี ช่วงที่ของหมดจนเสียโอกาสขาย และผลของการปรับราคา (ถ้ามี) เทียบกันระหว่างรายการ${NL}`
+            + `2. **ควรซื้อสินค้าตัวไหนเพิ่ม** — เรียงตามความเร่งด่วน พร้อมเหตุผลสั้น ๆ (ของพอขายอีกกี่วัน แนวโน้ม กำไรต่อชิ้น) และบอกตัวที่ยังไม่ควรซื้อเพิ่ม${NL}`
+            + '3. **ควรซื้อเพิ่มเท่าไร** — ตาราง: สินค้า | คงเหลือ | ขายเฉลี่ย/วัน | พอขาย (วัน) | แนะนำซื้อ (ชิ้น / แพ็ค) — คิดจากยอดขายเฉลี่ยช่วงที่มีของ (avg_per_day_when_in_stock และแนวโน้ม 14 วัน)'
+            + ' ให้พอขายถึงรอบซื้อครั้งถัดไป (ระยะห่างการซื้อเฉลี่ย ถ้าไม่มีข้อมูลใช้ 7 วัน) บวกเผื่อ 2-3 วัน แล้วหักคงเหลือ ปัดขึ้นเป็นแพ็คถ้ามีขนาดแพ็ค'
+            + ' แสดงวิธีคิดสั้น ๆ ใต้ตาราง ระวังวันหมดอายุ สินค้าฝากขายให้แนะนำแจ้งผู้ฝากแทนการซื้อ'
+            + `${NL}ตอบกระชับ อ่านง่าย`;
+    }
+
+    function aiHtml() {
+        if (!canAi || (!ai.messages.length && !ai.busy && !ai.error)) return '';
+        const shown = ai.messages.filter((m, i) => i > 0 && (m.role === 'user' || (m.role === 'assistant' && m.content)));
+        const secs = ai.busy ? Math.floor((Date.now() - ai.started) / 1000) : 0;
+        return `<section class="tc-ai">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px">
+            <div style="font-weight:600">✨ ผลวิเคราะห์จากผู้ช่วย AI</div>
+            ${ai.model ? `<span class="muted" style="font-size:11.5px">โมเดล ${escapeHtml(ai.model)}</span>` : ''}
+          </div>
+          ${shown.map((m) => (m.role === 'user'
+              ? `<div class="tc-ai-q">${escapeHtml(m.content)}</div>`
+              : `<div class="ai-bubble tc-ai-a">${markdown(m.content)}</div>`)).join('')}
+          ${ai.busy ? `<div class="muted" style="font-size:13px;padding:8px 0">กำลังดึงข้อมูลจากระบบและวิเคราะห์... <span data-ai-secs>${secs}</span> วินาที</div>` : ''}
+          ${ai.error ? `<div class="error-box" style="margin-top:6px">${escapeHtml(ai.error)}</div>` : ''}
+          ${!ai.busy && ai.messages.length ? `<form data-ai-form style="display:flex;gap:6px;margin-top:8px;align-items:flex-end">
+            <textarea rows="1" placeholder="ถามต่อ เช่น ถ้างบซื้อมี 500 บาท ควรซื้ออะไรบ้าง" style="flex:1;resize:vertical;min-height:36px"></textarea>
+            <button type="submit" class="btn sm">ถาม</button></form>` : ''}
+          <div class="muted" style="font-size:11.5px;margin-top:6px">คำแนะนำจาก AI เป็นข้อมูลประกอบการตัดสินใจ ควรตรวจสอบกับสถานการณ์จริงก่อนสั่งซื้อ</div>
+        </section>`;
+    }
+
+    async function askAi(text) {
+        if (ai.busy) return;
+        ai.busy = true;
+        ai.error = null;
+        ai.started = Date.now();
+        const history = [...ai.messages, { role: 'user', content: text }];
+        ai.messages = history;
+        draw();
+        box.querySelector('.tc-ai')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        aiTick = setInterval(() => {
+            const el = box.querySelector('[data-ai-secs]');
+            if (el) el.textContent = Math.floor((Date.now() - ai.started) / 1000);
+        }, 1000);
+        try {
+            const res = await api.post('/ai/chat', { model: 'auto', messages: history });
+            ai.messages = res.messages || history;
+            ai.model = res.model_used?.label || ai.model;
+            if (!ai.messages.some((m, i) => i >= history.length && m.role === 'assistant' && m.content)) ai.error = 'ผู้ช่วย AI ไม่ได้ตอบกลับ ลองกดอีกครั้ง';
+        } catch (e) {
+            ai.error = e.message;
+            if (e.data?.messages) ai.messages = e.data.messages;
+        }
+        clearInterval(aiTick);
+        ai.busy = false;
+        if (!document.body.contains(box)) return;
+        draw();
+        const answers = box.querySelectorAll('.tc-ai-a');
+        answers[answers.length - 1]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
 
     /** One line per product on a shared day axis; hover shows every product's value that day. */
