@@ -44,7 +44,7 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
     let smooth = true;
     let bars = true;
     // AI analysis: its own short conversation, kept while the window is open.
-    const ai = { busy: false, error: null, messages: [], model: null, started: 0, failed: null, prompts: new Set(), models: null, modelId: 'auto' };
+    const ai = { busy: false, error: null, messages: [], model: null, started: 0, failed: null, prompts: new Set(), unverified: new Set(), models: null, modelId: 'auto' };
     try { ai.modelId = localStorage.getItem(MODEL_KEY) || 'auto'; } catch (e) { /* private mode */ }
     if (canAi) {
         // Models this role may use; one that is busy or rate-limited can be swapped for another here.
@@ -172,6 +172,16 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
         }));
     }
 
+    /** What the wait line says, moving on with the seconds (the server does not report its steps). */
+    function waitStep(secs) {
+        if (secs < 4) return 'กำลังส่งคำถามให้ผู้ช่วย AI';
+        if (secs < 12) return 'กำลังดึงยอดขาย สต๊อก และประวัติการซื้อจากระบบ';
+        if (secs < 25) return 'กำลังเปรียบเทียบแนวโน้มของแต่ละรายการ';
+        if (secs < 45) return 'กำลังคำนวณจำนวนที่ควรซื้อเพิ่ม';
+        if (secs < 75) return 'กำลังเขียนสรุปและคำแนะนำ';
+        return 'ใกล้เสร็จแล้ว รออีกสักครู่';
+    }
+
     function aiHtml() {
         if (!canAi || (!ai.messages.length && !ai.busy && !ai.error)) return '';
         const shown = ai.messages.filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content));
@@ -188,8 +198,17 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
           </div>
           ${shown.map((m) => (m.role === 'user'
               ? `<div class="tc-ai-q">${q(m.content)}</div>`
-              : `<div class="ai-bubble tc-ai-a">${markdown(m.content)}</div>`)).join('')}
-          ${ai.busy ? `<div class="muted" style="font-size:13px;padding:8px 0">กำลังดึงข้อมูลจากระบบและวิเคราะห์... <span data-ai-secs>${secs}</span> วินาที</div>` : ''}
+              : `${ai.unverified.has(m.content) ? `<div class="tc-ai-warn">⚠ คำตอบนี้ <b>ไม่ได้ดึงข้อมูลจากระบบ</b> (โมเดลไม่ได้เรียกเครื่องมือดึงข้อมูล) ตัวเลขอาจถูกแต่งขึ้น ไม่ควรใช้ตัดสินใจ — ลองเลือกโมเดลอื่นแล้วกดวิเคราะห์ใหม่</div>` : ''}
+                 <div class="ai-bubble tc-ai-a">${markdown(m.content)}</div>`)).join('')}
+          ${ai.busy ? `<div class="tc-ai-wait" role="status" aria-live="polite">
+              <div class="tc-ai-orb" aria-hidden="true"><span>✨</span></div>
+              <div style="flex:1;min-width:0">
+                <div class="tc-ai-step"><span data-ai-step>${escapeHtml(waitStep(secs))}</span><span class="tc-ai-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+                <div class="muted" style="font-size:12px;margin-top:2px">ผู้ช่วย AI กำลังทำงาน · <span data-ai-secs>${secs}</span> วินาที — อาจใช้เวลา 30 วินาทีถึง 2 นาที ปิดหน้าต่างนี้ได้แต่คำตอบจะหายไป</div>
+                <div class="tc-ai-bar" aria-hidden="true"><i></i></div>
+                <div class="tc-ai-skel" aria-hidden="true"><i style="width:92%"></i><i style="width:78%"></i><i style="width:85%"></i></div>
+              </div>
+            </div>` : ''}
           ${ai.error ? `<div class="error-box" style="margin-top:6px">${escapeHtml(ai.error)}
               ${ai.failed ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
                 <button type="button" class="btn sm" data-ai-retry>ลองใหม่</button>
@@ -211,15 +230,23 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
         const history = [...before, { role: 'user', content: text }];
         ai.messages = history;
         draw();
-        box.querySelector('.tc-ai')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        box.querySelector('.tc-ai-wait')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
         aiTick = setInterval(() => {
+            const secs = Math.floor((Date.now() - ai.started) / 1000);
             const el = box.querySelector('[data-ai-secs]');
-            if (el) el.textContent = Math.floor((Date.now() - ai.started) / 1000);
+            if (el) el.textContent = secs;
+            const st = box.querySelector('[data-ai-step]');
+            if (st && st.textContent !== waitStep(secs)) st.textContent = waitStep(secs);
         }, 1000);
         try {
             const res = await api.post('/ai/chat', { model: ai.modelId === 'auto' ? 'auto' : Number(ai.modelId), messages: history });
             const answered = (res.messages || []).some((m, i) => i >= history.length && m.role === 'assistant' && m.content);
             if (answered) {
+                // The built-in analysis must rest on the system's figures: flag an answer given without the data tool.
+                const fresh = res.messages.slice(history.length);
+                const usedData = fresh.some((m) => (m.tool_calls || []).some((c) => c.function?.name === 'analyze_product_sales'));
+                const last = [...fresh].reverse().find((m) => m.role === 'assistant' && m.content);
+                if (ai.prompts.has(text) && !usedData && last) ai.unverified.add(last.content);
                 ai.messages = res.messages;
                 ai.model = res.model_used?.label || ai.model;
             } else {

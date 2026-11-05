@@ -1096,3 +1096,27 @@ body.tablet-mode .kpi .value { font-size: 26px; }
 .tc-ai { margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface2); }
 .tc-ai-a { background: var(--surface); border: 1px solid var(--border); margin-top: 6px; }
 .tc-ai-q { margin: 10px 0 0 auto; max-width: 80%; width: fit-content; background: var(--pri); color: #fff; padding: 7px 12px; border-radius: 14px; font-size: 13.5px; }
+.tc-ai-wait { display: flex; gap: 14px; align-items: flex-start; margin-top: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.tc-ai-orb { position: relative; flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 20px;
+  background: conic-gradient(from 0deg, #2f6fed, #c026d3, #e8590c, #12a150, #2f6fed); animation: tc-spin 2.4s linear infinite; }
+.tc-ai-orb::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--surface); }
+.tc-ai-orb span { position: relative; z-index: 1; animation: tc-spin 2.4s linear infinite reverse, tc-pulse 1.4s ease-in-out infinite; }
+.tc-ai-step { font-weight: 600; font-size: 13.5px; }
+.tc-ai-dots { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: middle; }
+.tc-ai-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: tc-dot 1.2s ease-in-out infinite; }
+.tc-ai-dots i:nth-child(2) { animation-delay: .2s; }
+.tc-ai-dots i:nth-child(3) { animation-delay: .4s; }
+.tc-ai-bar { position: relative; height: 4px; border-radius: 4px; background: var(--border); overflow: hidden; margin-top: 10px; }
+.tc-ai-bar i { position: absolute; top: 0; bottom: 0; width: 35%; border-radius: 4px; background: linear-gradient(90deg, #2f6fed, #c026d3); animation: tc-slide 1.6s ease-in-out infinite; }
+.tc-ai-skel { margin-top: 12px; display: grid; gap: 8px; }
+.tc-ai-skel i { display: block; height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--border) 25%, var(--hover) 50%, var(--border) 75%); background-size: 200% 100%; animation: tc-shimmer 1.5s linear infinite; }
+.tc-ai-warn { margin-top: 8px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; border: 1px solid var(--warn); color: var(--text); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+@keyframes tc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@keyframes tc-dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+@keyframes tc-slide { 0% { left: -35%; } 100% { left: 100%; } }
+@keyframes tc-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .tc-ai-orb, .tc-ai-orb span, .tc-ai-dots i, .tc-ai-bar i, .tc-ai-skel i { animation: none; }
+  .tc-ai-bar i { left: 0; width: 100%; opacity: .5; }
+}
