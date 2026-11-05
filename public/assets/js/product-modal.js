@@ -17,6 +17,7 @@ const KIND = {
     count: ['ตรวจนับ', 'warn'],
     adjust: ['ปรับยอด', 'muted'],
     split: ['แยกสินค้า', 'warn'],
+    damage: ['สินค้าเสียหาย', 'bad'],
 };
 const GROUPS = [
     ['all', 'ทั้งหมด', () => true],
@@ -24,6 +25,7 @@ const GROUPS = [
     ['out', 'ขาย / คืน', (r) => ['sale', 'pos', 'return'].includes(r.kind)],
     ['count', 'ตรวจนับ / ปรับยอด', (r) => ['count', 'adjust'].includes(r.kind)],
     ['split', 'แยกสินค้า', (r) => r.kind === 'split'],
+    ['damage', 'สินค้าเสียหาย', (r) => r.kind === 'damage'],
 ];
 
 function info(label, value) {
@@ -93,6 +95,7 @@ export async function openProductModal(productId, navigate) {
             ${line('บวก รับเข้า (ซื้อ / รับฝาก)', t.received, '+')}
             ${line('หัก ขายออก (ต้นทุนขาย)', t.sold, '−')}
             ${t.returned.qty ? line('หัก คืนผู้ฝาก', t.returned, '−') : ''}
+            ${t.damaged && t.damaged.qty ? line('หัก สินค้าเสียหาย (ตัดสต๊อก)', t.damaged, '−') : ''}
             ${t.split && (t.split.qty || t.split.value) ? line(t.split.qty < 0 ? 'หัก แยกออกเป็นสินค้าอื่น' : 'บวก แยกมาจากสินค้าแพ็ค', t.split, t.split.qty < 0 ? '−' : '+') : ''}
             ${line('ปรับปรุงจากการตรวจนับ / ส่วนต่าง', adj, adjSign)}
             ${line('คงเหลือยกไป', t.closing, '', 'pm-sum-total')}
@@ -162,7 +165,7 @@ export async function openProductModal(productId, navigate) {
             ${priceChangesHtml()}
             <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
               <div class="tabs" role="group" aria-label="กรองความเคลื่อนไหว">
-                ${GROUPS.filter(([k, , fn]) => k !== 'split' || d.movements.some(fn)).map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(d.movements.filter(fn).length)})</button>`).join('')}
+                ${GROUPS.filter(([k, , fn]) => !['split', 'damage'].includes(k) || d.movements.some(fn)).map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(d.movements.filter(fn).length)})</button>`).join('')}
               </div>
               <button type="button" class="btn secondary sm" data-order>${newestFirst ? 'ล่าสุดก่อน ▼' : 'เก่าสุดก่อน ▲'}</button>
             </div>

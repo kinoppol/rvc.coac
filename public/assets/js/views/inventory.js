@@ -5,6 +5,7 @@ import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 import { openPoBuilder } from '../po-builder.js';
 import { openSplitModal } from '../split-modal.js';
+import { openDamageModal, openDamageReport } from '../damage-modal.js';
 import { openInventoryMobile } from '../inventory-mobile.js';
 import { openMobileCount } from './count-mobile.js';
 
@@ -204,6 +205,7 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${canConsign ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
               ${canConsign ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
+              ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${pickedStore().length ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ (เฉพาะสินค้าของร้าน)">สร้างใบรายการสั่งซื้อ (${pickedStore().length})</button>` : ''}
               ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
@@ -245,6 +247,7 @@ export async function render(container, { navigate, permissions, user }) {
             draw();
         }));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
+        container.querySelector('#damage-report')?.addEventListener('click', () => openDamageReport({ canEdit, onChange: load }));
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
             canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
         }));
@@ -262,6 +265,7 @@ export async function render(container, { navigate, permissions, user }) {
         bindLink();
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
         container.querySelectorAll('[data-split]').forEach((b) => b.addEventListener('click', () => openSplitModal(b.dataset.split, { onDone: load })));
+        container.querySelectorAll('[data-damage]').forEach((b) => b.addEventListener('click', () => openDamageModal(b.dataset.damage, { onDone: load })));
         container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.claim);
             const ok = await confirmDialog(
@@ -828,7 +832,8 @@ export async function render(container, { navigate, permissions, user }) {
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
           <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}${canEdit && p.consignor_id == null
-              ? `<div><button type="button" class="link-btn" data-split="${p.id}" style="font-size:12px;font-weight:400" title="สินค้าแพ็คที่ข้างในมีหลายแบบ แต่ละแบบมีบาร์โค้ดของตัวเอง (คละรส คละสี): แยกจำนวนชิ้นออกเป็นสินค้าแต่ละแบบ">แยกสินค้า</button></div>` : ''}</td>
+              ? `<div><button type="button" class="link-btn" data-split="${p.id}" style="font-size:12px;font-weight:400" title="สินค้าแพ็คที่ข้างในมีหลายแบบ แต่ละแบบมีบาร์โค้ดของตัวเอง (คละรส คละสี): แยกจำนวนชิ้นออกเป็นสินค้าแต่ละแบบ">แยกสินค้า</button></div>
+                <div><button type="button" class="link-btn" data-damage="${p.id}" style="font-size:12px;font-weight:400;color:var(--bad);white-space:nowrap" title="ตัดสินค้าที่ชำรุด/ขายไม่ได้ออกจากสต๊อก (เช่น ซื้อแพ็คใหญ่แล้วมีบางชิ้นเสียหาย) เก็บสาเหตุไว้ทำสถิติ">สินค้าเสียหาย</button></div>` : ''}</td>
           <td class="num">${money(p.cost_price)}${canSetPrice && p.consignor_id == null && !(Number(p.cost_price) > 0)
               ? `<div><button type="button" class="btn secondary sm" data-edit="${p.id}" style="margin-top:4px" title="ใส่ต้นทุนที่สืบทราบภายหลัง กำไรย้อนหลังจะคำนวณใหม่">ระบุต้นทุน</button></div>`
               : canSetPrice && p.consignor_id == null && !p.last_purchase

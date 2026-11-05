@@ -17,7 +17,7 @@ class ReportsController
     private const TYPES = [
         'statement', 'profit', 'payments', 'daily_payments', 'cashiers', 'drawers', 'wages', 'after_hours', 'pos_imports',
         'receive', 'return', 'sales', 'sales_items', 'detail', 'fee', 'withdrawals', 'balances', 'consign_stock',
-        'store_sales', 'store_stock', 'purchases', 'stock_counts', 'capital',
+        'store_sales', 'store_stock', 'purchases', 'stock_counts', 'damaged', 'capital',
     ];
 
     public function show(Request $request, Response $response, array $args): Response
@@ -110,6 +110,7 @@ class ReportsController
             'balances' => $service->balances($from, $to),
             'consign_stock' => $service->consignStock(),
             'stock_counts' => $service->stockCounts($from, $to),
+            'damaged' => $service->damaged($from, $to),
             'receive' => $service->receiveLog($from, $to),
             'return' => $service->returnLog($from, $to),
             'sales' => $service->salesSummaryByConsignor($from, $to),

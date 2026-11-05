@@ -36,7 +36,8 @@ class ReportService
         'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า', 'note' => 'หมายเหตุ / คำอธิบาย', 'investor' => 'ผู้ลงทุน / แหล่งเงินทุน', 'invested' => 'ลงทุนเพิ่ม',
         'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'งบลงทุนคงเหลือ', 'capital_purchases' => 'ซื้อของด้วยเงินลงทุน',
         'other_invest' => 'ลงทุนเพิ่ม (อื่น ๆ)', 'profit_withdrawn' => 'เบิกเงินออกจากกำไร', 'profit_purchases' => 'ซื้อของด้วยเงินกำไร',
-        'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)',
+        'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)', 'reason' => 'สาเหตุ', 'purchase_doc_no' => 'จากใบซื้อ',
+        'damage_value' => 'มูลค่าทุนที่เสียหาย',
     ];
 
     public function __construct(private PDO $db)
@@ -882,6 +883,27 @@ class ReportService
              WHERE sc.count_date BETWEEN ? AND ?
              GROUP BY sc.id, sc.count_date, sc.doc_no, sc.status, u.full_name
              ORDER BY sc.count_date, sc.id"
+        );
+        $stmt->execute([$from, $to]);
+        return $stmt->fetchAll();
+    }
+
+    /** Damaged store goods written off stock in a period (by the day found); cancelled records left out. */
+    public function damaged(string $from, string $to): array
+    {
+        if (!DamageService::available($this->db)) {
+            return [];
+        }
+        $stmt = $this->db->prepare(
+            "SELECT dg.damage_date AS date, dg.doc_no, p.name AS product, p.barcode, " . DamageService::reasonSql('dg.reason') . " AS reason,
+                    pd.doc_no AS purchase_doc_no, dg.supplier_name AS supplier, dg.qty, dg.unit_cost,
+                    ROUND(dg.qty * dg.unit_cost, 2) AS damage_value, dg.note, u.full_name AS created_by
+             FROM damaged_goods dg
+             JOIN products p ON p.id = dg.product_id
+             LEFT JOIN purchase_documents pd ON pd.id = dg.purchase_document_id
+             LEFT JOIN users u ON u.id = dg.user_id
+             WHERE dg.cancelled_at IS NULL AND dg.damage_date BETWEEN ? AND ?
+             ORDER BY dg.damage_date ASC, dg.id ASC"
         );
         $stmt->execute([$from, $to]);
         return $stmt->fetchAll();

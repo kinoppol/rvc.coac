@@ -89,7 +89,8 @@ class InventoryService
     {
         $in = $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?';
         $splits = \App\Services\ProductSplitService::available($this->db);
-        $stmt = $this->db->prepare(sprintf(
+        $damages = \App\Services\DamageService::available($this->db);
+        $stmt = $this->db->prepare($sql = sprintf(
             "SELECT * FROM (
                 SELECT pi.product_id, pd.created_at AS at, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, 'purchase' AS kind,
                        pd.doc_no, pd.supplier_name AS party, u.full_name AS user_name, pi.units AS qty,
@@ -132,6 +133,7 @@ class InventoryService
                 LEFT JOIN users u ON u.id = sc.approved_by
                 WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
               %4\$s
+              %5\$s
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
             $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?',
             // Cancelled receive / return documents (migration 0050) moved nothing.
@@ -151,9 +153,16 @@ class InventoryService
                 JOIN product_splits sp ON sp.id = spi.split_id
                 JOIN products src ON src.id = sp.source_product_id
                 LEFT JOIN users u ON u.id = sp.user_id
-                WHERE spi.product_id IN ($in) AND sp.cancelled_at IS NULL" : ''
+                WHERE spi.product_id IN ($in) AND sp.cancelled_at IS NULL" : '',
+            // Damaged goods written off (migration 0066), on the day they were found.
+            $damages ? "UNION ALL
+                SELECT dg.product_id, dg.created_at, dg.damage_date, 'damage', dg.doc_no, " . \App\Services\DamageService::reasonSql('dg.reason') . ",
+                       u.full_name, -dg.qty, dg.unit_cost, -ROUND(dg.qty * dg.unit_cost, 2), NULL, NULL, NULL, 2, dg.id
+                FROM damaged_goods dg
+                LEFT JOIN users u ON u.id = dg.user_id
+                WHERE dg.product_id IN ($in) AND dg.cancelled_at IS NULL" : ''
         ));
-        $stmt->execute($productId === null ? [] : array_fill(0, $splits ? 7 : 5, $productId));
+        $stmt->execute($productId === null ? [] : array_fill(0, substr_count($sql, '?'), $productId));
         return $stmt->fetchAll();
     }
 
@@ -241,14 +250,14 @@ class InventoryService
 
         // Stock card summary: opening + received - sold - returned +/- adjustments = closing (qty and cost).
         $totals = [];
-        foreach (['opening', 'received', 'sold', 'returned', 'adjusted', 'split'] as $k) {
+        foreach (['opening', 'received', 'sold', 'returned', 'damaged', 'adjusted', 'split'] as $k) {
             $totals[$k] = ['qty' => 0, 'value' => 0.0];
         }
         $bucket = ['opening' => 'opening', 'purchase' => 'received', 'receive' => 'received', 'sale' => 'sold', 'pos' => 'sold',
-                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted', 'split' => 'split'];
+                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted', 'split' => 'split', 'damage' => 'damaged'];
         foreach ($rows as $r) {
             $k = $bucket[$r['kind']];
-            $sign = in_array($k, ['sold', 'returned'], true) ? -1 : 1;
+            $sign = in_array($k, ['sold', 'returned', 'damaged'], true) ? -1 : 1;
             $totals[$k]['qty'] += $sign * $r['qty'];
             $totals[$k]['value'] = round($totals[$k]['value'] + $sign * $r['value'], 2);
         }
@@ -623,6 +632,37 @@ class InventoryService
                          FROM product_split_items i JOIN products p ON p.id = i.product_id WHERE i.split_id = ? ORDER BY i.id",
                         (int) $d['id']
                     )]],
+                ];
+
+            case 'damage':
+                if (!\App\Services\DamageService::available($this->db)) {
+                    return null;
+                }
+                $d = $one(
+                    "SELECT dg.*, p.name AS product, p.barcode, pd.doc_no AS purchase_doc_no, u.full_name, cu.full_name AS canceller
+                     FROM damaged_goods dg JOIN products p ON p.id = dg.product_id
+                     LEFT JOIN purchase_documents pd ON pd.id = dg.purchase_document_id
+                     LEFT JOIN users u ON u.id = dg.user_id LEFT JOIN users cu ON cu.id = dg.cancelled_by WHERE dg.doc_no = ?"
+                );
+                if (!$d) {
+                    return null;
+                }
+                $reason = \App\Services\DamageService::REASONS[$d['reason']] ?? $d['reason'];
+                return [
+                    'title' => 'ใบบันทึกสินค้าเสียหาย ' . $d['doc_no'] . ($d['cancelled_at'] ? ' (ยกเลิกแล้ว)' : ''),
+                    'note' => ($d['cancelled_at'] ? 'ยกเลิกเมื่อ ' . $dateTime($d['cancelled_at']) . ' โดย ' . ($d['canceller'] ?? '-') . ' เหตุผล: ' . $d['cancel_reason'] . ' · ' : '') . sprintf(
+                        'วันที่พบ %s · สาเหตุ %s%s · บันทึกโดย %s เมื่อ %s%s',
+                        $date($d['damage_date']), $reason,
+                        $d['purchase_doc_no'] ? ' · มาจากใบซื้อ ' . $d['purchase_doc_no'] . ($d['supplier_name'] ? ' (' . $d['supplier_name'] . ')' : '') : '',
+                        $d['full_name'] ?? '-', $dateTime($d['created_at']), $d['note'] ? ' · หมายเหตุ: ' . $d['note'] : ''
+                    ),
+                    'sections' => [['title' => 'สินค้าที่ตัดสต๊อก', 'columns' => [
+                        ['product', 'สินค้า', 'text'], ['barcode', 'บาร์โค้ด', 'text'], ['reason', 'สาเหตุ', 'text'],
+                        ['qty', 'จำนวน', 'qty'], ['unit_cost', 'ทุน/ชิ้น', 'money'], ['value', 'มูลค่าทุนที่เสียหาย', 'money'],
+                    ], 'rows' => [[
+                        'product' => $d['product'], 'barcode' => $d['barcode'], 'reason' => $reason, 'qty' => (int) $d['qty'],
+                        'unit_cost' => (float) $d['unit_cost'], 'value' => round((int) $d['qty'] * (float) $d['unit_cost'], 2),
+                    ]]]],
                 ];
 
             case 'count':

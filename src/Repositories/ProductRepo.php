@@ -488,6 +488,10 @@ class ProductRepo
                 $this->db->prepare('UPDATE product_split_items SET product_id = ? WHERE product_id = ?')->execute([$keepId, $id]);
                 $this->db->prepare('UPDATE product_splits SET source_product_id = ? WHERE source_product_id = ?')->execute([$keepId, $id]);
             }
+            // Damaged goods written off the duplicate (migration 0066).
+            if (\App\Support\Db::hasColumn($this->db, 'damaged_goods', 'id')) {
+                $this->db->prepare('UPDATE damaged_goods SET product_id = ? WHERE product_id = ?')->execute([$keepId, $id]);
+            }
             // Backups the duplicate already had come along (before migration 0059 there are none).
             try {
                 $this->db->prepare('UPDATE IGNORE product_photo_backups SET product_id = ? WHERE product_id = ?')->execute([$keepId, $id]);

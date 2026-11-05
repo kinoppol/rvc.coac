@@ -34,6 +34,7 @@ const GROUPS = [
         { key: 'purchases', label: 'รายการซื้อเข้าร้าน' },
         { key: 'wages', label: 'ค่าแรงพนักงาน' },
         { key: 'stock_counts', label: 'ผลการตรวจนับสต๊อก' },
+        { key: 'damaged', label: 'สินค้าเสียหาย (ตัดสต๊อก)' },
         { key: 'capital', label: 'งบลงทุนและกำไรสุทธิรายเดือน' },
     ]},
 ];
