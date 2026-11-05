@@ -8,6 +8,7 @@ import { openSplitModal } from '../split-modal.js';
 import { openDamageModal, openDamageReport } from '../damage-modal.js';
 import { openInventoryMobile } from '../inventory-mobile.js';
 import { openMobileCount } from './count-mobile.js';
+import { openTrendCompare, COMPARE_MAX } from '../trend-compare.js';
 
 const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
@@ -205,6 +206,7 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${canConsign ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
               ${canConsign ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
+              ${canEdit ? `<button type="button" class="btn secondary" id="compare-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง 2–${COMPARE_MAX} รายการ แล้วดูกราฟแนวโน้มการขายรายวันเทียบกัน">เปรียบเทียบแนวโน้มการขาย (${picked.size})</button>` : ''}
               ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${pickedStore().length ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ (เฉพาะสินค้าของร้าน)">สร้างใบรายการสั่งซื้อ (${pickedStore().length})</button>` : ''}
@@ -300,6 +302,7 @@ export async function render(container, { navigate, permissions, user }) {
         // Ticking products for a purchase order: the button count updates without redrawing the table.
         const poBtn = container.querySelector('#make-po');
         const mergeBtn = container.querySelector('#merge-picked');
+        const compareBtn = container.querySelector('#compare-picked');
         const syncPick = () => {
             const storePicks = pickedStore().length;
             if (poBtn) {
@@ -309,6 +312,10 @@ export async function render(container, { navigate, permissions, user }) {
             if (mergeBtn) {
                 mergeBtn.textContent = `รวมรายการที่เลือก (${picked.size})`;
                 mergeBtn.disabled = picked.size < 2;
+            }
+            if (compareBtn) {
+                compareBtn.textContent = `เปรียบเทียบแนวโน้มการขาย (${picked.size})`;
+                compareBtn.disabled = picked.size < 2;
             }
             const boxes = [...container.querySelectorAll('[data-pick]')];
             const all = container.querySelector('[data-pick-all]');
@@ -330,6 +337,13 @@ export async function render(container, { navigate, permissions, user }) {
         });
         syncPick();
         mergeBtn?.addEventListener('click', mergePicked);
+        compareBtn?.addEventListener('click', () => {
+            if (picked.size > COMPARE_MAX) {
+                alertDialog(`เปรียบเทียบได้ครั้งละไม่เกิน ${COMPARE_MAX} รายการ (เลือกไว้ ${picked.size} รายการ) กรุณาเอาติ๊กออกบางรายการ`, { title: 'เปรียบเทียบแนวโน้มการขาย' });
+                return;
+            }
+            openTrendCompare([...picked], navigate);
+        });
         container.querySelector('#dup-check')?.addEventListener('click', checkDuplicates);
         poBtn?.addEventListener('click', () => openPoBuilder(pickedStore(), {
             navigate,

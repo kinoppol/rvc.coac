@@ -30,12 +30,12 @@ const GROUPS = [
 
 // ---- Daily sales trend (pieces or baht per day, with a 7-day average) ----
 
-const TREND_RANGES = [[14, '14 วัน'], [30, '30 วัน'], [90, '90 วัน'], [0, 'ทั้งหมด']];
-const addDays = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
-const thDay = (ymd, opts) => new Date(`${ymd}T00:00:00Z`).toLocaleDateString('th-TH', { timeZone: 'UTC', ...opts });
+export const TREND_RANGES = [[14, '14 วัน'], [30, '30 วัน'], [90, '90 วัน'], [0, 'ทั้งหมด']];
+export const addDays = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+export const thDay = (ymd, opts) => new Date(`${ymd}T00:00:00Z`).toLocaleDateString('th-TH', { timeZone: 'UTC', ...opts });
 
 /** One entry per day from the first stock movement to today: net pieces sold, baht, bills, closing balance. */
-function dailySeries(d) {
+export function dailySeries(d) {
     const rows = d.movements.filter((r) => r.date);
     if (!rows.some((r) => r.kind === 'sale' || r.kind === 'pos')) return null;
     const today = todayISO();
