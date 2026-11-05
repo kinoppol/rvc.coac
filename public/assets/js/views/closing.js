@@ -978,7 +978,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             + (differs ? ` · ต่างจากยอดขาย ${signed(amount - sales)}: ${p.reason.trim()}` : '')
             + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}` : '')
             + (stock.length ? ` · ปรับคงเหลือ ${stock.map((x) => `${names(x.product_id)} เป็น ${x.qty} ชิ้น`).join(', ')}` : '')
-            + (returns.length ? ` · คืนสินค้าให้ผู้ฝาก (คงเหลือเป็น 0): ${returns.map((id) => `${names(id)} ${pfLeft(d, id)} ชิ้น`).join(', ')}` : ''),
+            + (returns.length ? ` · คืนสินค้าให้ผู้ฝาก (ปรับยอดคงเหลือเป็น 0): ${returns.map((id) => `${names(id)} ${pfLeft(d, id)} ชิ้น`).join(', ')}` : ''),
             { title: 'ยืนยันการจ่ายเงินผู้ฝากขาย?', okText: 'บันทึก' }
         );
         if (!ok || docModalGone(m)) return;

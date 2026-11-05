@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Repositories\ProductRepo;
 use App\Repositories\WithdrawalRepo;
 use App\Support\Db;
 use PDO;
@@ -87,7 +86,12 @@ class ConsignorPayoutService
             }
             $stock[(int) ($s['product_id'] ?? 0)] = $qty;
         }
+        // Returning what is left to the consignor is a stock adjustment to 0, not a return document:
+        // the product stays in stock records (and can be received again) with nothing left.
         $returns = array_values(array_unique(array_filter(array_map('intval', (array) ($d['returns'] ?? [])))));
+        foreach ($returns as $pid) {
+            $stock[$pid] = 0;
+        }
         if ($stock && (new StockCountService($this->db, $this->docs, $this->audit))->hasOpenRound()) {
             throw new \RuntimeException('มีรอบตรวจนับสต๊อกเปิดอยู่ ปรับยอดคงเหลือได้ในรอบนั้นแทน');
         }
@@ -125,10 +129,7 @@ class ConsignorPayoutService
                 $this->db->prepare("UPDATE sale_items SET withdrawal_id = ? WHERE id IN ($in)")->execute([$id, ...$ids]);
             }
             if ($stock) {
-                $this->adjustStock($consignorId, $stock, $id, $reason, $userId, $ip);
-            }
-            if ($returns) {
-                $this->returnAll($consignorId, $returns, $id, $note, $userId, $ip);
+                $this->adjustStock($consignorId, $stock, $returns, $id, $reason, $note, $userId, $ip);
             }
             $this->db->commit();
             return $id;
@@ -138,35 +139,8 @@ class ConsignorPayoutService
         }
     }
 
-    /** All that is left of the chosen products goes back to the consignor: one return document, stock 0. */
-    private function returnAll(int $consignorId, array $productIds, int $withdrawalId, string $note, int $userId, ?string $ip): void
-    {
-        $in = implode(',', array_fill(0, count($productIds), '?'));
-        $stmt = $this->db->prepare("SELECT id, name, qty_stock FROM products WHERE id IN ($in) AND consignor_id = ? FOR UPDATE");
-        $stmt->execute([...$productIds, $consignorId]);
-        $rows = $stmt->fetchAll();
-        if (count($rows) !== count($productIds)) {
-            throw new \RuntimeException('คืนสินค้าได้เฉพาะสินค้าของผู้ฝากขายรายนี้');
-        }
-        $items = [];
-        foreach ($rows as $p) {
-            if ((int) $p['qty_stock'] > 0) {
-                $items[] = ['product_id' => (int) $p['id'], 'qty' => (int) $p['qty_stock']];
-            }
-        }
-        if (!$items) {
-            return; // nothing left on the shelf to hand back
-        }
-        $c = $this->db->prepare('SELECT name FROM consignors WHERE id = ?');
-        $c->execute([$consignorId]);
-        $doc = (new ReturnService($this->db, new ProductRepo($this->db, $this->audit), $this->docs, $this->audit))
-            ->returnGoods($consignorId, $items, ($c->fetchColumn() ?: null), $userId, $ip);
-        $this->db->prepare('UPDATE withdrawals SET note = ? WHERE id = ?')
-            ->execute([mb_substr("{$note} · คืนสินค้า {$doc['doc_no']} {$doc['total_qty']} ชิ้น", 0, 255), $withdrawalId]);
-    }
-
     /** What is left of the consignor's goods, set with the payout: one approved stock count. */
-    private function adjustStock(int $consignorId, array $stock, int $withdrawalId, string $reason, int $userId, ?string $ip): void
+    private function adjustStock(int $consignorId, array $stock, array $returns, int $withdrawalId, string $reason, string $wdNote, int $userId, ?string $ip): void
     {
         $in = implode(',', array_fill(0, count($stock), '?'));
         $stmt = $this->db->prepare("SELECT * FROM products WHERE id IN ($in) AND consignor_id = ? FOR UPDATE");
@@ -187,16 +161,26 @@ class ConsignorPayoutService
         $item = $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty, counted_qty, diff_qty, note) VALUES (?, ?, ?, ?, ?, ?)');
         $upd = $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?');
         $note = mb_substr("ปรับยอดตอนจ่ายเงินผู้ฝาก {$wdNo}" . ($reason !== '' ? ": {$reason}" : ''), 0, 255);
+        $returnNote = mb_substr("คืนสินค้าให้ผู้ฝาก (ปรับยอดเป็น 0) ตอนจ่ายเงิน {$wdNo}", 0, 255);
+        $returnedQty = 0;
         foreach ($rows as $p) {
             $system = (int) $p['qty_stock'];
             $counted = $stock[(int) $p['id']];
-            $item->execute([$countId, $p['id'], $system, $counted, $counted - $system, $note]);
+            $isReturn = in_array((int) $p['id'], $returns, true);
+            if ($isReturn) {
+                $returnedQty += max($system, 0);
+            }
+            $item->execute([$countId, $p['id'], $system, $counted, $counted - $system, $isReturn ? $returnNote : $note]);
             if ($counted !== $system) {
                 $upd->execute([$counted, $p['id']]);
                 $this->audit->log('products', (int) $p['id'], 'update', ['qty_stock' => $system], ['qty_stock' => $counted, 'stock_count' => $docNo, 'withdrawal' => $wdNo], $userId, $ip);
             }
         }
-        $this->audit->log('stock_counts', $countId, 'create', null, ['doc_no' => $docNo, 'withdrawal' => $wdNo, 'items' => $stock], $userId, $ip);
+        $this->audit->log('stock_counts', $countId, 'create', null, ['doc_no' => $docNo, 'withdrawal' => $wdNo, 'items' => $stock, 'returns' => $returns], $userId, $ip);
+        if ($returnedQty > 0) {
+            $this->db->prepare('UPDATE withdrawals SET note = ? WHERE id = ?')
+                ->execute([mb_substr("{$wdNote} · คืนสินค้า (ปรับยอดเป็น 0) {$returnedQty} ชิ้น {$docNo}", 0, 255), $withdrawalId]);
+        }
     }
 
     private static function thaiDate(string $iso): string
