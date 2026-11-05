@@ -69,7 +69,9 @@ export async function render(container, { navigate, permissions, user }) {
     const canSetPrice = canEdit && ['admin', 'manager'].includes(user?.role);
     let zeroCost = [];
     let consignors = null; // loaded the first time an admin opens the editor
-    const picked = new Set(); // store products ticked for a purchase order
+    const picked = new Set(); // products ticked: store goods for a purchase order; any (admin) to merge
+    /** Ticked store goods (consigned goods are never bought from suppliers). */
+    const pickedStore = () => [...picked].filter((id) => res?.data.some((p) => Number(p.id) === id && p.consignor_id == null));
     let sort = { key: 'name', dir: 'asc' };
     try {
         const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null');
@@ -105,7 +107,7 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     function headHtml() {
-        return (canEdit ? '<th class="pick-col"><input type="checkbox" data-pick-all title="เลือกสินค้าของร้านที่แสดงทั้งหมด" aria-label="เลือกทั้งหมด"></th>' : '') + COLUMNS.map(([key, label, title, type]) => {
+        return (canEdit ? '<th class="pick-col"><input type="checkbox" data-pick-all title="เลือกสินค้าที่แสดงทั้งหมด" aria-label="เลือกทั้งหมด"></th>' : '') + COLUMNS.map(([key, label, title, type]) => {
             const on = sort.key === key;
             const aria = on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none';
             return `<th aria-sort="${aria}" class="${type === 'num' ? 'num' : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>
@@ -156,8 +158,10 @@ export async function render(container, { navigate, permissions, user }) {
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
+              ${canConsign ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
+              ${canConsign ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
-              ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${picked.size ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ">สร้างใบรายการสั่งซื้อ (${picked.size})</button>` : ''}
+              ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${pickedStore().length ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ (เฉพาะสินค้าของร้าน)">สร้างใบรายการสั่งซื้อ (${pickedStore().length})</button>` : ''}
               ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
             </div>
           </div>
@@ -238,10 +242,16 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#zc-fill')?.addEventListener('click', fillZeroCost);
         // Ticking products for a purchase order: the button count updates without redrawing the table.
         const poBtn = container.querySelector('#make-po');
+        const mergeBtn = container.querySelector('#merge-picked');
         const syncPick = () => {
+            const storePicks = pickedStore().length;
             if (poBtn) {
-                poBtn.textContent = `สร้างใบรายการสั่งซื้อ (${picked.size})`;
-                poBtn.disabled = !picked.size;
+                poBtn.textContent = `สร้างใบรายการสั่งซื้อ (${storePicks})`;
+                poBtn.disabled = !storePicks;
+            }
+            if (mergeBtn) {
+                mergeBtn.textContent = `รวมรายการที่เลือก (${picked.size})`;
+                mergeBtn.disabled = picked.size < 2;
             }
             const boxes = [...container.querySelectorAll('[data-pick]')];
             const all = container.querySelector('[data-pick-all]');
@@ -262,7 +272,9 @@ export async function render(container, { navigate, permissions, user }) {
             syncPick();
         });
         syncPick();
-        poBtn?.addEventListener('click', () => openPoBuilder([...picked], {
+        mergeBtn?.addEventListener('click', mergePicked);
+        container.querySelector('#dup-check')?.addEventListener('click', checkDuplicates);
+        poBtn?.addEventListener('click', () => openPoBuilder(pickedStore(), {
             navigate,
             onDone: () => { picked.clear(); draw(); },
         }));
@@ -523,8 +535,77 @@ export async function render(container, { navigate, permissions, user }) {
         }
         return byId;
     }
-    async function mergeInto(p) {
-        const group = dupsOf(p);
+    /** Duplicate groups (2+ rows) of the loaded list, oldest row first in each. */
+    function dupGroupList() {
+        if (!res) return [];
+        const seen = new Set();
+        const out = [];
+        for (const p of res.data) {
+            const g = dupsOf(p);
+            if (g.length > 1 && !seen.has(g[0].id)) { seen.add(g[0].id); out.push(g); }
+        }
+        return out;
+    }
+
+    /** Admin: the duplicate groups found, each mergeable from here. */
+    async function checkDuplicates() {
+        const groups = dupGroupList();
+        if (!groups.length) {
+            await alertDialog(`ไม่พบสินค้าที่ชื่อซ้ำหรือสะกดต่างกันเล็กน้อย${search ? ' (ในผลการค้นหานี้)' : ''} · ถ้าเป็นสินค้าเดียวกันแต่ชื่อต่างกันมาก ให้ติ๊กเลือกในตารางแล้วกด "รวมรายการที่เลือก"`, { title: 'ตรวจสอบสินค้าซ้ำซ้อน' });
+            return;
+        }
+        let pickGroup = null;
+        const html = `
+          <div class="tbl-scroll" style="margin-top:12px;border:1px solid var(--border);border-radius:10px;overflow:auto;max-height:60vh">
+          <table style="font-size:13px">
+            <thead><tr><th>กลุ่ม</th><th style="min-width:220px">รายการ (รหัส · ชื่อ · บาร์โค้ด · คงเหลือ)</th><th>เจ้าของ</th><th></th></tr></thead>
+            <tbody>${groups.map((g, i) => `<tr>
+              <td class="muted">${i + 1}</td>
+              <td>${g.map((x) => `<div style="margin:2px 0">${x.id} · ${escapeHtml(x.name)} <span class="muted" style="font-size:12px">· ${escapeHtml(x.barcode || 'ไม่มีบาร์โค้ด')} · เหลือ ${count(x.qty_stock)}</span></div>`).join('')}</td>
+              <td style="font-size:12px">${g[0].consignor_id != null ? `ฝากขาย: ${escapeHtml(g[0].consignor_name)}` : 'ร้าน'}</td>
+              <td><button type="button" class="btn sm" data-dup-group="${i}" style="white-space:nowrap">รวม ${g.length} รายการ…</button></td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+          <div class="muted" style="font-size:12.5px;margin-top:8px">ตรวจจากชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อต้องตรงกัน)${search ? ' เฉพาะผลการค้นหาที่แสดงอยู่' : ''}
+            · สินค้าเดียวกันที่ชื่อต่างกันมาก ให้ติ๊กเลือกในตารางแล้วกด "รวมรายการที่เลือก"</div>`;
+        const onClick = (ev) => {
+            const b = ev.target.closest?.('[data-dup-group]');
+            if (!b) return;
+            pickGroup = groups[Number(b.dataset.dupGroup)];
+            document.querySelector('.app-dialog [data-cancel]')?.click();
+        };
+        document.addEventListener('click', onClick);
+        const show = await confirmDialog(`พบสินค้าที่อาจซ้ำกัน ${count(groups.length)} กลุ่ม (${count(groups.reduce((s, g) => s + g.length, 0))} รายการ) กด "รวม" ที่กลุ่มเพื่อตรวจรายละเอียดก่อนรวม`, {
+            title: 'ตรวจสอบสินค้าซ้ำซ้อน', okText: 'แสดงในตาราง', cancelText: 'ปิด', html, width: 820,
+        }).finally(() => document.removeEventListener('click', onClick));
+        if (pickGroup) {
+            await mergeInto(pickGroup[0], pickGroup);
+        } else if (show) {
+            filter = 'dup';
+            try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
+            draw();
+        }
+    }
+
+    /** Admin: merge the rows ticked in the table (the same item under names too different to be found). */
+    async function mergePicked() {
+        const group = res.data.filter((p) => picked.has(Number(p.id))).sort((a, b) => Number(a.id) - Number(b.id));
+        if (group.length < 2) {
+            alertDialog('ติ๊กเลือกสินค้าที่จะรวมอย่างน้อย 2 รายการ (รายการที่เลือกไว้อาจไม่อยู่ในผลการค้นหานี้)', { title: 'รวมรายการที่เลือก' });
+            return;
+        }
+        if (new Set(group.map((p) => String(p.consignor_id ?? 'store'))).size > 1) {
+            alertDialog('รวมได้เฉพาะสินค้าของเจ้าของเดียวกัน — สินค้าของร้านด้วยกัน หรือสินค้าฝากขายของผู้ฝากรายเดียวกัน', { title: 'รวมรายการไม่ได้', tone: 'error' });
+            return;
+        }
+        if (await mergeInto(group[0], group, { manual: true })) {
+            group.forEach((p) => picked.delete(Number(p.id)));
+            draw();
+        }
+    }
+
+    /** Merge group into p (the main row, kept). Resolves true when merged. */
+    async function mergeInto(p, group = dupsOf(p), { manual = false } = {}) {
         const others = group.filter((x) => x.id !== p.id);
         const older = group[0].id === p.id;
         // Cost goes on from the row bought / received last (as the server picks it); past costs
@@ -550,6 +631,7 @@ export async function render(container, { navigate, permissions, user }) {
                ${withPhoto.length > 1 ? (x.id === usePhoto.id ? '<span class="pill ok" style="font-size:11px">● ใช้ต่อ</span>' : '<span class="pill muted" style="font-size:11px">รูปสำรอง</span>') : ''}`
             : '<span class="muted">—</span>');
         const sum = (k) => group.reduce((s, x) => s + Number(x[k] || 0), 0);
+        let switchTo = null; // another row picked as the main one: the dialog opens again for it
         const table = `
           <div class="tbl-scroll" style="margin-top:12px;border:1px solid var(--border);border-radius:10px;overflow:auto">
           <table style="font-size:13px">
@@ -559,7 +641,8 @@ export async function render(container, { navigate, permissions, user }) {
                 const isLatest = costsDiffer && x.id === latest.id;
                 const saleOff = money(x.sale_price) !== money(after.sale_price);
                 return `<tr style="${keep ? 'background:var(--ok-bg);font-weight:600;box-shadow:inset 4px 0 0 var(--ok)' : ''}">
-                  <td style="white-space:nowrap">${keep ? '<span class="pill ok" style="font-size:11.5px">★ รายการหลัก</span>' : '<span class="pill muted" style="font-size:11.5px">→ รวมเข้า แล้วลบ</span>'}</td>
+                  <td style="white-space:nowrap">${keep ? '<span class="pill ok" style="font-size:11.5px">★ รายการหลัก</span>'
+                      : `<span class="pill muted" style="font-size:11.5px">→ รวมเข้า แล้วลบ</span><div><button type="button" class="link-btn" data-merge-keep="${x.id}" style="font-size:12px;font-weight:400" title="เก็บรายการนี้ไว้ (ใช้ชื่อของรายการนี้) แล้วรวมรายการอื่นเข้ามา">ใช้เป็นรายการหลัก</button></div>`}</td>
                   <td class="muted" style="white-space:nowrap">${x.id}${x.id === group[0].id ? ' <span style="font-size:11px">(เก่าสุด)</span>' : ''}</td>
                   <td style="white-space:nowrap">${photoCell(x)}</td>
                   <td>${escapeHtml(x.name)}</td>
@@ -585,10 +668,16 @@ export async function render(container, { navigate, permissions, user }) {
           ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน ${codes.length} อัน — <b>เลือกบาร์โค้ดที่จะใช้ต่อ</b> ในคอลัมน์บาร์โค้ด (ตั้งไว้เป็นของรายการที่ซื้อ/รับล่าสุด)
             · บาร์โค้ดที่เหลือเก็บไว้ทั้งหมด (รอตรวจสอบที่รายการนี้) ไม่หาย และใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก</div>` : ''}
           ${group.some((x) => x.name !== p.name) ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ชื่อสินค้าสะกดต่างกันเล็กน้อย — ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกัน หลังรวมใช้ชื่อ <b>«${escapeHtml(p.name)}»</b> ของรายการหลัก
-            (ถ้าต้องการชื่ออื่น กด "รวมเข้ารายการนี้แทน" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
+            (ถ้าต้องการชื่ออื่น กด "ใช้เป็นรายการหลัก" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
           ${withPhoto.length > 1 ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>มีรูปสินค้า ${withPhoto.length} รูป — หลังรวมใช้รูปล่าสุด (รายการ ${usePhoto.id}) รูปอื่นเก็บเป็นรูปสำรอง ไม่ลบ ดูหรือเปลี่ยนกลับได้ในหน้ารายละเอียดสินค้า</div></div>` : ''}
           ${older ? '' : '<div class="error-box" style="margin-top:8px;font-size:13px">รายการหลักนี้ไม่ใช่รายการที่เก่าที่สุด ปกติควรใช้รายการที่เก่ากว่าเป็นหลัก</div>'}`;
         // The barcode picked in the dialog (its radios live in the dialog's markup).
+        const onKeep = (ev) => {
+            const b = ev.target.closest?.('[data-merge-keep]');
+            if (!b) return;
+            switchTo = group.find((x) => String(x.id) === b.dataset.mergeKeep);
+            document.querySelector('.app-dialog [data-cancel]')?.click();
+        };
         const onPick = (ev) => {
             if (ev.target?.name !== 'merge-code') return;
             useCode = ev.target.value;
@@ -601,19 +690,26 @@ export async function render(container, { navigate, permissions, user }) {
             if (use) use.textContent = useCode;
         };
         document.addEventListener('change', onPick);
+        document.addEventListener('click', onKeep);
+        const namesDiffer = manual && group.some((x) => looseName(x.name) !== looseName(p.name));
         const ok = await confirmDialog(
-            `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
+            (namesDiffer ? 'รายการที่เลือกมีชื่อต่างกัน ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกันจริง (รวมแล้วแยกกลับไม่ได้) · ' : '')
+            + `รวม «${p.name}» ${group.length} รายการเป็นรายการเดียว ยอดรับเข้า ขายแล้ว คืน และคงเหลือจะรวมกัน`
             + ` เอกสารรับฝาก/ขาย/ตรวจนับ และบาร์โค้ดของรายการ ${others.map((x) => x.id).join(', ')} จะย้ายมาที่รายการหลัก แล้วลบรายการซ้ำทิ้ง`
             + (p.consignor_id != null ? ' · ค่าทำข้อมูลที่เก็บจากรายการซ้ำจะคืนเข้าบัญชีผู้ฝาก' : ''),
-            { title: 'รวมรายการสินค้าซ้ำ?', okText: heldCodes.length ? 'รวมรายการ (ใช้บาร์โค้ดที่เลือก)' : 'รวมรายการ', danger: !older, html: table, width: 920 }
-        ).finally(() => document.removeEventListener('change', onPick));
-        if (!ok) return;
+            { title: manual ? 'รวมรายการที่เลือก?' : 'รวมรายการสินค้าซ้ำ?', okText: heldCodes.length ? 'รวมรายการ (ใช้บาร์โค้ดที่เลือก)' : 'รวมรายการ', danger: !older || namesDiffer, html: table, width: 920 }
+        ).finally(() => { document.removeEventListener('change', onPick); document.removeEventListener('click', onKeep); });
+        if (switchTo) return mergeInto(switchTo, group, { manual });
+        if (!ok) return false;
         try {
             const r = await api.post('/inventory/merge', { keep_id: p.id, ids: group.map((x) => x.id), ...(heldCodes.length ? { barcode: useCode } : {}) });
             await alertDialog(`รวม ${count(r.merged + 1)} รายการเป็นรายการเดียวแล้ว${r.refunded > 0 ? ` · คืนค่าทำข้อมูล ฿${money(r.refunded)} เข้าบัญชีผู้ฝาก` : ''}${r.held?.length ? ` · บาร์โค้ด ${r.held.join(', ')} เก็บไว้ตรวจสอบ` : ''}`, { title: 'รวมรายการแล้ว' });
+            group.forEach((x) => { if (x.id !== p.id) picked.delete(Number(x.id)); }); // deleted rows
             await load();
+            return true;
         } catch (err) {
             alertDialog(err.message, { tone: 'error' });
+            return false;
         }
     }
 
@@ -637,7 +733,7 @@ export async function render(container, { navigate, permissions, user }) {
         const dups = canConsign ? dupsOf(p) : [];
         const low = Number(p.qty_stock) <= 3;
         // Only the store's own goods are bought from suppliers.
-        const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null
+        const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canConsign
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
         return `<tr>${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
