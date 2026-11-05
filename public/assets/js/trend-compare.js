@@ -39,6 +39,7 @@ export async function openTrendCompare(productIds, navigate) {
     let range = 30;
     let metric = 'qty';
     let smooth = true;
+    let bars = true;
 
     const days = () => {
         const start = range ? addDays(today, -(range - 1)) : earliest;
@@ -92,19 +93,21 @@ export async function openTrendCompare(productIds, navigate) {
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
               <div class="tabs" role="group" aria-label="ช่วงเวลา">${TREND_RANGES.map(([n, l]) => `<button type="button" class="tab-btn ${n === range ? 'active' : ''}" data-range="${n}">${l}</button>`).join('')}</div>
               <div class="tabs" role="group" aria-label="เส้นกราฟ">${[[true, 'เฉลี่ย 7 วัน'], [false, 'รายวัน']].map(([v, l]) => `<button type="button" class="tab-btn ${v === smooth ? 'active' : ''}" data-smooth="${v ? 1 : 0}">${l}</button>`).join('')}</div>
+              <button type="button" class="tab-btn ${bars ? 'active' : ''}" data-bars aria-pressed="${bars}" title="แท่งยอดขายจริงแต่ละวันของแต่ละสินค้า (สีเดียวกับเส้น) อยู่ด้านหลังเส้น">แท่งรายวัน</button>
               <div class="tabs" role="group" aria-label="หน่วย">${[['qty', 'ชิ้น'], ['amount', 'บาท']].map(([k, l]) => `<button type="button" class="tab-btn ${k === metric ? 'active' : ''}" data-metric="${k}">${l}</button>`).join('')}</div>
             </div>
             <div class="tc-chart" style="position:relative;margin-top:10px"></div>
             <div class="tc-legend">${items.map((it, i) => `<button type="button" class="tc-leg ${it.on ? '' : 'off'}" data-toggle="${i}" title="กดเพื่อซ่อน/แสดงเส้นนี้">
               <span class="tc-swatch" style="background:${it.color}"></span>${escapeHtml(it.p.name)}</button>`).join('')}</div>
             ${tableHtml(ks)}
-            <div class="muted" style="font-size:12px;margin-top:8px">${smooth ? 'เส้นแสดงค่าเฉลี่ยย้อนหลัง 7 วัน ช่วยให้เห็นทิศทางชัดกว่ายอดรายวัน' : 'เส้นแสดงยอดขายจริงแต่ละวัน'} · ใช้วันที่ในเอกสารขาย
+            <div class="muted" style="font-size:12px;margin-top:8px">${smooth ? 'เส้นแสดงค่าเฉลี่ยย้อนหลัง 7 วัน ช่วยให้เห็นทิศทางชัดกว่ายอดรายวัน' : 'เส้นแสดงยอดขายจริงแต่ละวัน'}${bars ? ' · แท่งจาง ๆ ด้านหลังคือยอดขายจริงแต่ละวันของแต่ละสินค้า (สีเดียวกับเส้น)' : ''} · ใช้วันที่ในเอกสารขาย
               · เส้นเริ่มตั้งแต่วันแรกที่สินค้ามีความเคลื่อนไหว · เลือกได้สูงสุด ${COMPARE_MAX} รายการ · กดชื่อสินค้าเพื่อดูบัญชีคุมสินค้า</div>
           </div>
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         box.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => { range = Number(b.dataset.range); draw(); }));
         box.querySelectorAll('[data-smooth]').forEach((b) => b.addEventListener('click', () => { smooth = b.dataset.smooth === '1'; draw(); }));
+        box.querySelector('[data-bars]').addEventListener('click', () => { bars = !bars; draw(); });
         box.querySelectorAll('[data-metric]').forEach((b) => b.addEventListener('click', () => { metric = b.dataset.metric; draw(); }));
         box.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', () => { const it = items[Number(b.dataset.toggle)]; it.on = !it.on; draw(); }));
         box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.open, navigate && ((page) => { close(); navigate(page); }))));
@@ -122,13 +125,30 @@ export async function openTrendCompare(productIds, navigate) {
         const pw = W - m.l - m.r;
         const ph = H - m.t - m.b;
         let max = 0;
-        for (const it of shown) for (const k of ks) { const v = pick(it.byKey.get(k)); if (v !== null && v > max) max = v; }
+        for (const it of shown) {
+            for (const k of ks) {
+                const b = it.byKey.get(k);
+                const v = b ? Math.max(pick(b), bars ? raw(b) : 0) : null;
+                if (v !== null && v > max) max = v;
+            }
+        }
         const { top, step } = niceScale(metric === 'qty' ? Math.max(max, 4) : max);
         const n = ks.length;
-        const x = (i) => m.l + (n > 1 ? (pw * i) / (n - 1) : pw / 2);
+        const band = pw / n;
+        const x = (i) => m.l + band * (i + 0.5);
         const y = (v) => m.t + ph - (Math.max(v, 0) / top) * ph;
         const base = m.t + ph;
-        const every = Math.max(1, Math.ceil(44 / (pw / Math.max(n - 1, 1))));
+        const every = Math.max(1, Math.ceil(44 / band));
+        // Each day's sales per product as side-by-side columns behind the lines, one color per product.
+        const slot = (band * 0.84) / Math.max(shown.length, 1);
+        const cols = !bars ? '' : ks.map((k, i) => shown.map((it, j) => {
+            const b = it.byKey.get(k);
+            const v = b ? raw(b) : 0;
+            if (!(v > 0)) return '';
+            const h = Math.max(1, base - y(v));
+            const x0 = x(i) - (band * 0.84) / 2 + slot * j;
+            return `<rect x="${x0.toFixed(1)}" y="${(base - h).toFixed(1)}" width="${Math.max(slot - (slot > 3 ? 1 : 0), 0.8).toFixed(1)}" height="${h.toFixed(1)}" fill="${it.color}" opacity=".32"/>`;
+        }).join('')).join('');
 
         const grid = [];
         for (let v = 0; v <= top + 1e-9; v += step) {
@@ -160,6 +180,8 @@ export async function openTrendCompare(productIds, navigate) {
         host.innerHTML = `
           <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="กราฟเปรียบเทียบยอดขายรายวัน" style="display:block;overflow:visible">
             ${grid.join('')}
+            <rect class="tc-band" x="0" y="${m.t}" width="${band}" height="${ph}" fill="var(--hover)" visibility="hidden"/>
+            ${cols}
             <line class="tc-cross" x1="0" x2="0" y1="${m.t}" y2="${base}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>
             ${lines}
             <g class="tc-dots"></g>
@@ -173,18 +195,20 @@ export async function openTrendCompare(productIds, navigate) {
 
         const tip = host.querySelector('.tc-tip');
         const cross = host.querySelector('.tc-cross');
+        const bandEl = host.querySelector('.tc-band');
         const dots = host.querySelector('.tc-dots');
         const hit = host.querySelector('.tc-hit');
         const show = (i) => {
             const k = ks[i];
             cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+            bandEl.setAttribute('x', m.l + band * i); bandEl.setAttribute('visibility', 'visible');
             const vals = shown.map((it) => ({ it, b: it.byKey.get(k) })).filter((r) => r.b);
             dots.innerHTML = vals.map(({ it, b }) => `<circle cx="${x(i)}" cy="${y(pick(b))}" r="3.5" fill="${it.color}" stroke="var(--surface)" stroke-width="1.5"/>`).join('');
             vals.sort((a, b) => pick(b.b) - pick(a.b));
             tip.innerHTML = `<div style="font-weight:700;margin-bottom:4px">${escapeHtml(thDay(k, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</div>
               ${vals.length ? vals.map(({ it, b }) => `<div style="display:flex;justify-content:space-between;gap:14px;align-items:center">
                 <span><span class="tc-swatch" style="background:${it.color}"></span>${escapeHtml(it.p.name.length > 28 ? `${it.p.name.slice(0, 27)}…` : it.p.name)}</span>
-                <span><b>${fmt(pick(b))}</b>${smooth ? ` <span class="muted">(วันนี้ ${fmt(raw(b))})</span>` : ''}${b.balance <= 0 ? ' <span style="color:var(--bad)">หมด</span>' : ''}</span></div>`).join('')
+                <span><b>${fmt(pick(b))}</b>${smooth ? ` <span class="muted">(ขายจริง ${fmt(raw(b))})</span>` : ''}${b.balance <= 0 ? ' <span style="color:var(--bad)">หมด</span>' : ''}</span></div>`).join('')
                 : '<div class="muted">ยังไม่มีสินค้าในวันนี้</div>'}`;
             tip.style.display = 'block';
             const left = x(i) + 14 + tip.offsetWidth > W ? x(i) - 14 - tip.offsetWidth : x(i) + 14;
@@ -193,12 +217,14 @@ export async function openTrendCompare(productIds, navigate) {
         };
         const at = (e) => {
             const r = hit.getBoundingClientRect();
-            const i = n > 1 ? Math.round(((e.clientX - r.left) / r.width) * (n - 1)) : 0;
+            const i = Math.floor(((e.clientX - r.left) / r.width) * n);
             show(Math.min(Math.max(i, 0), n - 1));
         };
         hit.addEventListener('mousemove', at);
         hit.addEventListener('click', at);
-        hit.addEventListener('mouseleave', () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); dots.innerHTML = ''; });
+        hit.addEventListener('mouseleave', () => {
+            tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); bandEl.setAttribute('visibility', 'hidden'); dots.innerHTML = '';
+        });
     }
 
     draw();
