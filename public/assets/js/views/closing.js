@@ -747,17 +747,25 @@ export async function render(container, { user, permissions = [] } = {}) {
                 <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ขาย ${x.qty} ชิ้น ฿${money(x.sales)}</span></span></label></td>
               <td class="num" style="white-space:nowrap">฿ ${money(x.share)}
                 ${canReturn ? `<label class="muted" style="display:flex;gap:4px;align-items:center;justify-content:flex-end;font-size:11.5px;margin-top:2px;${left > 0 ? 'cursor:pointer' : 'opacity:.6'}"
-                  title="${left > 0 ? `คืนสินค้าที่เหลือทั้งหมด ${left} ชิ้นให้ผู้ฝาก (คงเหลือเป็น 0)` : 'ไม่มีสินค้าเหลือให้คืน'}">
+                  title="${left > 0 ? `คืนสินค้าที่เหลือทั้งหมด ${left} ชิ้นให้ผู้ฝาก: ปรับยอดคงเหลือเป็น 0 (สินค้ายังอยู่ในสต๊อก รับฝากเพิ่มได้ตามปกติ)` : 'ไม่มีสินค้าเหลือให้คืน'}">
                   <input type="checkbox" data-pf-return="${x.product_id}" ${p.returns.has(x.product_id) && left > 0 ? 'checked' : ''} ${left > 0 ? '' : 'disabled'}>
                   คืนสินค้า${left > 0 ? ` (${left} ชิ้น)` : ''}</label>` : ''}</td></tr>`;
             }).join('')}
             <tr><td><b>ส่วนของผู้ฝาก (รายการที่เลือก)</b></td><td class="num"><b>฿ ${money(pfSales(m))}</b></td></tr>
           </tbody></table>` : '<div class="muted" style="font-size:12.5px;margin-top:4px">ไม่มีรายการขายที่ยังไม่ได้เบิกในช่วงนี้</div>'}`;
         const stockHtml = !d || !d.stock.length ? '' : `
-          <details style="margin-top:10px" ${Object.values(p.stock).some((x) => x.on) ? 'open' : ''}>
+          <details style="margin-top:10px" ${Object.values(p.stock).some((x) => x.on) || d.stock.some((x) => p.returns.has(Number(x.id)) && x.qty_stock > 0) ? 'open' : ''}>
             <summary style="cursor:pointer;font-weight:600;font-size:13px">ปรับยอดคงเหลือสินค้า (เช่น สินค้าสูญหาย)</summary>
             <table class="cl-t" style="font-size:13px"><tbody>
-            ${d.stock.filter((x) => !p.returns.has(Number(x.id))).map((x) => {
+            ${d.stock.map((x) => {
+                // Returning the goods sets what is left to 0: the product stays in the list (and in stock records), shown at 0.
+                if (p.returns.has(Number(x.id)) && x.qty_stock > 0) {
+                    return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start">
+                    <input type="checkbox" checked disabled style="margin-top:3px">
+                    <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ในระบบเหลือ ${x.qty_stock} ชิ้น</span>
+                      <span class="pill warn" title="ติ๊ก คืนสินค้า ไว้ในรายการขายด้านบน: คืนให้ผู้ฝาก ${x.qty_stock} ชิ้น ยอดคงเหลือเป็น 0 สินค้ายังอยู่ในสต๊อก รับฝากเพิ่มได้ตามปกติ">คืนให้ผู้ฝาก</span></span></label></td>
+                  <td class="num" style="white-space:nowrap">เหลือ <input type="number" value="0" disabled style="width:70px;text-align:right"> ชิ้น</td></tr>`;
+                }
                 const st = p.stock[x.id] || { on: false, qty: '0' };
                 return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
                     <input type="checkbox" data-pf-stock="${x.id}" ${st.on ? 'checked' : ''} style="margin-top:3px">
