@@ -90,10 +90,15 @@ class ConsignorPayoutService
         // the product stays in stock records (and can be received again) with nothing left.
         $returns = array_values(array_unique(array_filter(array_map('intval', (array) ($d['returns'] ?? [])))));
         foreach ($returns as $pid) {
-            $stock[$pid] = 0;
+            unset($stock[$pid]);
         }
+        // Other adjustments wait for the open round. A return does not: the goods have left the
+        // store, so it goes through and closes the product's line in that round (see adjustStock).
         if ($stock && (new StockCountService($this->db, $this->docs, $this->audit))->hasOpenRound()) {
-            throw new \RuntimeException('มีรอบตรวจนับสต๊อกเปิดอยู่ ปรับยอดคงเหลือได้ในรอบนั้นแทน');
+            throw new \RuntimeException('มีรอบตรวจนับสต๊อกเปิดอยู่ ปรับยอดคงเหลือได้ในรอบนั้นแทน (การคืนสินค้าให้ผู้ฝากทำได้ตามปกติ)');
+        }
+        foreach ($returns as $pid) {
+            $stock[$pid] = 0;
         }
 
         $this->db->beginTransaction();
@@ -163,12 +168,14 @@ class ConsignorPayoutService
         $note = mb_substr("ปรับยอดตอนจ่ายเงินผู้ฝาก {$wdNo}" . ($reason !== '' ? ": {$reason}" : ''), 0, 255);
         $returnNote = mb_substr("คืนสินค้าให้ผู้ฝาก (ปรับยอดเป็น 0) ตอนจ่ายเงิน {$wdNo}", 0, 255);
         $returnedQty = 0;
+        $counts = new StockCountService($this->db, $this->docs, $this->audit);
         foreach ($rows as $p) {
             $system = (int) $p['qty_stock'];
             $counted = $stock[(int) $p['id']];
             $isReturn = in_array((int) $p['id'], $returns, true);
             if ($isReturn) {
                 $returnedQty += max($system, 0);
+                $counts->closeReturnedLines((int) $p['id'], $returnNote);
             }
             $item->execute([$countId, $p['id'], $system, $counted, $counted - $system, $isReturn ? $returnNote : $note]);
             if ($counted !== $system) {

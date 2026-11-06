@@ -96,8 +96,9 @@ export async function render(container, { permissions }) {
                   return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}" ${matches(it) ? '' : 'hidden'}>
                     <td>${escapeHtml(it.name)}</td><td class="muted">${escapeHtml(it.consignor_name)}</td>
                     <td class="num">${it.system_qty}</td>
-                    <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' ? 'disabled' : ''}>
-                      ${current.status === 'draft' ? `<button type="button" class="btn secondary sm" data-zero="${i}" title="ขายหมดแล้ว ไม่มีของให้นับ: บันทึกว่านับได้ 0" ${counted(it) === 0 ? 'hidden' : ''}>หมด (0)</button>` : ''}</td>
+                    <td class="num"><input type="number" min="0" value="${counted(it) ?? ''}" placeholder="ไม่ได้นับ" data-idx="${i}" style="width:90px;text-align:right" ${current.status !== 'draft' || it.returned ? 'disabled' : ''}>
+                      ${it.returned ? `<span class="pill warn" title="${escapeHtml(it.note || '')}">คืนให้ผู้ฝากแล้ว</span>` : ''}
+                      ${current.status === 'draft' && !it.returned ? `<button type="button" class="btn secondary sm" data-zero="${i}" title="ขายหมดแล้ว ไม่มีของให้นับ: บันทึกว่านับได้ 0" ${counted(it) === 0 ? 'hidden' : ''}>หมด (0)</button>` : ''}</td>
                     <td data-diff>${diffHtml(diff)}</td>
                     <td class="cnt-photos">${photosHtml(it, i)}</td>
                     ${current.status === 'draft' ? `<td data-save-cell>${saveHtml(it, i)}</td>` : ''}
@@ -216,6 +217,7 @@ export async function render(container, { permissions }) {
     const dirty = (it) => it._pendingCounted !== undefined && counted(it) !== savedCount(it);
 
     function saveHtml(it, i) {
+        if (it.returned) return '';
         if (dirty(it)) return `<button type="button" class="btn sm" data-save="${i}">บันทึก</button>`;
         return savedCount(it) !== null
             ? '<span class="pill ok" title="บันทึกจำนวนนี้แล้ว">✓ บันทึกแล้ว</span>'
@@ -252,7 +254,7 @@ export async function render(container, { permissions }) {
         const shots = (it.photos || []).map((p) => (p.token
             ? `<a href="${attachmentUrl(p.token)}" target="_blank" rel="noopener" title="${escapeHtml([p.note, p.created_at].filter(Boolean).join(' · '))}"><img src="${attachmentUrl(p.token)}" alt="รูปประกอบการนับ"></a>`
             : '<span class="pill muted" title="ลบอัตโนมัติเมื่อครบ 30 วัน">รูปถูกลบแล้ว</span>')).join('');
-        const missing = counted(it) !== null && !(it.photos || []).length ? '<span class="pill warn">ยังไม่มีรูป</span>' : '';
+        const missing = counted(it) !== null && !it.returned && !(it.photos || []).length ? '<span class="pill warn">ยังไม่มีรูป</span>' : '';
         const add = ['draft', 'submitted'].includes(current.status)
             ? `<label class="btn secondary sm" title="แนบรูปถ่ายตอนนับ">📷<input type="file" accept="image/*" capture="environment" data-photo="${i}" hidden></label>` : '';
         return `<div class="cnt-photo-row">${shots}${missing}${add}</div>`;

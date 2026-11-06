@@ -53,12 +53,42 @@ class StockCountService
         $upd = $this->db->prepare(
             'UPDATE stock_count_items sci JOIN products p ON p.id = sci.product_id
              SET sci.system_qty = p.qty_stock, sci.counted_qty = ?, sci.diff_qty = ? - p.qty_stock, sci.note = ?
-             WHERE sci.id = ? AND sci.stock_count_id = ?'
+             WHERE sci.id = ? AND sci.stock_count_id = ? AND (sci.note IS NULL OR sci.note NOT LIKE ?)'
         );
         foreach ($items as $item) {
             $raw = $item['counted_qty'] ?? null;
             $counted = $raw === null || $raw === '' ? null : max(0, (int) $raw);
-            $upd->execute([$counted, $counted, $item['note'] ?? null, (int) $item['item_id'], $stockCountId]);
+            $upd->execute([$counted, $counted, $item['note'] ?? null, (int) $item['item_id'], $stockCountId, self::RETURNED_NOTE . '%']);
+        }
+    }
+
+    /** How the note of a line closed by a return to the consignor begins. */
+    public const RETURNED_NOTE = 'คืนสินค้าให้ผู้ฝาก';
+
+    private static function isReturnedLine(?string $note): bool
+    {
+        return $note !== null && str_starts_with($note, self::RETURNED_NOTE);
+    }
+
+    /**
+     * Goods handed back to the consignor are final, whatever an open round counted: the product's
+     * line in each open round closes at 0 with no difference, so approving the round leaves the
+     * stock alone and the line cannot be counted again in that round. Goods received after the
+     * return keep their stock and are counted from the next round.
+     */
+    public function closeReturnedLines(int $productId, string $note): void
+    {
+        $find = $this->db->prepare('SELECT 1 FROM stock_count_items WHERE stock_count_id = ? AND product_id = ? LIMIT 1');
+        $add = $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty, counted_qty, diff_qty, note) VALUES (?, ?, 0, 0, 0, ?)');
+        $close = $this->db->prepare('UPDATE stock_count_items SET system_qty = 0, counted_qty = 0, diff_qty = 0, note = ? WHERE stock_count_id = ? AND product_id = ?');
+        $rounds = $this->db->query("SELECT id FROM stock_counts WHERE status IN ('draft','submitted')")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($rounds as $round) {
+            $find->execute([$round, $productId]);
+            if ($find->fetchColumn()) {
+                $close->execute([$note, $round, $productId]);
+            } else {
+                $add->execute([$round, $productId, $note]);
+            }
         }
     }
 
@@ -155,6 +185,7 @@ class StockCountService
         $photos = $this->photosFor($stockCountId);
         foreach ($items as &$item) {
             $item['photos'] = $photos[(int) $item['product_id']] ?? [];
+            $item['returned'] = self::isReturnedLine($item['note']);
         }
         unset($item);
 
@@ -250,6 +281,9 @@ class StockCountService
             throw new \RuntimeException('จำนวนนับไม่ถูกต้อง');
         }
         $info = $this->productInfo($stockCountId, $productId);
+        if ($info['item'] && self::isReturnedLine($info['item']['note'])) {
+            throw new \RuntimeException('สินค้านี้คืนให้ผู้ฝากแล้วระหว่างรอบนี้ ยอดเป็นที่สิ้นสุด นับเพิ่มในรอบนี้ไม่ได้');
+        }
         if (!$info['item']) {
             $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty) VALUES (?, ?, ?)')
                 ->execute([$stockCountId, $productId, (int) $info['qty_stock']]);

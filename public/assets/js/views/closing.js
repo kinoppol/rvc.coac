@@ -763,7 +763,7 @@ export async function render(container, { user, permissions = [] } = {}) {
                     return `<tr><td><label style="display:flex;gap:6px;align-items:flex-start">
                     <input type="checkbox" checked disabled style="margin-top:3px">
                     <span>${escapeHtml(x.name)} <span class="muted" style="font-size:11.5px">ในระบบเหลือ ${x.qty_stock} ชิ้น</span>
-                      <span class="pill warn" title="ติ๊ก คืนสินค้า ไว้ในรายการขายด้านบน: คืนให้ผู้ฝาก ${x.qty_stock} ชิ้น ยอดคงเหลือเป็น 0 สินค้ายังอยู่ในสต๊อก รับฝากเพิ่มได้ตามปกติ">คืนให้ผู้ฝาก</span></span></label></td>
+                      <span class="pill warn" title="ติ๊ก คืนสินค้า ไว้ในรายการขายด้านบน: คืนให้ผู้ฝาก ${x.qty_stock} ชิ้น ยอดคงเหลือเป็น 0 ถือเป็นที่สิ้นสุดแม้มีรอบตรวจนับเปิดอยู่ สินค้ายังอยู่ในสต๊อก รับฝากเพิ่มได้ตามปกติ">คืนให้ผู้ฝาก</span></span></label></td>
                   <td class="num" style="white-space:nowrap">เหลือ <input type="number" value="0" disabled style="width:70px;text-align:right"> ชิ้น</td></tr>`;
                 }
                 const st = p.stock[x.id] || { on: false, qty: '0' };
