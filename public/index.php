@@ -492,6 +492,9 @@ $app->group('/api', function ($group) {
     $group->post('/inventory/{id:[0-9]+}/held-barcodes/release', [InventoryController::class, 'releaseHeldBarcode']);
     $group->post('/inventory/{id:[0-9]+}/no-barcode', [InventoryController::class, 'setNoBarcode'])
         ->add(new RoleGuard('purchase.create'));
+    // The same save as the phone's photo, for those who may edit products on this page.
+    $group->post('/inventory/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])
+        ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/{id:[0-9]+}/photo/restore', [InventoryController::class, 'restorePhoto'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/merge', [InventoryController::class, 'merge'])

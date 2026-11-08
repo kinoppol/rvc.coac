@@ -9,6 +9,7 @@ import { openDamageModal, openDamageReport } from '../damage-modal.js';
 import { openInventoryMobile } from '../inventory-mobile.js';
 import { openMobileCount } from './count-mobile.js';
 import { openTrendCompare, COMPARE_MAX } from '../trend-compare.js';
+import { fileToDataUrl, thumbDataUrl } from '../images.js';
 
 const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
@@ -362,6 +363,7 @@ export async function render(container, { navigate, permissions, user }) {
             if (canConsign && !consigned && !consignors) consignors = (await api.get('/consignors/options').catch(() => ({ data: [] }))).data;
             editing = {
                 id: p.id, name: p.name, barcode: p.barcode || '', packs: packRows(p.pack_barcodes), consigned, consignorName: p.consignor_name,
+                imageToken: p.image_token || null, photoData: null, // photoData: the new photo, saved with the rest
                 // As shown when opened: the server keeps barcodes added meanwhile (e.g. from a phone) instead of wiping them.
                 origBarcode: p.barcode || '', origPacks: p.pack_barcodes.map((b) => b.barcode).filter(Boolean),
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
@@ -897,6 +899,7 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button>
             </div>
             <div class="modal-body">
+              ${photoFieldHtml(e)}
               ${e.consigned ? `<div style="margin-bottom:16px"><div style="font-weight:600">${escapeHtml(e.name)}</div>
                 <div class="muted" style="font-size:12.5px">ฝากขาย: ${escapeHtml(e.consignorName)} · สินค้าฝากขายใช้ได้เฉพาะบาร์โค้ดชิ้น</div></div>`
                 : `<label class="field" style="display:block;margin-bottom:16px">ชื่อสินค้า (ชื่อที่ใช้ขายต่อชิ้น)
@@ -918,6 +921,26 @@ export async function render(container, { navigate, permissions, user }) {
               <button type="button" class="btn" id="bc-save" ${e.busy ? 'disabled' : ''}>${e.busy ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
           </div>
         </div>`;
+    }
+
+    /** The product's photo; a new one is only a preview until "บันทึก", and "ยกเลิก" leaves the old one. */
+    function photoFieldHtml(e) {
+        const src = e.photoData
+            || (e.imageToken ? api.downloadUrl(`/products/${e.id}/photo?size=thumb&v=${encodeURIComponent(e.imageToken)}`) : null);
+        return `
+              <div style="display:flex;gap:14px;align-items:center;margin-bottom:16px">
+                ${src ? `<img class="pm-photo" id="bc-photo-preview" src="${escapeHtml(src)}" alt="รูปสินค้า">` : '<div class="pm-photo pm-nophoto" id="bc-photo-preview" aria-hidden="true">📷</div>'}
+                <div>
+                  <div style="font-weight:600;margin-bottom:6px">รูปสินค้า</div>
+                  <div class="actions-row">
+                    <label class="btn secondary sm" style="cursor:pointer">${src ? 'เปลี่ยนรูป' : 'อัปโหลดรูป'}<input type="file" id="bc-photo" accept="image/*" hidden></label>
+                    ${e.photoData ? '<button type="button" class="btn secondary sm" id="bc-photo-undo">ไม่ใช้รูปนี้</button>' : ''}
+                  </div>
+                  <div class="muted" style="font-size:12px;margin-top:6px">${e.photoData
+                      ? 'รูปใหม่จะบันทึกเมื่อกด «บันทึก»'
+                      : e.imageToken ? 'รูปเดิมยังเก็บไว้ เรียกคืนได้จากหน้ารายละเอียดสินค้า' : 'เลือกรูปจากเครื่อง หรือถ่ายรูปบนมือถือ'}</div>
+                </div>
+              </div>`;
     }
 
     /** Names this product goes by on receipts / in the POS, offered as a replacement for a mistyped name. */
@@ -1068,6 +1091,19 @@ export async function render(container, { navigate, permissions, user }) {
 
     function bindEdit() {
         const e = editing;
+        container.querySelector('#bc-photo')?.addEventListener('change', async (ev) => {
+            const file = ev.target.files[0];
+            ev.target.value = '';
+            if (!file) return;
+            try {
+                e.photoData = await fileToDataUrl(file);
+                e.error = null;
+            } catch (err) {
+                e.error = err.message;
+            }
+            if (editing === e) draw();
+        });
+        container.querySelector('#bc-photo-undo')?.addEventListener('click', () => { e.photoData = null; draw(); });
         container.querySelector('#cs-on')?.addEventListener('change', (ev) => { e.consign = ev.target.checked; draw(); });
         container.querySelector('#cs-consignor')?.addEventListener('change', (ev) => { e.consignorId = ev.target.value; });
         container.querySelector('#cs-past')?.addEventListener('change', (ev) => { e.claimPast = ev.target.checked; });
@@ -1227,6 +1263,13 @@ export async function render(container, { navigate, permissions, user }) {
                 p.name = out.data.name;
                 p.barcode = out.data.barcode;
                 p.pack_barcodes = out.data.pack_barcodes;
+                if (e.photoData) {
+                    const saved = await api.post(`/inventory/${e.id}/photo`, { data_url: e.photoData, thumb_data_url: await thumbDataUrl(e.photoData) })
+                        .catch((err) => { throw new Error(`บันทึกข้อมูลสินค้าแล้ว แต่บันทึกรูปไม่สำเร็จ: ${err.message}`); });
+                    p.image_token = saved.data.image_token;
+                    e.imageToken = p.image_token;
+                    e.photoData = null;
+                }
                 if (consignor) {
                     await api.post(`/inventory/${e.id}/consign`, {
                         consignor_id: consignor.id, cost_price: Number(e.consignCost), include_past_sales: e.pastQty > 0 && e.claimPast,
