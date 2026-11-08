@@ -89,6 +89,10 @@ export async function render(container, { navigate, permissions, user }) {
     // A phone used as this computer's barcode scanner: { code, after, phone, shown, qr, codes, timer }.
     let link = null;
     let filter = 'all';
+    let showDiscontinued = false;
+    // Discontinued goods stay out of the list while they hold no stock, unless asked for.
+    const isDiscontinued = (p) => !!p.discontinued_at && Number(p.qty_stock) <= 0;
+    const onSale = () => (showDiscontinued ? res.data : res.data.filter((p) => !isDiscontinued(p)));
     try {
         const saved = localStorage.getItem(FILTER_KEY);
         if (FILTERS.some(([k]) => k === saved)) filter = saved;
@@ -173,7 +177,7 @@ export async function render(container, { navigate, permissions, user }) {
 
     function draw() {
         const s = res.summary;
-        let shown = sorted(res.data.filter(filterFn(filter)));
+        let shown = sorted(onSale().filter(filterFn(filter)));
         // Duplicates: each group's rows together, in the order the sort puts the group's first row.
         if (filter === 'dup') {
             const at = new Map();
@@ -214,8 +218,9 @@ export async function render(container, { navigate, permissions, user }) {
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(res.data.filter(filterFn(k)).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(onSale().filter(filterFn(k)).length)})</button>`).join('')}
           </div>
+          <label class="cnt-check" style="margin-top:10px"><input type="checkbox" id="show-discontinued" ${showDiscontinued ? 'checked' : ''}> แสดงสินค้าที่เลิกจำหน่าย (${count(res.data.filter(isDiscontinued).length)})</label>
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ — ค้นหาชื่อ/บาร์โค้ดจะพบล็อตที่หมดหรือคืนผู้ฝากแล้วด้วย (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
@@ -248,6 +253,8 @@ export async function render(container, { navigate, permissions, user }) {
             try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
             draw();
         }));
+        container.querySelector('#show-discontinued').addEventListener('change', (e) => { showDiscontinued = e.target.checked; draw(); });
+        container.querySelectorAll('[data-discontinue]').forEach((b) => b.addEventListener('click', () => setDiscontinued(b.dataset.discontinue, b.dataset.on === '1')));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
         container.querySelector('#damage-report')?.addEventListener('click', () => openDamageReport({ canEdit, onChange: load }));
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
@@ -822,6 +829,28 @@ export async function render(container, { navigate, permissions, user }) {
         }
     }
 
+    /** Admin: a product with no stock can be discontinued, and a discontinued one put back on sale. */
+    function discontinuedCell(p) {
+        const admin = user?.role === 'admin';
+        if (p.discontinued_at) {
+            return `<div><span class="pill warn" style="font-size:11.5px">เลิกจำหน่าย</span>${admin ? ` <button type="button" class="link-btn" data-discontinue="${p.id}" data-on="0" style="font-size:12px;font-weight:400;white-space:nowrap">กลับมาจำหน่าย</button>` : ''}</div>`;
+        }
+        return admin && Number(p.qty_stock) <= 0
+            ? `<div><button type="button" class="link-btn" data-discontinue="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ไม่นำมาขายแล้ว: ไม่แสดงในหน้าสต๊อก หน้าตรวจนับ และหน้าขาย จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button></div>` : '';
+    }
+
+    async function setDiscontinued(id, on) {
+        const p = res.data.find((x) => String(x.id) === String(id));
+        if (on && !(await confirmDialog(`"${p.name}" จะไม่แสดงในหน้าสต๊อก หน้าตรวจนับ และหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        try {
+            await api.post(`/products/${id}/discontinued`, { discontinued: on });
+            p.discontinued_at = on ? new Date().toISOString() : null;
+            draw();
+        } catch (err) {
+            alertDialog(err.message, { tone: 'error' });
+        }
+    }
+
     function row(p) {
         const dups = canConsign ? dupsOf(p) : [];
         const low = Number(p.qty_stock) <= 3;
@@ -845,7 +874,7 @@ export async function render(container, { navigate, permissions, user }) {
           </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
-          <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}${canEdit && p.consignor_id == null
+          <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}${discontinuedCell(p)}${canEdit && p.consignor_id == null
               ? `<div><button type="button" class="link-btn" data-split="${p.id}" style="font-size:12px;font-weight:400" title="สินค้าแพ็คที่ข้างในมีหลายแบบ แต่ละแบบมีบาร์โค้ดของตัวเอง (คละรส คละสี): แยกจำนวนชิ้นออกเป็นสินค้าแต่ละแบบ">แยกสินค้า</button></div>
                 <div><button type="button" class="link-btn" data-damage="${p.id}" style="font-size:12px;font-weight:400;color:var(--bad);white-space:nowrap" title="ตัดสินค้าที่ชำรุด/ขายไม่ได้ออกจากสต๊อก (เช่น ซื้อแพ็คใหญ่แล้วมีบางชิ้นเสียหาย) เก็บสาเหตุไว้ทำสถิติ">สินค้าเสียหาย</button></div>` : ''}</td>
           <td class="num">${money(p.cost_price)}${canSetPrice && p.consignor_id == null && !(Number(p.cost_price) > 0)

@@ -76,13 +76,13 @@ class StockCountController
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
     }
 
-    /** Consigned products marked as discontinued. */
+    /** Products marked as discontinued. */
     public function discontinued(Request $request, Response $response): Response
     {
         return $this->json($response, ['data' => $this->service()->discontinued()]);
     }
 
-    /** Admin only: marks a consigned product as discontinued, or back on sale (body: discontinued). */
+    /** Admin only: marks a product as discontinued, or back on sale (body: discontinued). */
     public function setDiscontinued(Request $request, Response $response, array $args): Response
     {
         $user = $request->getAttribute('user');

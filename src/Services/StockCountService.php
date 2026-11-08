@@ -112,22 +112,22 @@ class StockCountService
         )->execute([$stockCountId]);
     }
 
-    /** Consigned products marked as discontinued, for showing them on request. */
+    /** Products marked as discontinued, store goods and consigned, for showing them on request. */
     public function discontinued(): array
     {
         if (!\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')) {
             return [];
         }
         return $this->db->query(
-            'SELECT p.id, p.name, p.barcode, p.qty_stock, p.discontinued_at, c.name AS consignor_name
-             FROM products p JOIN consignors c ON c.id = p.consignor_id
-             WHERE p.discontinued_at IS NOT NULL ORDER BY p.name ASC'
+            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.consignor_id, p.discontinued_at, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
+             FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id
+             WHERE p.discontinued_at IS NOT NULL ORDER BY p.name ASC"
         )->fetchAll();
     }
 
     /**
-     * Marks a consigned product as discontinued, or back on sale. Goods still held must be
-     * sold or returned first. Its lines in open rounds go, unless they carry a difference.
+     * Marks a product (store goods or consigned) as discontinued, or back on sale. Goods still
+     * held must be sold, returned or counted out first. Its lines in open rounds go, unless they carry a difference.
      */
     public function setDiscontinued(int $productId, bool $discontinued, int $userId, ?string $ip): void
     {
@@ -139,12 +139,12 @@ class StockCountService
             $stmt = $this->db->prepare('SELECT id, name, consignor_id, qty_stock, discontinued_at FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([$productId]);
             $product = $stmt->fetch();
-            if (!$product || $product['consignor_id'] === null) {
-                throw new \RuntimeException('ไม่พบสินค้าฝากขายรายการนี้');
+            if (!$product) {
+                throw new \RuntimeException('ไม่พบสินค้า');
             }
             if ($discontinued) {
                 if ((int) $product['qty_stock'] > 0) {
-                    throw new \RuntimeException("\"{$product['name']}\" ยังเหลือ {$product['qty_stock']} ชิ้น ส่งคืนผู้ฝากหรือขายให้หมดก่อนจึงตั้งเลิกจำหน่ายได้");
+                    throw new \RuntimeException("\"{$product['name']}\" ยังเหลือ {$product['qty_stock']} ชิ้น ต้องไม่มีคงเหลือก่อนจึงตั้งเลิกจำหน่ายได้ (ขายให้หมด คืนผู้ฝาก ตัดสินค้าเสียหาย หรือตรวจนับ)");
                 }
                 $open = "SELECT sci.id FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
                          WHERE sci.product_id = ? AND sc.status IN ('draft','submitted')";

@@ -236,12 +236,12 @@ export async function render(container, { permissions, user }) {
         });
     }
 
-    /** Admin, consigned goods: hand everything back while there is stock, then discontinue. */
+    /** Admin: consigned goods with stock can be handed back; anything without stock can be discontinued. */
     function manageHtml(it, i) {
-        if (!it.consignor_id) return '';
+        if (Number(it.system_qty) > 0 && !it.consignor_id) return '';
         return Number(it.system_qty) > 0
             ? `<button type="button" class="btn secondary sm" data-return-all="${i}" title="คืนสินค้าทุกชิ้นให้ผู้ฝาก ปรับยอดเป็น 0 พร้อมออกใบคืนสินค้า">↩ คืนทุกชิ้น</button>`
-            : `<button type="button" class="btn secondary sm" data-discontinue="${i}" title="ผู้ฝากไม่นำมาขายแล้ว: ไม่แสดงในหน้าตรวจนับและหน้าขาย จนกว่าจะรับฝากอีกครั้ง">เลิกจำหน่าย</button>`;
+            : `<button type="button" class="btn secondary sm" data-discontinue="${i}" title="ไม่นำมาขายแล้ว: ไม่แสดงในหน้าตรวจนับ หน้าสต๊อก และหน้าขาย จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button>`;
     }
 
     function discontinuedHtml() {
@@ -302,7 +302,7 @@ export async function render(container, { permissions, user }) {
     }
 
     async function discontinue(it) {
-        if (!(await confirmDialog(`"${it.name}" จะไม่แสดงในหน้าตรวจนับและหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับฝากสินค้านี้อีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        if (!(await confirmDialog(`"${it.name}" จะไม่แสดงในหน้าตรวจนับ หน้าสต๊อก และหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
         await act(it, async () => {
             await api.post(`/products/${it.product_id}/discontinued`, { discontinued: true });
             return `ตั้ง "${it.name}" เป็นเลิกจำหน่ายแล้ว`;
