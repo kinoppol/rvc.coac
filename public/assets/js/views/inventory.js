@@ -37,11 +37,13 @@ const FILTERS = [
     ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
     ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
+    ['discontinued', 'เลิกจำหน่าย', (p) => !!p.discontinued_at],
     ['nocost', 'ไม่ทราบต้นทุน', (p) => p.consignor_id == null && !(Number(p.cost_price) > 0)],
     // Same / almost the same name of the same owner (the test needs the loaded list: set in render).
     ['dup', 'สินค้าซ้ำซ้อน', null],
 ];
 const FILTER_TIPS = {
+    discontinued: 'สินค้าที่ตั้งเลิกจำหน่ายแล้ว ไม่แสดงในรายการหน้าขาย (POS) แต่สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ ไม่แสดงในแท็บอื่นเมื่อไม่มีคงเหลือ',
     nobarcode: 'สินค้าที่ยังไม่ได้เก็บบาร์โค้ดชิ้น (ตัวสินค้ามีบาร์โค้ดแต่ยังไม่ได้บันทึก) — ถ้าสินค้าไม่มีบาร์โค้ดจริง กด "ไม่มีบาร์โค้ด" ในคอลัมน์บาร์โค้ดชิ้น',
     barcodeless: 'สินค้าที่ทำเครื่องหมายว่าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด',
     dup: 'ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)',
@@ -89,10 +91,8 @@ export async function render(container, { navigate, permissions, user }) {
     // A phone used as this computer's barcode scanner: { code, after, phone, shown, qr, codes, timer }.
     let link = null;
     let filter = 'all';
-    let showDiscontinued = false;
-    // Discontinued goods stay out of the list while they hold no stock, unless asked for.
-    const isDiscontinued = (p) => !!p.discontinued_at && Number(p.qty_stock) <= 0;
-    const onSale = () => (showDiscontinued ? res.data : res.data.filter((p) => !isDiscontinued(p)));
+    // Discontinued goods with no stock show only under their own tab; with stock they stay in view.
+    const listedUnder = (k) => res.data.filter((p) => k === 'discontinued' || !p.discontinued_at || Number(p.qty_stock) > 0).filter(filterFn(k));
     try {
         const saved = localStorage.getItem(FILTER_KEY);
         if (FILTERS.some(([k]) => k === saved)) filter = saved;
@@ -177,7 +177,7 @@ export async function render(container, { navigate, permissions, user }) {
 
     function draw() {
         const s = res.summary;
-        let shown = sorted(onSale().filter(filterFn(filter)));
+        let shown = sorted(listedUnder(filter));
         // Duplicates: each group's rows together, in the order the sort puts the group's first row.
         if (filter === 'dup') {
             const at = new Map();
@@ -218,9 +218,8 @@ export async function render(container, { navigate, permissions, user }) {
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(onSale().filter(filterFn(k)).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(listedUnder(k).length)})</button>`).join('')}
           </div>
-          <label class="cnt-check" style="margin-top:10px"><input type="checkbox" id="show-discontinued" ${showDiscontinued ? 'checked' : ''}> แสดงสินค้าที่เลิกจำหน่าย (${count(res.data.filter(isDiscontinued).length)})</label>
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ — ค้นหาชื่อ/บาร์โค้ดจะพบล็อตที่หมดหรือคืนผู้ฝากแล้วด้วย (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
@@ -253,7 +252,6 @@ export async function render(container, { navigate, permissions, user }) {
             try { localStorage.setItem(FILTER_KEY, filter); } catch (e) { /* private mode */ }
             draw();
         }));
-        container.querySelector('#show-discontinued').addEventListener('change', (e) => { showDiscontinued = e.target.checked; draw(); });
         container.querySelectorAll('[data-discontinue]').forEach((b) => b.addEventListener('click', () => setDiscontinued(b.dataset.discontinue, b.dataset.on === '1')));
         container.querySelector('#order-check')?.addEventListener('click', () => openOrderCheckModal(navigate));
         container.querySelector('#damage-report')?.addEventListener('click', () => openDamageReport({ canEdit, onChange: load }));
@@ -836,12 +834,12 @@ export async function render(container, { navigate, permissions, user }) {
             return `<div><span class="pill warn" style="font-size:11.5px">เลิกจำหน่าย</span>${admin ? ` <button type="button" class="link-btn" data-discontinue="${p.id}" data-on="0" style="font-size:12px;font-weight:400;white-space:nowrap">กลับมาจำหน่าย</button>` : ''}</div>`;
         }
         return admin && Number(p.qty_stock) <= 0
-            ? `<div><button type="button" class="link-btn" data-discontinue="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ไม่นำมาขายแล้ว: ไม่แสดงในหน้าสต๊อก หน้าตรวจนับ และหน้าขาย จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button></div>` : '';
+            ? `<div><button type="button" class="link-btn" data-discontinue="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ไม่นำมาขายแล้ว: ไม่แสดงในรายการหน้าขาย (POS) และหน้าตรวจนับ ดูได้ที่แท็บเลิกจำหน่าย สแกนบาร์โค้ดที่ตรงยังหยิบลงตะกร้าได้ จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button></div>` : '';
     }
 
     async function setDiscontinued(id, on) {
         const p = res.data.find((x) => String(x.id) === String(id));
-        if (on && !(await confirmDialog(`"${p.name}" จะไม่แสดงในหน้าสต๊อก หน้าตรวจนับ และหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        if (on && !(await confirmDialog(`"${p.name}" จะไม่แสดงในรายการหน้าขาย (POS) และหน้าตรวจนับ ดูได้ที่แท็บเลิกจำหน่าย สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
         try {
             await api.post(`/products/${id}/discontinued`, { discontinued: on });
             p.discontinued_at = on ? new Date().toISOString() : null;

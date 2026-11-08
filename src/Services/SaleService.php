@@ -77,7 +77,9 @@ class SaleService
                     throw new \RuntimeException('ไม่พบสินค้า');
                 }
                 $qty = (int) $line['qty'];
-                if ($qty <= 0 || ($qty > (int) $product['qty_stock'] && empty($opts['allow_short_stock']))) {
+                // Discontinued goods hold no stock on record: one still on the shelf can be sold by its barcode.
+                $mayShort = !empty($opts['allow_short_stock']) || !empty($product['discontinued_at']);
+                if ($qty <= 0 || ($qty > (int) $product['qty_stock'] && !$mayShort)) {
                     throw new \RuntimeException('จำนวนขายเกินสต๊อกคงเหลือของ ' . $product['name']);
                 }
 

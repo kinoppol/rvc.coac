@@ -163,15 +163,20 @@ class DeviceController
         $since = $this->cursor((string) ($params['since'] ?? ''));
         $db = Db::connection();
         $now = time();
-        $where = '1 = 1';
+        // discontinued=1: the app keeps discontinued goods, flagged, to find them by barcode offline.
+        // Apps too old to ask do not get them: leaving the ids below, they drop off that POS.
+        $hasFlag = Db::hasColumn($db, 'products', 'discontinued_at');
+        $flag = $hasFlag ? 'p.discontinued_at IS NOT NULL' : '0';
+        $onSale = $hasFlag && empty($params['discontinued']) ? 'discontinued_at IS NULL' : '1 = 1';
+        $where = str_replace('discontinued_at', 'p.discontinued_at', $onSale);
         $args = [];
         if ($since) {
-            $where = '(p.updated_at > ? OR (p.updated_at = ? AND p.id > ?))';
+            $where .= ' AND (p.updated_at > ? OR (p.updated_at = ? AND p.id > ?))';
             $args = [$since[0], $since[0], $since[1]];
         }
         $stmt = $db->prepare(
             "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token, p.consignor_id, p.updated_at,
-                    COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
+                    COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, {$flag} AS discontinued
              FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id
              WHERE {$where} ORDER BY p.updated_at, p.id LIMIT " . ($limit + 1)
         );
@@ -199,6 +204,7 @@ class DeviceController
             'image_url' => $r['image_token'] ? "products/{$r['id']}/photo?size=thumb&v={$r['image_token']}" : null,
             'has_thumb' => $r['image_token'] && $attachments->hasThumb($r['image_token']),
             'packs' => $packs[(int) $r['id']] ?? [], 'updated_at' => $r['updated_at'],
+            'discontinued' => !empty($r['discontinued']),
         ], $rows);
 
         $last = $rows ? end($rows) : null;
@@ -217,7 +223,7 @@ class DeviceController
             'server_time' => date(DATE_ATOM),
         ];
         if (!$more && $since !== null) {
-            $data['ids'] = array_map('intval', $db->query('SELECT id FROM products ORDER BY id')->fetchAll(\PDO::FETCH_COLUMN));
+            $data['ids'] = array_map('intval', $db->query("SELECT id FROM products WHERE {$onSale} ORDER BY id")->fetchAll(\PDO::FETCH_COLUMN));
         }
         return $this->json($response, $data);
     }

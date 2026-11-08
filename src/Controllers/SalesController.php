@@ -36,6 +36,8 @@ class SalesController
      * with all=1 lists everything (the picture grid). sold_qty = pieces sold
      * in the last 90 days, used for "popular" ordering. short=1 also lists
      * products with stock below 1, for roles allowed to sell them.
+     * Discontinued goods stay out of the list and of name searches; only their exact barcode
+     * (piece or pack) finds them, whatever their stock, e.g. to check the price of old goods.
      */
     public function searchProducts(Request $request, Response $response): Response
     {
@@ -55,13 +57,24 @@ class SalesController
             $stock = 'p.qty_stock < 1';
             $all = false;
         }
-        // Discontinued and out of stock: not for sale, even where selling below 1 is allowed.
+        $like = '%' . $q . '%';
+        $where = "({$stock}) AND (p.name LIKE ? OR p.barcode LIKE ?
+                OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))";
+        $args = [$like, $like, $q];
+        $flag = '0';
         if (Db::hasColumn($db, 'products', 'discontinued_at')) {
-            $stock = "({$stock}) AND (p.discontinued_at IS NULL OR p.qty_stock > 0)";
+            $flag = 'p.discontinued_at IS NOT NULL';
+            $where = "p.discontinued_at IS NULL AND {$where}";
+            if ($q !== '' && empty($params['out'])) {
+                $where = "({$where}) OR (p.discontinued_at IS NOT NULL AND (p.barcode = ?
+                    OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?)))";
+                array_push($args, $q, $q);
+            }
         }
         $stmt = $db->prepare(
             "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token, p.consignor_id,
-                    COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty
+                    COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty,
+                    {$flag} AS discontinued
              FROM products p
              LEFT JOIN consignors c ON c.id = p.consignor_id
              LEFT JOIN (
@@ -70,12 +83,10 @@ class SalesController
                 WHERE sa.sale_datetime >= NOW() - INTERVAL 90 DAY
                 GROUP BY si.product_id
              ) s ON s.product_id = p.id
-             WHERE {$stock} AND (p.name LIKE ? OR p.barcode LIKE ?
-                OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))
+             WHERE {$where}
              ORDER BY {$order} LIMIT " . ($all ? 500 : 20)
         );
-        $like = '%' . $q . '%';
-        $stmt->execute([$like, $like, $q]);
+        $stmt->execute($args);
         $rows = $stmt->fetchAll();
         // Photos still without a small copy: the POS makes one from the first load.
         $attachments = new AttachmentService($db);
@@ -94,6 +105,7 @@ class SalesController
         foreach ($rows as &$r) {
             $r['has_thumb'] = $r['image_token'] && $attachments->hasThumb($r['image_token']);
             $r['packs'] = $packs[(int) $r['id']] ?? [];
+            $r['discontinued'] = !empty($r['discontinued']);
         }
         unset($r);
         return $this->json($response, ['data' => $rows]);
