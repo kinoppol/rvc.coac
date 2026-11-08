@@ -62,6 +62,7 @@ class MyConsignorController
             'data' => $repo->forConsignor((int) $consignor['id']),
             'deleted' => $repo->deletedForConsignor((int) $consignor['id']),
             'retention_days' => ConsignRequestRepo::RETENTION_DAYS,
+            'past' => $repo->pastItems((int) $consignor['id']),
         ]);
     }
 

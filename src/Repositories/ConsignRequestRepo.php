@@ -120,6 +120,54 @@ class ConsignRequestRepo
     }
 
     /** The consignor's deleted requests that can still be restored. */
+    /**
+     * What this consignor has brought before, latest first, to fill in a new request: goods the store
+     * received (their current price, the quantity last received), then goods in requests still waiting.
+     */
+    public function pastItems(int $consignorId): array
+    {
+        $live = \App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at') ? ' AND rd.cancelled_at IS NULL' : '';
+        $stmt = $this->db->prepare(
+            "SELECT p.name, p.barcode, p.cost_price, ri.qty
+             FROM products p
+             LEFT JOIN (
+                SELECT i.product_id, MAX(i.id) AS id FROM receive_items i
+                JOIN receive_documents rd ON rd.id = i.receive_document_id
+                WHERE rd.consignor_id = ?{$live}
+                GROUP BY i.product_id
+             ) last ON last.product_id = p.id
+             LEFT JOIN receive_items ri ON ri.id = last.id
+             WHERE p.consignor_id = ? AND (ri.id IS NOT NULL OR p.qty_received > 0)
+             ORDER BY COALESCE(ri.id, 0) DESC, p.id DESC"
+        );
+        $stmt->execute([$consignorId, $consignorId]);
+        $received = $stmt->fetchAll();
+
+        $stmt = $this->db->prepare(
+            "SELECT i.name, i.barcode, i.cost_price, i.qty
+             FROM consign_request_items i
+             JOIN consign_requests r ON r.id = i.request_id
+             WHERE r.consignor_id = ? AND r.status = 'pending'
+             ORDER BY i.id DESC"
+        );
+        $stmt->execute([$consignorId]);
+
+        $seen = [];
+        $out = [];
+        foreach ([...$received, ...$stmt->fetchAll()] as $row) {
+            $key = mb_strtolower(trim((string) $row['name']));
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = [
+                'name' => $row['name'], 'barcode' => $row['barcode'], 'cost_price' => (float) $row['cost_price'],
+                'qty' => $row['qty'] !== null ? (int) $row['qty'] : null,
+            ];
+        }
+        return $out;
+    }
+
     public function deletedForConsignor(int $consignorId): array
     {
         return $this->fetch('r.consignor_id = ? AND r.deleted_at IS NOT NULL', [$consignorId], 50);

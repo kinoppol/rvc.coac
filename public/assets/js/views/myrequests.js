@@ -25,6 +25,7 @@ export async function render(container) {
     let success = null;
     let requests = [];
     let deleted = []; // soft-deleted, restorable until purge_at
+    let past = []; // goods brought before, offered while typing a product name
     let retentionDays = 30;
     let quoteSeq = 0; // ignore quote replies that arrive after a newer keystroke
     let open = false; // the "แจ้งฝากขาย" modal
@@ -39,6 +40,7 @@ export async function render(container) {
         const res = await api.get('/my/requests');
         requests = res.data;
         deleted = res.deleted || [];
+        past = res.past || [];
         retentionDays = res.retention_days || retentionDays;
         draw();
     }
@@ -89,7 +91,13 @@ export async function render(container) {
               <div class="form-grid">
                 <label class="field">วันที่ฝาก (วันที่นำของมาส่ง) * <input id="f-deposit" type="date" value="${depositDate}" min="${todayISO()}" max="${plusDays(todayISO(), 3)}" required>
                   <span class="muted" style="font-size:11.5px;font-weight:400">ทำรายการล่วงหน้าได้ไม่เกิน 3 วัน</span></label>
-                <label class="field" style="grid-column:span 2">ชื่อสินค้า * <input id="f-name" placeholder="เช่น ขนมทองม้วนสมุนไพร"></label>
+                <div class="field" style="grid-column:span 2"><label for="f-name">ชื่อสินค้า *</label>
+                  <div class="ac">
+                    <input id="f-name" placeholder="${past.length ? 'พิมพ์เพื่อค้นสินค้าที่เคยฝาก หรือกรอกชื่อใหม่' : 'เช่น ขนมทองม้วนสมุนไพร'}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="f-name-list">
+                    <div class="ac-list" id="f-name-list" role="listbox" hidden></div>
+                  </div>
+                  <span class="muted" id="f-name-note" style="font-size:11.5px;font-weight:400" hidden>กรอกราคาและจำนวนตามครั้งล่าสุดให้แล้ว แก้ไขได้</span>
+                </div>
                 <label class="field">ราคาที่ต้องการได้ต่อชิ้น (บาท) * <input id="f-cost" type="number" step="0.25" min="0"></label>
                 <div class="field">ราคาขายหน้าร้าน <div id="f-price" class="price-preview">-</div></div>
                 <label class="field">จำนวน (ชิ้น) * <input id="f-qty" type="number" min="1" value="1"></label>
@@ -216,6 +224,7 @@ export async function render(container) {
         }));
         if (!open) return;
         container.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal));
+        wireNamePicker();
         container.querySelector('#f-cost').addEventListener('input', updateQuote);
         container.querySelector('#f-note').addEventListener('input', (e) => { note = e.target.value; });
         container.querySelector('#f-deposit')?.addEventListener('change', (e) => {
@@ -233,6 +242,85 @@ export async function render(container) {
             cart.splice(Number(btn.dataset.remove), 1);
             draw();
         }));
+    }
+
+    /** Typing a product name offers the goods brought before; picking one fills in its price, quantity and barcode. */
+    function wireNamePicker() {
+        const input = container.querySelector('#f-name');
+        const list = container.querySelector('#f-name-list');
+        const note = container.querySelector('#f-name-note');
+        const barcode = container.querySelector('#f-barcode');
+        let rows = [];
+        let active = -1;
+        let picked = null;
+
+        const hide = () => {
+            list.hidden = true;
+            input.setAttribute('aria-expanded', 'false');
+            active = -1;
+        };
+        const highlight = () => list.querySelectorAll('.ac-item').forEach((el, i) => el.classList.toggle('active', i === active));
+        const show = () => {
+            const term = input.value.trim().toLowerCase();
+            rows = past.filter((p) => !term || p.name.toLowerCase().includes(term) || (p.barcode || '').toLowerCase().includes(term)).slice(0, 8);
+            // Nothing to offer, or the name is already exactly the only match.
+            if (!rows.length || (rows.length === 1 && rows[0].name.toLowerCase() === term)) { hide(); return; }
+            active = -1;
+            list.innerHTML = rows.map((p, i) => `
+              <div class="ac-item" role="option" data-i="${i}">
+                <span>${escapeHtml(p.name)}</span>
+                <small>ราคาที่ได้ ฿${money(p.cost_price)}${p.qty ? ` · ครั้งล่าสุด ${p.qty} ชิ้น` : ''}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small>
+              </div>`).join('');
+            list.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+        };
+        const pick = (p) => {
+            picked = p;
+            input.value = p.name;
+            container.querySelector('#f-cost').value = p.cost_price;
+            if (p.qty) container.querySelector('#f-qty').value = p.qty;
+            barcode.value = p.barcode || '';
+            note.hidden = false;
+            hide();
+            updateQuote();
+            container.querySelector('#f-qty').focus();
+            container.querySelector('#f-qty').select();
+        };
+
+        input.addEventListener('focus', show);
+        input.addEventListener('input', () => {
+            // A different name is a different product: the picked one's barcode must not carry over.
+            if (picked && input.value.trim() !== picked.name) {
+                barcode.value = '';
+                note.hidden = true;
+                picked = null;
+            }
+            show();
+        });
+        input.addEventListener('blur', () => setTimeout(hide, 0));
+        input.addEventListener('keydown', (e) => {
+            if (list.hidden) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const n = rows.length;
+                active = e.key === 'ArrowDown' ? (active + 1) % n : (active - 1 + n) % n;
+                highlight();
+                list.children[active]?.scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter' && active >= 0) {
+                e.preventDefault();
+                pick(rows[active]);
+            } else if (e.key === 'Escape') {
+                e.stopPropagation(); // close the list, not the dialog
+                hide();
+            }
+        });
+        // pointerdown, before the input loses focus and the list goes away.
+        list.addEventListener('pointerdown', (e) => {
+            const el = e.target.closest('.ac-item');
+            if (!el) return;
+            e.preventDefault();
+            pick(rows[Number(el.dataset.i)]);
+        });
     }
 
     async function updateQuote() {
