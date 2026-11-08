@@ -33,6 +33,7 @@ class MyConsignorController
             'consignor' => $stmt->fetch(),
             'entries' => $ledger->forConsignor((int) $consignor['id']),
             'balance' => $ledger->balanceOf((int) $consignor['id']),
+            'sales' => $ledger->salesByProduct((int) $consignor['id']),
         ]);
     }
 

@@ -137,4 +137,24 @@ class LedgerService
         $stmt->execute([$consignorId]);
         return $stmt->fetchAll();
     }
+
+    /**
+     * What each of a consignor's products sold for, per accounting day: pieces, sale value
+     * and the store's fee. value - fee is what the consignor gets.
+     */
+    public function salesByProduct(int $consignorId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT s.business_date AS sale_date, si.product_id, p.name, p.barcode, SUM(si.qty) AS qty,
+                    ROUND(SUM(si.qty * si.unit_price), 2) AS value, ROUND(SUM(si.fee_amount), 2) AS fee
+             FROM sale_items si
+             JOIN sales s ON s.id = si.sale_id
+             JOIN products p ON p.id = si.product_id
+             WHERE si.consignor_id = ?
+             GROUP BY s.business_date, si.product_id, p.name, p.barcode
+             ORDER BY s.business_date, si.product_id'
+        );
+        $stmt->execute([$consignorId]);
+        return $stmt->fetchAll();
+    }
 }
