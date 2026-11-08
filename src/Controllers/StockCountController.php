@@ -71,8 +71,30 @@ class StockCountController
             return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
         }
         $this->service()->purgeOldPhotos();
+        $this->service()->addConsignedLines($id);
         $this->service()->refreshSystemQty($id);
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
+    }
+
+    /** Consigned products marked as discontinued. */
+    public function discontinued(Request $request, Response $response): Response
+    {
+        return $this->json($response, ['data' => $this->service()->discontinued()]);
+    }
+
+    /** Admin only: marks a consigned product as discontinued, or back on sale (body: discontinued). */
+    public function setDiscontinued(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        try {
+            $this->service()->setDiscontinued((int) $args['id'], !empty(((array) $request->getParsedBody())['discontinued']), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['ok' => true]);
     }
 
     public function saveCounts(Request $request, Response $response, array $args): Response

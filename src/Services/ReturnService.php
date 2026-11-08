@@ -83,6 +83,34 @@ class ReturnService
         }
     }
 
+    /**
+     * Hands every piece of one consigned product back to its consignor: a return document like
+     * any other takes the stock to 0, and the product's line in open counting rounds closes.
+     */
+    public function returnAll(int $productId, int $userId, ?string $ip): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT consignor_id, qty_stock FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$productId]);
+            $product = $stmt->fetch();
+            if (!$product || $product['consignor_id'] === null) {
+                throw new \RuntimeException('ไม่พบสินค้าฝากขายรายการนี้');
+            }
+            if ((int) $product['qty_stock'] <= 0) {
+                throw new \RuntimeException('สินค้านี้ไม่มีคงเหลือให้คืน');
+            }
+            $result = $this->returnGoods((int) $product['consignor_id'], [['product_id' => $productId, 'qty' => (int) $product['qty_stock']]], null, $userId, $ip);
+            (new StockCountService($this->db, $this->docs, $this->audit))
+                ->closeReturnedLines($productId, StockCountService::RETURNED_NOTE . " (ปรับยอดเป็น 0) ตามใบคืน {$result['doc_no']}");
+            $this->db->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
     /** Recent return documents (newest first), optionally matching a doc no., consignor, recipient or product name. */
     public function documents(string $q = '', int $limit = 50): array
     {

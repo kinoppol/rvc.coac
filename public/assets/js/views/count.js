@@ -13,14 +13,19 @@ const SHOWS = [
     ['unsaved', 'ยังไม่บันทึก'],
 ];
 
-export async function render(container, { permissions }) {
+export async function render(container, { permissions, user }) {
     let current = null;
     let items = [];
     let error = null;
     let query = '';
     let show = 'all';
+    let consignedOnly = false;
+    let showDiscontinued = false;
+    let discontinued = [];
+    let notice = null;
     const canApprove = permissions.includes('stockcount.approve');
     const canCreate = permissions.includes('stockcount.create');
+    const isAdmin = user?.role === 'admin';
 
     async function loadList() {
         const list = (await api.get('/stockcounts')).data;
@@ -61,6 +66,7 @@ export async function render(container, { permissions }) {
         }
 
         const { diffCount, diffValue, countedN } = totals();
+        const manage = current.status === 'draft' && isAdmin;
 
         container.innerHTML = `
         <div class="stat-row">
@@ -70,6 +76,7 @@ export async function render(container, { permissions }) {
           <div class="kpi"><div class="lbl">มูลค่าผลต่างสุทธิ</div><div class="val" data-k="value">฿ ${money(diffValue)}</div></div>
         </div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
+        ${notice ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(notice)}</div>` : ''}
         ${current.status === 'draft' ? `
           <section class="card card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div><b>โหมดนับด้วยมือถือ</b><div class="muted" style="font-size:13px">สแกนบาร์โค้ดด้วยกล้อง ปุ่มกดตัวเลขขนาดใหญ่ ถ่ายภาพสินค้า และค้นหาสินค้าเพื่อผูกบาร์โค้ด — บันทึกทันทีทีละรายการ</div></div>
@@ -86,10 +93,12 @@ export async function render(container, { permissions }) {
             <div class="tabs" role="group" aria-label="แสดงรายการ">
               ${SHOWS.map(([k, label]) => `<button type="button" class="tab-btn${show === k ? ' active' : ''}" data-show="${k}">${label}</button>`).join('')}
             </div>
+            <label class="cnt-check"><input type="checkbox" id="cnt-consigned" ${consignedOnly ? 'checked' : ''}> เฉพาะสินค้าฝากขาย</label>
+            <label class="cnt-check"><input type="checkbox" id="cnt-discontinued" ${showDiscontinued ? 'checked' : ''}> แสดงสินค้าที่เลิกจำหน่าย</label>
             <span class="muted" data-k="shown" style="font-size:13px"></span>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th>${current.status === 'draft' ? '<th></th>' : ''}</tr></thead>
+            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th>${current.status === 'draft' ? '<th></th>' : ''}${manage ? '<th>ผู้ดูแลระบบ</th>' : ''}</tr></thead>
             <tbody>
               ${items.map((it, i) => {
                   const diff = diffOf(it);
@@ -102,12 +111,14 @@ export async function render(container, { permissions }) {
                     <td data-diff>${diffHtml(diff)}</td>
                     <td class="cnt-photos">${photosHtml(it, i)}</td>
                     ${current.status === 'draft' ? `<td data-save-cell>${saveHtml(it, i)}</td>` : ''}
+                    ${manage ? `<td>${manageHtml(it, i)}</td>` : ''}
                   </tr>`;
               }).join('')}
             </tbody>
           </table></div>
           <div class="empty" data-k="none" hidden>ไม่พบรายการที่ตรงกับการค้นหา</div>
         </section>
+        ${showDiscontinued ? discontinuedHtml() : ''}
         <p class="muted" style="font-size:12px">ทุกรายการที่นับควรมีรูปประกอบการนับ (โหมดนับด้วยมือถือบังคับถ่ายรูปทุกครั้งที่บันทึก) · รูปย่อให้ดูเต็มจอได้ชัด และลบอัตโนมัติเมื่อครบ 30 วัน<br>กรอกเฉพาะรายการที่นับ ช่องที่เว้นว่างถือว่าไม่ได้นับ · กด <b>บันทึก</b> ท้ายแถว (หรือ Enter) เพื่อบันทึกทีละรายการแล้วไปช่องถัดไป · สินค้าที่ขายหมดแล้วไม่มีของให้นับ กดปุ่ม <b>หมด (0)</b> เพื่อบันทึกว่านับได้ 0 ระบบจะไม่ปรับสต๊อกรายการนั้น (ลบตัวเลขออกเพื่อยกเลิกการนับรายการนั้น)<br>เมื่อพบผลต่าง ระบบจะส่งรายงานให้ผู้จัดการร้านและครูที่ปรึกษาอนุมัติก่อนปรับสต๊อก</p>
         <div class="actions-row">
           ${current.status === 'draft' ? `
@@ -157,6 +168,11 @@ export async function render(container, { permissions }) {
             container.querySelectorAll('[data-show]').forEach((x) => x.classList.toggle('active', x === b));
             applyFilter();
         }));
+        container.querySelector('#cnt-consigned').addEventListener('change', (e) => { consignedOnly = e.target.checked; applyFilter(); });
+        container.querySelector('#cnt-discontinued').addEventListener('change', (e) => toggleDiscontinued(e.target.checked));
+        container.querySelectorAll('[data-return-all]').forEach((b) => b.addEventListener('click', () => returnAll(items[Number(b.dataset.returnAll)])));
+        container.querySelectorAll('[data-discontinue]').forEach((b) => b.addEventListener('click', () => discontinue(items[Number(b.dataset.discontinue)])));
+        container.querySelectorAll('[data-restore]').forEach((b) => b.addEventListener('click', () => restore(discontinued[Number(b.dataset.restore)])));
         applyFilter();
         // Sold out: nothing on the shelf to scan, so record a count of 0 in one click.
         container.querySelectorAll('[data-zero]').forEach((b) => b.addEventListener('click', () => {
@@ -186,11 +202,16 @@ export async function render(container, { permissions }) {
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
     }
 
-    /** Search words (name, consignor, barcode) and the chosen tab. */
-    function matches(it) {
+    function matchesWords(it) {
         const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
         const text = [it.name, it.consignor_name, it.barcode].join(' ').toLowerCase();
-        if (!words.every((w) => text.includes(w))) return false;
+        return words.every((w) => text.includes(w));
+    }
+
+    /** Search words (name, consignor, barcode), consigned goods only if asked, and the chosen tab. */
+    function matches(it) {
+        if (!matchesWords(it)) return false;
+        if (consignedOnly && !it.consignor_id) return false;
         if (show === 'todo') return counted(it) === null;
         if (show === 'done') return counted(it) !== null;
         if (show === 'diff') return !!diffOf(it);
@@ -210,6 +231,89 @@ export async function render(container, { permissions }) {
         if (lbl) lbl.textContent = n === items.length ? `${n} รายการ` : `แสดง ${n} จาก ${items.length} รายการ`;
         const none = container.querySelector('[data-k="none"]');
         if (none) none.hidden = n > 0;
+        container.querySelectorAll('tr[data-disc]').forEach((tr) => {
+            tr.hidden = !matchesWords(discontinued[Number(tr.dataset.disc)]);
+        });
+    }
+
+    /** Admin, consigned goods: hand everything back while there is stock, then discontinue. */
+    function manageHtml(it, i) {
+        if (!it.consignor_id) return '';
+        return Number(it.system_qty) > 0
+            ? `<button type="button" class="btn secondary sm" data-return-all="${i}" title="คืนสินค้าทุกชิ้นให้ผู้ฝาก ปรับยอดเป็น 0 พร้อมออกใบคืนสินค้า">↩ คืนทุกชิ้น</button>`
+            : `<button type="button" class="btn secondary sm" data-discontinue="${i}" title="ผู้ฝากไม่นำมาขายแล้ว: ไม่แสดงในหน้าตรวจนับและหน้าขาย จนกว่าจะรับฝากอีกครั้ง">เลิกจำหน่าย</button>`;
+    }
+
+    function discontinuedHtml() {
+        return `
+        <section class="card">
+          <div class="card-pad"><b>สินค้าที่เลิกจำหน่าย (${discontinued.length})</b></div>
+          ${discontinued.length ? `<div class="table-wrap"><table>
+            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th>บาร์โค้ด</th><th class="num">คงเหลือ</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+            <tbody>${discontinued.map((p, i) => `<tr data-disc="${i}">
+              <td>${escapeHtml(p.name)}</td><td class="muted">${escapeHtml(p.consignor_name)}</td><td class="muted">${escapeHtml(p.barcode || '-')}</td>
+              <td class="num">${Number(p.qty_stock)}</td>
+              ${isAdmin ? `<td><button type="button" class="btn secondary sm" data-restore="${i}">กลับมาจำหน่าย</button></td>` : ''}
+            </tr>`).join('')}</tbody>
+          </table></div>` : '<div class="empty">ไม่มีสินค้าที่เลิกจำหน่าย</div>'}
+        </section>`;
+    }
+
+    async function toggleDiscontinued(on) {
+        showDiscontinued = on;
+        try {
+            if (on) discontinued = (await api.get('/stockcounts/discontinued')).data;
+            error = null;
+        } catch (e) {
+            error = e.message;
+        }
+        draw();
+    }
+
+    /** Loads the round again; numbers typed in lines other than `except` stay on screen unsaved. */
+    async function reloadKeepingTyped(except) {
+        const pending = new Map(items.filter((x) => x !== except && x._pendingCounted !== undefined).map((x) => [x.id, x._pendingCounted]));
+        const res = await api.get(`/stockcounts/${current.id}`);
+        current = res.data.stock_count;
+        items = res.data.items.map((x) => (pending.has(x.id) ? { ...x, _pendingCounted: pending.get(x.id) } : x));
+        if (showDiscontinued) discontinued = (await api.get('/stockcounts/discontinued')).data;
+    }
+
+    /** Runs an action on a line, then shows the round as it is now. */
+    async function act(it, run) {
+        try {
+            notice = await run();
+            error = null;
+            await reloadKeepingTyped(it);
+        } catch (e) {
+            notice = null;
+            error = e.message;
+        }
+        draw();
+    }
+
+    async function returnAll(it) {
+        const qty = Number(it.system_qty);
+        if (!(await confirmDialog(`ระบบจะออกใบคืนสินค้าและปรับยอด "${it.name}" เป็น 0 ชิ้น โดยถือว่าคืนให้ ${it.consignor_name} แล้ว ยกเลิกภายหลังได้จากประวัติใบคืนสินค้า`, { title: `คืนสินค้าทุกชิ้น (${qty} ชิ้น)?`, okText: 'คืนทุกชิ้น', cancelText: 'ไม่คืน', danger: true }))) return;
+        await act(it, async () => {
+            const res = await api.post(`/products/${it.product_id}/return-all`);
+            return `คืน "${it.name}" ${res.data.total_qty} ชิ้นให้ ${it.consignor_name} แล้ว (ใบคืน ${res.data.doc_no}) ยอดคงเหลือเป็น 0`;
+        });
+    }
+
+    async function discontinue(it) {
+        if (!(await confirmDialog(`"${it.name}" จะไม่แสดงในหน้าตรวจนับและหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับฝากสินค้านี้อีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        await act(it, async () => {
+            await api.post(`/products/${it.product_id}/discontinued`, { discontinued: true });
+            return `ตั้ง "${it.name}" เป็นเลิกจำหน่ายแล้ว`;
+        });
+    }
+
+    async function restore(p) {
+        await act(null, async () => {
+            await api.post(`/products/${p.id}/discontinued`, { discontinued: false });
+            return `"${p.name}" กลับมาจำหน่ายแล้ว`;
+        });
     }
 
     const savedCount = (it) => (it.counted_qty === null || it.counted_qty === undefined ? null : Number(it.counted_qty));
@@ -232,11 +336,9 @@ export async function render(container, { permissions }) {
             if (b) { b.disabled = true; b.textContent = 'กำลังบันทึก…'; }
             try {
                 await api.post(`/stockcounts/${current.id}/counts`, { items: [{ item_id: it.id, counted_qty: counted(it) }] });
-                const res = await api.get(`/stockcounts/${current.id}`);
-                const pending = new Map(items.filter((x) => x !== it && x._pendingCounted !== undefined).map((x) => [x.id, x._pendingCounted]));
-                current = res.data.stock_count;
-                items = res.data.items.map((x) => (pending.has(x.id) ? { ...x, _pendingCounted: pending.get(x.id) } : x));
+                await reloadKeepingTyped(it);
                 error = null;
+                notice = null;
             } catch (e) {
                 error = e.message;
             }

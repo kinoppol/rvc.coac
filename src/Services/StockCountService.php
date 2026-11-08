@@ -33,6 +33,7 @@ class StockCountService
             foreach ($products as $p) {
                 $itemStmt->execute([$countId, $p['id'], $p['qty_stock']]);
             }
+            $this->addConsignedLines($countId);
 
             $this->db->commit();
             return $countId;
@@ -89,6 +90,83 @@ class StockCountService
             } else {
                 $add->execute([$round, $productId, $note]);
             }
+        }
+    }
+
+    /**
+     * A draft round lists every consigned product still on sale, even sold out, so the count can
+     * find one that is on the shelf though the system says none. Discontinued ones stay out
+     * unless they somehow hold stock.
+     */
+    public function addConsignedLines(int $stockCountId): void
+    {
+        $onSale = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')
+            ? 'AND (p.discontinued_at IS NULL OR p.qty_stock > 0)' : '';
+        $this->db->prepare(
+            "INSERT INTO stock_count_items (stock_count_id, product_id, system_qty)
+             SELECT sc.id, p.id, p.qty_stock
+             FROM stock_counts sc
+             JOIN products p ON p.consignor_id IS NOT NULL {$onSale}
+             WHERE sc.id = ? AND sc.status = 'draft'
+               AND NOT EXISTS (SELECT 1 FROM stock_count_items x WHERE x.stock_count_id = sc.id AND x.product_id = p.id)"
+        )->execute([$stockCountId]);
+    }
+
+    /** Consigned products marked as discontinued, for showing them on request. */
+    public function discontinued(): array
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')) {
+            return [];
+        }
+        return $this->db->query(
+            'SELECT p.id, p.name, p.barcode, p.qty_stock, p.discontinued_at, c.name AS consignor_name
+             FROM products p JOIN consignors c ON c.id = p.consignor_id
+             WHERE p.discontinued_at IS NOT NULL ORDER BY p.name ASC'
+        )->fetchAll();
+    }
+
+    /**
+     * Marks a consigned product as discontinued, or back on sale. Goods still held must be
+     * sold or returned first. Its lines in open rounds go, unless they carry a difference.
+     */
+    public function setDiscontinued(int $productId, bool $discontinued, int $userId, ?string $ip): void
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')) {
+            throw new \RuntimeException('ยังตั้งเลิกจำหน่ายไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0067) ก่อน');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT id, name, consignor_id, qty_stock, discontinued_at FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$productId]);
+            $product = $stmt->fetch();
+            if (!$product || $product['consignor_id'] === null) {
+                throw new \RuntimeException('ไม่พบสินค้าฝากขายรายการนี้');
+            }
+            if ($discontinued) {
+                if ((int) $product['qty_stock'] > 0) {
+                    throw new \RuntimeException("\"{$product['name']}\" ยังเหลือ {$product['qty_stock']} ชิ้น ส่งคืนผู้ฝากหรือขายให้หมดก่อนจึงตั้งเลิกจำหน่ายได้");
+                }
+                $open = "SELECT sci.id FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                         WHERE sci.product_id = ? AND sc.status IN ('draft','submitted')";
+                $stmt = $this->db->prepare($open . ' AND sci.diff_qty <> 0 LIMIT 1');
+                $stmt->execute([$productId]);
+                if ($stmt->fetchColumn()) {
+                    throw new \RuntimeException("\"{$product['name']}\" มีผลต่างในรอบตรวจนับที่เปิดอยู่ ลบจำนวนที่นับออกหรือปิดรอบก่อนจึงตั้งเลิกจำหน่ายได้");
+                }
+                $stmt = $this->db->prepare($open);
+                $stmt->execute([$productId]);
+                $del = $this->db->prepare('DELETE FROM stock_count_items WHERE id = ?');
+                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $lineId) {
+                    $del->execute([$lineId]);
+                }
+            }
+            $this->db->prepare('UPDATE products SET discontinued_at = ' . ($discontinued ? 'NOW()' : 'NULL') . ', updated_at = NOW() WHERE id = ?')
+                ->execute([$productId]);
+            $this->audit->log('products', $productId, 'update', ['discontinued' => $product['discontinued_at'] !== null], ['discontinued' => $discontinued], $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
         }
     }
 

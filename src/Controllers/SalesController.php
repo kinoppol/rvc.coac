@@ -55,6 +55,10 @@ class SalesController
             $stock = 'p.qty_stock < 1';
             $all = false;
         }
+        // Discontinued and out of stock: not for sale, even where selling below 1 is allowed.
+        if (Db::hasColumn($db, 'products', 'discontinued_at')) {
+            $stock = "({$stock}) AND (p.discontinued_at IS NULL OR p.qty_stock > 0)";
+        }
         $stmt = $db->prepare(
             "SELECT p.id, p.name, p.barcode, p.sale_price, p.qty_stock, p.image_token, p.consignor_id,
                     COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name, COALESCE(s.sold, 0) AS sold_qty

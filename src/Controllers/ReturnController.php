@@ -59,6 +59,21 @@ class ReturnController
         return $this->json($response, ['data' => $doc]);
     }
 
+    /** Admin only: every piece of one consigned product goes back to its consignor. */
+    public function returnAll(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        try {
+            $result = self::service(Db::connection())->returnAll((int) $args['id'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result], 201);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();

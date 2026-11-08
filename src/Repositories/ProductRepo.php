@@ -860,8 +860,10 @@ class ProductRepo
     public function addStock(int $productId, int $qty, ?int $userId, ?string $ip): void
     {
         $old = $this->find($productId);
+        // Goods received again: a discontinued product is back on sale.
+        $backOnSale = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? 'discontinued_at = NULL, ' : '';
         $stmt = $this->db->prepare(
-            'UPDATE products SET qty_received = qty_received + ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?'
+            "UPDATE products SET {$backOnSale}qty_received = qty_received + ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?"
         );
         $stmt->execute([$qty, $qty, $productId]);
         $this->audit->log('products', $productId, 'update', $old, $this->find($productId), $userId, $ip);
