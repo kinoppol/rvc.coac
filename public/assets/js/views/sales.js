@@ -601,6 +601,35 @@ export async function render(container, { user } = {}) {
     }
 
     /**
+     * After adding to the cart: the product list keeps its drawing and only this product's tile changes,
+     * so a run of scans stays quick on a slow machine. A list filtered by other words is drawn anew.
+     */
+    function drawAfterAdd(p) {
+        drawHours();
+        drawDrawerBar();
+        drawShortBar();
+        drawCart();
+        drawSearchButtons();
+        if (listTerm() !== drawnTerm) drawProducts();
+        else drawPickedTile(p);
+    }
+
+    function drawPickedTile(p) {
+        const tile = el('products').querySelector(`[data-pick="${p.id}"]`);
+        if (!tile) return;
+        const n = inCart(p.id);
+        tile.classList.toggle('picked', n > 0);
+        tile.querySelector('.pos-tile-meta span, .pos-row-stock').textContent = `เหลือ ${p.qty_stock - n}`;
+        let badge = tile.querySelector('.pos-tile-badge');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'pos-tile-badge';
+            tile.append(badge);
+        }
+        badge.textContent = n;
+    }
+
+    /**
      * One more piece, or with pack one more whole pack at the pack price. A pack takes in the loose pieces
      * of the same product already in the cart (1 piece then "ยกแพ็ค" = 1 pack, not 1 piece + 1 pack).
      */
@@ -627,7 +656,7 @@ export async function render(container, { user } = {}) {
         }
         play(short ? 'warn' : size > 1 ? 'pack' : 'scan');
         message(short ? `${p.name}: คงเหลือในระบบ ${p.qty_stock} ชิ้น ขายได้ แต่สต๊อกจะติดลบ ควรตรวจนับ/บันทึกรับสินค้าภายหลัง` : '', 'warn');
-        redraw();
+        drawAfterAdd(p);
         const idx = cart.findIndex((c) => c.id === p.id && lineSize(c) === size);
         el('cart').children[idx]?.scrollIntoView({ block: 'nearest' });
     }
