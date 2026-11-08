@@ -8,6 +8,7 @@ use App\Repositories\ConsignorRepo;
 use App\Repositories\ProductRepo;
 use App\Services\AuditLogger;
 use App\Services\ConsignorImporter;
+use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -97,6 +98,34 @@ class ConsignorController
             'data' => $consignor,
             'products' => $productRepo->forConsignor((int) $args['id']),
         ]);
+    }
+
+    /** Admin only: brings the balance to 0 and keeps the reason in the passbook (body: expected_balance, reason). */
+    public function adjustBalance(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        if (!isset($body['expected_balance']) || !is_numeric($body['expected_balance'])) {
+            return $this->error($response, 'ข้อมูลไม่ถูกต้อง', 422);
+        }
+        $db = Db::connection();
+        try {
+            $result = (new LedgerService($db))->adjustToZero(
+                (int) $args['id'],
+                (float) $body['expected_balance'],
+                (string) ($body['reason'] ?? ''),
+                new DocumentNumberService($db),
+                new AuditLogger($db),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
     }
 
     public function passbook(Request $request, Response $response, array $args): Response

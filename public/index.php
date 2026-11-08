@@ -254,6 +254,7 @@ $app->group('/api', function ($group) {
     $group->get('/consignors/{id}/passbook', [ConsignorController::class, 'passbook']);
     $group->post('/consignors', [ConsignorController::class, 'store'])
         ->add(new RoleGuard('consignors.create'));
+    $group->post('/consignors/{id:[0-9]+}/adjust-balance', [ConsignorController::class, 'adjustBalance']);
 
     $group->get('/products/barcode/{code}', [ReceiveController::class, 'lookupBarcode']);
     $group->post('/receive/quote', [ReceiveController::class, 'quote']);

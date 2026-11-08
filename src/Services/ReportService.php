@@ -31,7 +31,7 @@ class ReportService
         'unknown_method' => 'ไม่ทราบวิธีชำระ (นำเข้า)', 'transfer_all' => 'เงินโอน (โอนเข้าบัญชี + QR-Code)',
         'pos_import_value' => 'นำเข้าจาก POS (ไม่แยกวิธีชำระ)', 'no_method' => 'ไม่ได้บันทึกวิธีชำระ', 'non_cash' => 'ไม่ใช่เงินสด', 'opening_cash' => 'เงินตั้งต้น', 'cash_sales' => 'เงินสดจากการขาย',
         'expected_cash' => 'เงินที่ควรมี', 'counted_cash' => 'นับได้ตอนปิด', 'cash_diff' => 'ขาด(−)/เกิน(+)', 'open_status' => 'ระบุเงินตั้งต้น',
-        'paid_value' => 'จ่ายเงินแล้ว', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
+        'paid_value' => 'จ่ายเงินแล้ว', 'adjust_value' => 'ปรับยอด', 'opening_balance' => 'ยอดยกมา', 'fee_value' => 'ค่าฝาก/ค่าทำข้อมูล', 'closing_balance' => 'คงเหลือค้างจ่าย',
         'diff_value' => 'มูลค่าสินค้าขาด (ราคาขาย)', 'section' => 'หมวด', 'amount' => 'ช่วงที่เลือก (บาท)',
         'prev_amount' => 'ช่วงก่อนหน้า (บาท)', 'change_percent' => 'เปลี่ยนแปลง (%)', 'prev_period' => 'ช่วงก่อนหน้า', 'note' => 'หมายเหตุ / คำอธิบาย', 'investor' => 'ผู้ลงทุน / แหล่งเงินทุน', 'invested' => 'ลงทุนเพิ่ม',
         'withdrawn' => 'ถอนทุนคืน', 'capital_balance' => 'งบลงทุนคงเหลือ', 'capital_purchases' => 'ซื้อของด้วยเงินลงทุน',
@@ -861,13 +861,14 @@ class ReportService
                                       WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'listing_fee_refund' THEN -l.amount_in END), 0) AS fee_value,
                     COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'withdrawal' THEN l.amount_out
                                       WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'withdrawal_cancel' THEN -l.amount_in END), 0) AS paid_value,
+                    COALESCE(SUM(CASE WHEN l.entry_date BETWEEN ? AND ? AND l.type = 'adjust' THEN l.amount_in - l.amount_out END), 0) AS adjust_value,
                     COALESCE(SUM(CASE WHEN l.entry_date <= ? THEN l.amount_in - l.amount_out END), 0) AS closing_balance
              FROM consignors c LEFT JOIN ledger_entries l ON l.consignor_id = c.id
              GROUP BY c.id, c.code, c.name
-             HAVING opening_balance <> 0 OR sales_value <> 0 OR paid_value <> 0 OR closing_balance <> 0
+             HAVING opening_balance <> 0 OR sales_value <> 0 OR paid_value <> 0 OR adjust_value <> 0 OR closing_balance <> 0
              ORDER BY c.code"
         );
-        $stmt->execute([$from, $from, $to, $from, $to, $from, $to, $from, $to, $from, $to, $to]);
+        $stmt->execute([$from, $from, $to, $from, $to, $from, $to, $from, $to, $from, $to, $from, $to, $to]);
         return $stmt->fetchAll();
     }
 

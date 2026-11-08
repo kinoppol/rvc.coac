@@ -1,8 +1,10 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { skBlock } from '../skeleton.js';
+import { promptDialog } from '../dialog.js';
 
-export async function render(container, { navigate, permissions }) {
+export async function render(container, { navigate, permissions, user }) {
+    const isAdmin = user?.role === 'admin';
     let showForm = false;
     let showImport = false;
     let q = '';
@@ -51,7 +53,10 @@ export async function render(container, { navigate, permissions }) {
                   <td class="num">${money(c.sold_total)}</td>
                   <td class="num" style="font-weight:600">${money(c.balance)}</td>
                   <td><span class="pill ${c.status === 'active' ? 'ok' : 'warn'}">${c.status === 'active' ? 'ปกติ' : 'รอตรวจสอบเอกสาร'}</span></td>
-                  <td style="text-align:right"><button type="button" class="btn secondary sm" data-passbook="${c.id}">สมุดบัญชี</button></td>
+                  <td style="text-align:right;white-space:nowrap">
+                    ${isAdmin && Math.abs(Number(c.balance)) >= 0.005 ? `<button type="button" class="btn secondary sm" data-adjust="${c.id}" title="ปรับยอดเงินคงเหลือเป็น 0 พร้อมบันทึกเหตุผลในสมุดบัญชี">ปรับยอดเป็น 0</button>` : ''}
+                    <button type="button" class="btn secondary sm" data-passbook="${c.id}">สมุดบัญชี</button>
+                  </td>
                 </tr>
               `).join('') || `<tr><td colspan="8" class="empty">ยังไม่มีผู้ฝากขาย</td></tr>`}
             </tbody>
@@ -77,8 +82,37 @@ export async function render(container, { navigate, permissions }) {
         container.querySelectorAll('[data-passbook]').forEach((btn) => {
             btn.addEventListener('click', () => navigate('passbook', { id: btn.dataset.passbook }));
         });
+        container.querySelectorAll('[data-adjust]').forEach((btn) => {
+            btn.addEventListener('click', () => adjustBalance(rows.find((c) => String(c.id) === btn.dataset.adjust)));
+        });
         if (showForm) wireForm();
         if (showImport) wireImport();
+    }
+
+    /** Admin: the balance goes to 0 with a passbook entry that keeps the reason; no money moves. */
+    async function adjustBalance(c) {
+        const balance = Number(c.balance);
+        const reason = await promptDialog(
+            `ยอดเงินคงเหลือ ${money(balance)} บาท จะเป็น 0 โดยไม่มีการรับหรือจ่ายเงินจริง และไม่นับเป็นการจ่ายเงินผู้ฝาก เหตุผลจะแสดงในสมุดบัญชีของผู้ฝากเพื่อการตรวจสอบบัญชี รายการนี้ลบหรือแก้ไขภายหลังไม่ได้`,
+            {
+                title: `ปรับยอด ${c.code} ${c.name} เป็น 0`,
+                okText: 'ปรับยอดเป็น 0',
+                cancelText: 'ไม่ปรับ',
+                placeholder: 'เหตุผลของยอดที่ปรับ เช่น จ่ายเงินครบแล้วในช่วงทดสอบระบบ แต่บันทึกการเบิกจ่ายไม่ได้',
+                required: true,
+                multiline: true,
+                danger: true,
+                strict: true,
+            },
+        );
+        if (reason === null || reason === undefined || reason === false) return;
+        try {
+            const res = await api.post(`/consignors/${c.id}/adjust-balance`, { expected_balance: balance, reason });
+            notice = { ok: true, text: `ปรับยอด ${c.name} จาก ${money(balance)} เป็น 0.00 บาทแล้ว (เลขอ้างอิง ${res.data.ref_no})` };
+        } catch (err) {
+            notice = { ok: false, text: err.message };
+        }
+        await load();
     }
 
     const TYPE_LABEL = { staff: 'ครู / บุคลากร', student: 'นักเรียน / นักศึกษา' };
