@@ -107,6 +107,10 @@ export async function render(container, { user } = {}) {
     let drawTimer;
     let lastKeyAt = 0;
     let burst = 0;
+    // Digits alone are most likely a barcode, which names one product or none, so the list isn't
+    // filtered until there are 13 of them, a letter joins in, or the cashier asks to search.
+    let searched = ''; // the digits the cashier asked to search (Enter / the search button)
+    let drawnTerm = ''; // the term the product list on screen was filtered by
     let firstLoad = null; // the opening product load; a scan that comes before it waits for it
     let loaded = false;
 
@@ -119,6 +123,7 @@ export async function render(container, { user } = {}) {
           <label class="pos-search">
             <span aria-hidden="true">🔍</span>
             <input data-el="q" data-osk="manual" placeholder="สแกนบาร์โค้ด หรือพิมพ์ชื่อสินค้า" autocomplete="off" enterkeyhint="search" spellcheck="false">
+            <button type="button" class="pos-search-go" data-act="search-q" hidden>ค้นหา</button>
             <button type="button" class="pos-icon-btn" data-act="clear-q" aria-label="ล้างคำค้น" hidden>✕</button>
           </label>
           ${TOUCH ? '<button type="button" class="pos-tool" data-act="kb" aria-label="แป้นพิมพ์บนจอ" title="แป้นพิมพ์บนจอ">⌨</button>' : ''}
@@ -225,8 +230,28 @@ export async function render(container, { user } = {}) {
         thumbing.delete(p.id);
     }
 
+    /** Digits still waiting: fewer than 13 and not yet searched for. */
+    function digitsHeld() {
+        const v = q.value.trim();
+        return /^\d{1,12}$/.test(v) && v !== searched;
+    }
+
+    /** What the product list filters by; digits still waiting leave it unfiltered. */
+    function listTerm() {
+        return digitsHeld() ? '' : q.value.trim().toLowerCase();
+    }
+
+    function drawSearchButtons() {
+        root.querySelector('[data-act="clear-q"]').hidden = !q.value;
+        root.querySelector('[data-act="search-q"]').hidden = !digitsHeld();
+    }
+
+    function drawProductsIfTermChanged() {
+        if (listTerm() !== drawnTerm) drawProducts();
+    }
+
     function matches() {
-        const term = q.value.trim().toLowerCase();
+        const term = listTerm();
         const inGroup = GROUP_FN[group] || GROUP_FN.all;
         const list = products.filter((p) => inGroup(p)
             && (!term || p.name.toLowerCase().includes(term) || (p.barcode || '').includes(term)));
@@ -296,12 +321,13 @@ export async function render(container, { user } = {}) {
 
     function drawProducts() {
         drawDropdowns();
-        root.querySelector('[data-act="clear-q"]').hidden = !q.value;
+        drawSearchButtons();
+        drawnTerm = listTerm();
         const list = matches();
         const box = el('products');
         box.removeAttribute('aria-busy');
         if (!list.length) {
-            const term = q.value.trim();
+            const term = drawnTerm ? q.value.trim() : '';
             box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : group !== 'all' ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
             if (term && !allowShort()) {
                 if (outHints.term !== term) {
@@ -611,6 +637,7 @@ export async function render(container, { user } = {}) {
         clearTimeout(drawTimer);
         const code = q.value.trim();
         if (!code) { seeking(null); return; }
+        searched = code;
         message('');
         seeking(code);
         try {
@@ -645,12 +672,20 @@ export async function render(container, { user } = {}) {
         }
         if (!p) {
             drawProducts();
+            // Several matches is a result, not a mistake: the list now shows them to pick from.
+            const found = matches().length;
+            if (found > 1) {
+                message(`พบสินค้า ${found} รายการ แตะเลือกสินค้าที่ต้องการ`, 'warn');
+                return;
+            }
             play('error');
-            message(/^\d{4,}$/.test(code) ? `ไม่พบสินค้าบาร์โค้ด ${code} (หรือสินค้าหมด)` : `พบสินค้าหลายรายการ แตะเลือกสินค้าที่ต้องการ`, 'error');
-            if (/^\d{4,}$/.test(code)) q.select();
+            const isCode = /^\d{4,}$/.test(code);
+            message(isCode ? `ไม่พบสินค้าบาร์โค้ด ${code} (หรือสินค้าหมด)` : `ไม่พบสินค้า "${code}"`, 'error');
+            if (isCode) q.select();
             return;
         }
         q.value = '';
+        searched = '';
         add(p, pack);
     }
 
@@ -909,6 +944,8 @@ export async function render(container, { user } = {}) {
 
     on(q, 'input', () => {
         message('');
+        if (searched && q.value.trim() !== searched) searched = '';
+        drawSearchButtons();
         const now = performance.now();
         burst = now - lastKeyAt < 35 ? burst + 1 : 0;
         lastKeyAt = now;
@@ -916,10 +953,10 @@ export async function render(container, { user } = {}) {
         if (burst >= 3) {
             // Keys this fast come from a scanner: show the search screen and wait for its Enter.
             seeking(q.value.trim());
-            drawTimer = setTimeout(() => { seeking(null); drawProducts(); }, 400);
+            drawTimer = setTimeout(() => { seeking(null); drawProductsIfTermChanged(); }, 400);
             return;
         }
-        drawTimer = setTimeout(drawProducts, q.value ? 120 : 0);
+        drawTimer = setTimeout(drawProductsIfTermChanged, q.value ? 120 : 0);
     });
     on(q, 'keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); submitSearch(); }
@@ -1012,6 +1049,8 @@ export async function render(container, { user } = {}) {
                 cart.splice(Number(t.dataset.remove), 1);
                 play('remove');
                 redraw();
+            } else if (t.dataset.act === 'search-q') {
+                submitSearch();
             } else if (t.dataset.act === 'clear-q') {
                 q.value = '';
                 drawProducts();
