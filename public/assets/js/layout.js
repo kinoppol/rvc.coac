@@ -23,6 +23,7 @@ const ICONS = {
     consignors: svg('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>'),
     passbook: svg('<path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"></path><path d="M8 3v18"></path>'),
     withdraw: svg('<rect x="2" y="6" width="20" height="12" rx="2"></rect><circle cx="12" cy="12" r="2.5"></circle><path d="M6 12h.01M18 12h.01"></path>'),
+    holds: svg('<path d="M3 10 12 4l9 6"></path><path d="M5 10v8M10 10v8M14 10v8M19 10v8"></path><path d="M3 21h18"></path>'),
     myrequests: svg('<path d="m22 2-7 20-4-9-9-4z"></path><path d="M22 2 11 13"></path>'),
     mypassbook: svg('<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path>'),
     myproducts: svg('<path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42z"></path><circle cx="7.5" cy="7.5" r="1.2"></circle>'),
@@ -58,6 +59,7 @@ const PAGES = [
         { key: 'consignors', label: 'ทะเบียนผู้ฝากขาย', perm: 'consignors.view' },
         { key: 'passbook', label: 'สมุดบัญชีผู้ฝาก', perm: 'passbook.view' },
         { key: 'withdraw', label: 'เบิก / จ่ายเงิน', perm: 'withdraw.create' },
+        { key: 'holds', label: 'บัญชีเพื่อผู้ฝากขาย', perm: 'hold.manage' },
     ]},
     { group: 'ผู้ฝากขาย (ของฉัน)', items: [
         { key: 'myrequests', label: 'แจ้งฝากสินค้า', perm: 'consignor.portal' },
@@ -93,6 +95,7 @@ const PAGE_TITLES = {
     consignors: ['ผู้ฝากขาย', 'ทะเบียนผู้ฝากขาย'],
     passbook: ['ผู้ฝากขาย', 'สมุดบัญชีผู้ฝากขาย'],
     withdraw: ['ผู้ฝากขาย', 'เบิกเงิน / จ่ายเงินผู้ฝากขาย'],
+    holds: ['ผู้ฝากขาย', 'บัญชีเพื่อผู้ฝากขาย'],
     myrequests: ['ผู้ฝากขาย', 'แจ้งฝากสินค้า'],
     mypassbook: ['ผู้ฝากขาย', 'สมุดบัญชีของฉัน'],
     myproducts: ['ผู้ฝากขาย', 'สินค้าที่ฉันฝากขาย'],

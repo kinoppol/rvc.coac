@@ -15,6 +15,7 @@ use App\Controllers\AuditController;
 use App\Controllers\AuthController;
 use App\Controllers\BackupController;
 use App\Controllers\ConsignorController;
+use App\Controllers\ConsignorHoldController;
 use App\Controllers\DashboardController;
 use App\Controllers\DeviceAdminController;
 use App\Controllers\DeviceController;
@@ -397,6 +398,17 @@ $app->group('/api', function ($group) {
     $group->post('/withdrawals/{id}/approve', [WithdrawController::class, 'approve'])
         ->add(new RoleGuard('withdraw.approve'));
     $group->post('/withdrawals/{id:[0-9]+}/cancel', [WithdrawController::class, 'cancel']);
+
+    $group->get('/holds', [ConsignorHoldController::class, 'index'])
+        ->add(new RoleGuard('hold.manage'));
+    $group->get('/holds/expected', [ConsignorHoldController::class, 'expected'])
+        ->add(new RoleGuard('hold.manage'));
+    $group->post('/holds/payouts', [ConsignorHoldController::class, 'pay'])
+        ->add(new RoleGuard('hold.manage'));
+    $group->post('/holds/payouts/{id:[0-9]+}/cancel', [ConsignorHoldController::class, 'cancelPayout'])
+        ->add(new RoleGuard('hold.manage'));
+    $group->post('/holds/checks', [ConsignorHoldController::class, 'check'])
+        ->add(new RoleGuard('hold.manage'));
 
     $group->get('/stockcounts', [StockCountController::class, 'index']);
     $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);

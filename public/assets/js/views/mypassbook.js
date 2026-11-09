@@ -115,7 +115,7 @@ function periodHtml(view, p, open) {
 
 /** Consignor view: the signed-in person's own passbook (read-only). */
 export async function render(container) {
-    const { consignor, entries, balance, sales = [] } = await api.get('/my/passbook');
+    const { consignor, entries, balance, held = 0, sales = [] } = await api.get('/my/passbook');
     const totalIn = entries.reduce((s, e) => s + Number(e.amount_in), 0);
     const totalOut = entries.reduce((s, e) => s + Number(e.amount_out), 0);
     let view = 'month';
@@ -165,6 +165,11 @@ export async function render(container) {
       <section class="card card-pad" style="text-align:center">
         <div class="muted" style="font-size:12.5px">ยอดคงเหลือที่เบิกได้</div>
         <div style="font-size:30px;font-weight:700;margin:8px 0">฿ ${money(balance)}</div>
+        ${held ? `<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:12px">
+          <div class="muted" style="font-size:12.5px">เงินที่ร้านพักไว้ให้ รอรับ</div>
+          <div style="font-size:22px;font-weight:700;margin-top:2px">฿ ${money(held)}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px">ขอรับเป็นเงินสด โอนเงิน หรือพร้อมเพย์ ได้ที่ร้านค้าสหการ</div>
+        </div>` : ''}
         <div class="muted" style="font-size:12.5px;margin-bottom:14px">ติดต่อเบิกเงินได้ที่ร้านค้าสหการ</div>
         <button type="button" class="btn secondary" id="btn-print">พิมพ์สมุดคู่ฝาก</button>
       </section>

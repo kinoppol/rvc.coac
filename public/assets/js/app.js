@@ -12,7 +12,7 @@ import { initBarcodeKeys } from './barcode-keys.js';
 const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
     ret: 'return.create', count: 'stockcount.create', consignors: 'consignors.view',
-    passbook: 'passbook.view', withdraw: 'withdraw.create', reports: 'reports.view',
+    passbook: 'passbook.view', withdraw: 'withdraw.create', holds: 'hold.manage', reports: 'reports.view',
     settings: 'settings.view', migrations: 'migrations.manage', security: 'migrations.manage', backup: 'migrations.manage', devices: 'devices.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
     posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage', closing: 'closing.submit',
@@ -25,7 +25,7 @@ const SETTINGS_TABS = ['ai', 'migrations', 'backup', 'security'];
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
     dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', closing: 'report', wages: 'report',
-    capital: 'report', mysales: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report',
+    capital: 'report', mysales: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report', holds: 'report',
     settings: 'form', ai: 'form', receive: 'form', ret: 'form', purchase: 'form',
 };
 

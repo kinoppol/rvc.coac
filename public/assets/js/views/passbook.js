@@ -164,7 +164,7 @@ export async function render(container, { params, user }) {
             </table></div>`;
     }
 
-    function draw({ consignor, entries, balance }) {
+    function draw({ consignor, entries, balance, held = 0 }) {
         const isDay = view !== 'all' && view !== 'daily';
 
         container.innerHTML = `
@@ -191,6 +191,7 @@ export async function render(container, { params, user }) {
           <section class="card card-pad" style="text-align:center">
             <div class="muted" style="font-size:12.5px">ยอดคงเหลือที่เบิกได้</div>
             <div style="font-size:30px;font-weight:700;margin:8px 0">฿ ${money(balance)}</div>
+            ${held ? `<div class="pill" style="margin-bottom:10px">พักไว้ในบัญชีเพื่อผู้ฝากขาย รอจ่าย ฿ ${money(held)}</div>` : ''}
             <div style="width:140px;height:140px;margin:16px auto;background:var(--surface2);border:1px dashed var(--border);border-radius:12px;display:grid;place-items:center;color:var(--muted);font-size:12px">
               QR<br>สแกนดูยอดเอง
             </div>
@@ -204,7 +205,7 @@ export async function render(container, { params, user }) {
             check = null;
             load();
         });
-        const redraw = (v) => { view = v; draw({ consignor, entries, balance }); };
+        const redraw = (v) => { view = v; draw({ consignor, entries, balance, held }); };
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => redraw(b.dataset.view)));
         container.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => redraw(b.dataset.day)));
         container.querySelector('#f-day').addEventListener('change', (e) => redraw(e.target.value || 'all'));

@@ -141,6 +141,7 @@ class ConsignorController
             'consignor' => $consignor,
             'entries' => $ledger->forConsignor((int) $args['id']),
             'balance' => $ledger->balanceOf((int) $args['id']),
+            'held' => (new \App\Services\ConsignorHoldService($db, new AuditLogger($db), new \App\Services\DocumentNumberService($db)))->heldOf((int) $args['id']),
         ]);
     }
 }

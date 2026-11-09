@@ -194,6 +194,7 @@ class ClosingController
             'drawer' => $drawer->fetchColumn() !== false,
             // A consignor payout is dated when it is made, so only today's report can pay one.
             'can_payout' => $date === date('Y-m-d'),
+            'can_hold' => $this->holds($db)->ready(),
             'can_overdraw' => (new UserRepo($db))->hasPermission((string) $request->getAttribute('user')['role'], 'withdraw.approve'),
             'consignors' => $db->query(
                 "SELECT c.id, c.code, c.name, COALESCE((SELECT l.balance_after FROM ledger_entries l WHERE l.consignor_id = c.id ORDER BY l.id DESC LIMIT 1), 0) AS balance
@@ -250,8 +251,11 @@ class ClosingController
         $consignorId = (int) ($body['consignor_id'] ?? 0);
         $amount = round((float) ($body['amount'] ?? 0), 2);
         $method = (string) ($body['method'] ?? 'cash');
-        if (!in_array($method, ['cash', 'promptpay', 'bank_transfer'], true)) {
+        if (!in_array($method, ['cash', 'promptpay', 'bank_transfer', 'hold'], true)) {
             return $this->error($response, 'ช่องทางจ่ายเงินไม่ถูกต้อง', 422);
+        }
+        if ($method === 'hold' && !$this->holds($db)->ready()) {
+            return $this->error($response, 'ยังพักเงินไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0069) ก่อน', 422);
         }
         if (!$consignorId || $amount <= 0) {
             return $this->error($response, 'กรุณาเลือกผู้ฝากขายและระบุจำนวนเงิน', 422);
@@ -299,6 +303,11 @@ class ClosingController
             return $this->error($response, 'ช่วงวันที่ไม่ถูกต้อง', 422);
         }
         return $this->json($response, ['data' => $this->payouts($db)->unpaid((int) ($q['consignor_id'] ?? 0), $from, $to)]);
+    }
+
+    private function holds(\PDO $db): \App\Services\ConsignorHoldService
+    {
+        return new \App\Services\ConsignorHoldService($db, new AuditLogger($db), new DocumentNumberService($db));
     }
 
     private function payouts(\PDO $db): ConsignorPayoutService

@@ -105,7 +105,7 @@ export async function render(container, { permissions, user }) {
                   const [label, cls] = STATUS_LABEL[r.status] || ['-', 'muted'];
                   return `<tr>
                     <td><div style="font-weight:600">${escapeHtml(r.consignor_name)}</div><div class="muted" style="font-size:11.5px">${fmtDateTime(r.requested_at)}</div></td>
-                    <td class="muted">${METHOD_LABEL[r.method] || r.method}</td>
+                    <td class="muted">${r.method === 'hold' ? 'พักในบัญชีเพื่อผู้ฝากขาย' : METHOD_LABEL[r.method] || r.method}</td>
                     <td class="num" style="font-weight:600">${money(r.amount)}</td>
                     <td><span class="pill ${cls}">${label}</span>
                       ${r.status === 'cancelled' && r.cancel_reason ? `<div class="muted" style="font-size:11.5px;margin-top:4px">เหตุผล: ${escapeHtml(r.cancel_reason)}${r.cancelled_by_name ? ` · โดย ${escapeHtml(r.cancelled_by_name)}` : ''}${r.cancelled_at ? ` · ${fmtDateTime(r.cancelled_at)}` : ''}</div>` : ''}</td>

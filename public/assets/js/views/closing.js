@@ -4,7 +4,7 @@ import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 import { printClosingReport, printWageSlip } from '../print-slip.js';
 
 const SKIP_LABEL = { drawer: 'ปิดยอดลิ้นชัก', wages: 'จ่ายค่าแรง', payouts: 'จ่ายเงินผู้ฝากขาย', purchases: 'ซื้อสินค้าเข้าร้าน' };
-const PAY_METHOD = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
+const PAY_METHOD = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร', hold: 'พักเงินในบัญชี' };
 const UNIT = { day: 'วัน', hour: 'ชั่วโมง' };
 
 /**
@@ -331,10 +331,12 @@ export async function render(container, { user, permissions = [] } = {}) {
                         ${w.from_drawer ? '<span class="pill" style="font-size:11.5px">จ่ายจากเงินในลิ้นชักวันนี้</span>' : '<span class="pill ok" style="font-size:11.5px">ไม่ได้ใช้เงินจากลิ้นชักวันนี้</span>'}
                         ${w.flagged_by ? `<span class="muted" style="font-size:11px">ระบุโดย ${escapeHtml(w.flagged_by)}</span>` : ''}
                         ${m.can_submit ? `<button type="button" class="btn sm secondary no-print" data-wdrawer="${w.id}" data-on="${w.from_drawer ? 0 : 1}">${w.from_drawer ? 'ไม่ได้ใช้เงินจากลิ้นชัก' : 'จ่ายจากลิ้นชักวันนี้'}</button>` : ''}
-                      </div>` : ''}</td>
+                      </div>` : ''}
+                      ${w.method === 'hold' ? '<div style="margin-top:3px"><span class="pill" style="font-size:11.5px">ดึงจากลิ้นชักเข้าบัญชีเพื่อผู้ฝากขาย ผู้ฝากขายยังไม่ได้รับเงิน</span></div>' : ''}</td>
                       <td class="num" style="vertical-align:top;${w.from_drawer ? '' : 'color:var(--muted)'}">฿ ${money(w.amount)}</td></tr>`).join('')}
                     ${line('<b>รวม</b>', `<b>฿ ${money(m.payouts.total)}</b>${m.payouts.cash ? ` <span class="muted" style="font-size:11.5px">(เงินสด ฿${money(m.payouts.cash)})</span>` : ''}`)}
                     ${m.payouts.from_drawer ? line('&nbsp;&nbsp;จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="font-size:12px">(หักในข้อ 6)</span>', `฿ ${money(m.payouts.from_drawer)}`) : ''}
+                    ${m.payouts.hold ? line('&nbsp;&nbsp;ในนั้นเป็นเงินพัก <span class="muted" style="font-size:12px">(ส่งผู้จัดการร้านนำเข้าบัญชีเพื่อผู้ฝากขาย)</span>', `฿ ${money(m.payouts.hold)}`) : ''}
                   </tbody></table>
                   ${m.payouts.cash ? '<div class="muted" style="font-size:12px;margin-top:6px">จ่ายเป็นเงินสดถือว่าจ่ายจากเงินในลิ้นชักของวันนั้น ถ้าใช้เงินอื่น กด <b>ไม่ได้ใช้เงินจากลิ้นชัก</b></div>' : ''}` : '<div class="muted">ไม่มีการจ่ายเงินผู้ฝากขายวันนี้</div>'}
                   ${m.payouts.pending_count ? pendingHtml(m) : ''}
@@ -796,13 +798,15 @@ export async function render(container, { user, permissions = [] } = {}) {
           <div data-pf-diff>${payoutDiffHtml(m)}</div>
           ${stockHtml}
           <div class="actions-row" style="margin-top:10px">
-            ${Object.entries(PAY_METHOD).map(([k, v]) => `<button type="button" class="tab-btn ${p.method === k ? 'active' : ''}" data-pf-method="${k}">${v}</button>`).join('')}
+            ${Object.entries(PAY_METHOD).filter(([k]) => k !== 'hold' || o.can_hold).map(([k, v]) => `<button type="button" class="tab-btn ${p.method === k ? 'active' : ''}" data-pf-method="${k}">${v}</button>`).join('')}
           </div>
           ${p.method === 'cash' ? `
           <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:13px;cursor:pointer">
             <input type="checkbox" data-pf="from_drawer" ${p.from_drawer ? 'checked' : ''} style="margin-top:3px">
             <span>จ่ายจากเงินในลิ้นชักวันนี้ <span class="muted" style="display:block;font-size:11.5px;font-weight:400">หักจากเงินสดที่ต้องส่งวิทยาลัย (ข้อ 6) · ไม่ติ๊กถ้าใช้เงินอื่น</span></span>
           </label>` : ''}
+          ${p.method === 'hold' ? `
+          <div class="muted" style="font-size:12px;margin-top:8px">ดึงเงินจากลิ้นชักวันนี้เข้าบัญชีเพื่อผู้ฝากขาย หักจากเงินสดที่ต้องส่งวิทยาลัย (ข้อ 6) · ผู้ฝากขายยังไม่ได้รับเงิน ผู้จัดการร้านจ่ายให้ภายหลังเมื่อผู้ฝากขายร้องขอ</div>` : ''}
           ${m.payError?.kind === 'payouts' ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.payError.msg)}</div>` : ''}
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
             <button type="button" class="btn sm secondary" data-pay-close="payouts">ยกเลิก</button>
@@ -976,7 +980,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         const fromDrawer = p.method === 'cash' && p.from_drawer;
         const names = (id) => d.stock.find((x) => String(x.id) === String(id))?.name || id;
         const ok = await confirmDialog(
-            `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})`
+            `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'hold' ? ' ดึงจากเงินในลิ้นชักวันนี้' : p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})`
             + ` · รายการขาย ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`} ฿${money(sales)}`
             + (differs ? ` · ต่างจากยอดขาย ${signed(amount - sales)}: ${p.reason.trim()}` : '')
             + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}` : '')

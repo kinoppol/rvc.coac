@@ -840,7 +840,7 @@ class ReportService
         $stmt = $this->db->prepare(
             "SELECT DATE(COALESCE(w.paid_at, w.requested_at)) AS date, w.doc_no, c.code AS consignor_code, c.name AS consignor,
                     IF(w.status = 'cancelled', 0, w.amount) AS paid_value,
-                    CASE w.method WHEN 'cash' THEN 'เงินสด' WHEN 'promptpay' THEN 'พร้อมเพย์' ELSE 'โอนเข้าบัญชี' END AS method,
+                    CASE w.method WHEN 'cash' THEN 'เงินสด' WHEN 'promptpay' THEN 'พร้อมเพย์' WHEN 'hold' THEN 'พักในบัญชีเพื่อผู้ฝากขาย' ELSE 'โอนเข้าบัญชี' END AS method,
                     CASE w.status WHEN 'paid' THEN 'จ่ายแล้ว' WHEN 'pending' THEN 'รออนุมัติ' ELSE 'ยกเลิก' END AS status
              FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id
              WHERE DATE(COALESCE(w.paid_at, w.requested_at)) BETWEEN ? AND ?

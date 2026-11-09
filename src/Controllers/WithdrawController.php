@@ -40,6 +40,10 @@ class WithdrawController
         $consignorId = (int) ($body['consignor_id'] ?? 0);
         $amount = (float) ($body['amount'] ?? 0);
         $method = (string) ($body['method'] ?? 'cash');
+        // Holding is done from the daily report, where the drawer it takes from is summed up.
+        if (!in_array($method, ['cash', 'promptpay', 'bank_transfer'], true)) {
+            return $this->error($response, 'ช่องทางจ่ายเงินไม่ถูกต้อง', 422);
+        }
         if (!$consignorId || $amount <= 0) {
             return $this->error($response, 'กรุณาเลือกผู้ฝากขายและระบุจำนวนเงิน', 422);
         }

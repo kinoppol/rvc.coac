@@ -95,9 +95,10 @@ class WithdrawalRepo
             'bank_transfer' => 'โอนธนาคาร',
             default => 'เงินสดที่เคาน์เตอร์',
         };
+        $action = $method === 'hold' ? 'พักเงินในบัญชีเพื่อผู้ฝากขาย' : "เบิกเงิน ({$methodLabel})";
         $description = $overdraw
-            ? mb_substr("เบิกเงินเกินยอด ({$methodLabel}) คิดบัญชีติดลบ: {$overdrawReason}", 0, 255)
-            : "เบิกเงิน ({$methodLabel})";
+            ? mb_substr("{$action} เกินยอด คิดบัญชีติดลบ: {$overdrawReason}", 0, 255)
+            : $action;
         if ($note !== null && $note !== '') {
             $description = mb_substr("{$description} · {$note}", 0, 255);
         }
@@ -147,6 +148,15 @@ class WithdrawalRepo
             if (!$old || !in_array($old['status'], ['pending', 'paid'], true)) {
                 throw new \RuntimeException('ไม่พบรายการเบิกเงินที่ยกเลิกได้');
             }
+            if ($old['method'] === 'hold' && $old['status'] === 'paid') {
+                // Money already handed to the consignor can't go back into the drawer's day.
+                $lock = $this->db->prepare('SELECT id FROM consignors WHERE id = ? FOR UPDATE');
+                $lock->execute([$old['consignor_id']]);
+                $held = (new \App\Services\ConsignorHoldService($this->db, $this->audit, $this->docs))->heldOf((int) $old['consignor_id']);
+                if ((float) $old['amount'] > $held + 0.005) {
+                    throw new \RuntimeException('เงินที่พักไว้ถูกจ่ายให้ผู้ฝากขายไปแล้ว เหลือ ฿' . number_format($held, 2) . ' ให้ยกเลิกการจ่ายเงินในหน้าบัญชีเพื่อผู้ฝากขายก่อน');
+                }
+            }
             try {
                 $this->db->prepare("UPDATE withdrawals SET status = 'cancelled', cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ? WHERE id = ?")
                     ->execute([$userId, $reason, $id]);
@@ -161,7 +171,7 @@ class WithdrawalRepo
                 $this->ledger->append(
                     (int) $old['consignor_id'],
                     'withdrawal_cancel',
-                    mb_substr("ยกเลิกการเบิกเงิน: {$reason}", 0, 255),
+                    mb_substr(($old['method'] === 'hold' ? 'ยกเลิกการพักเงิน' : 'ยกเลิกการเบิกเงิน') . ": {$reason}", 0, 255),
                     $old['doc_no'],
                     (float) $old['amount'],
                     0,

@@ -196,7 +196,7 @@ export function printPurchaseDoc(d) {
     printHtml(html);
 }
 
-const LEDGER_CODE = { open: 'ยกมา', sale: 'ขาย', fee: 'ค่าฝาก', listing_fee: 'ค่าทำข้อมูล', listing_fee_refund: 'คืนค่าข้อมูล', withdrawal: 'เบิกเงิน' };
+const LEDGER_CODE = { open: 'ยกมา', sale: 'ขาย', fee: 'ค่าฝาก', listing_fee: 'ค่าทำข้อมูล', listing_fee_refund: 'คืนค่าข้อมูล', withdrawal: 'เบิกเงิน', hold_release: 'รับเงินที่พัก' };
 
 /** dd/mm/yy in the Buddhist year, like a bank passbook line. */
 function shortDate(s) {
@@ -393,7 +393,7 @@ export function printWageSlip(w, types = {}, methods = {}) {
 }
 
 /** Prints a standalone HTML document through a hidden iframe (no pop-up window to block). */
-const CLOSING_PAY = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร' };
+const CLOSING_PAY = { cash: 'เงินสด', promptpay: 'พร้อมเพย์', bank_transfer: 'โอนธนาคาร', hold: 'พักในบัญชีเพื่อผู้ฝากขาย' };
 
 /**
  * Prints the end-of-day account summary (รายงานสรุปบัญชีประจำวัน) as a plain accounting
@@ -445,7 +445,7 @@ export function printClosingReport(r, { weekday, status, send }) {
         ${row('รวม', n(r.wages.total), 'total')}` : none('ไม่มีการจ่ายค่าแรง'));
 
     const payouts = section('4. การจ่ายเงินค่าสินค้าฝากขาย', r.payouts.rows.length ? `
-        ${r.payouts.rows.map((w) => row(`${escapeHtml(w.consignor_code)} ${escapeHtml(w.consignor_name)} <span class="muted">${escapeHtml(w.doc_no)} · ${CLOSING_PAY[w.method] || w.method}${w.method === 'cash' ? (w.from_drawer ? ' จากลิ้นชัก' : ' (ไม่ใช้เงินลิ้นชัก)') : ''}</span>`, n(w.amount))).join('')}
+        ${r.payouts.rows.map((w) => row(`${escapeHtml(w.consignor_code)} ${escapeHtml(w.consignor_name)} <span class="muted">${escapeHtml(w.doc_no)} · ${CLOSING_PAY[w.method] || w.method}${w.method === 'hold' ? ' จากลิ้นชัก' : w.method === 'cash' ? (w.from_drawer ? ' จากลิ้นชัก' : ' (ไม่ใช้เงินลิ้นชัก)') : ''}</span>`, n(w.amount))).join('')}
         ${row('รวม', n(r.payouts.total), 'total')}` : none('ไม่มีการจ่ายเงินผู้ฝากขาย'));
 
     const purchases = section('5. การเบิกเงินซื้อสินค้าเข้าร้าน', r.purchases.rows.length ? `

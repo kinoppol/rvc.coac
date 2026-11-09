@@ -137,12 +137,13 @@ class ClosingService
 
     /**
      * Consignors paid that day. One paid in cash is paid from the day's drawer unless
-     * marked as paid with other money; transfers never touch the drawer.
+     * marked as paid with other money; transfers never touch the drawer. Money held in the
+     * account for consignors always leaves the drawer.
      */
     public function payoutsOf(string $date): array
     {
         $sql = "SELECT w.id, w.doc_no, w.amount, w.method, w.paid_at, c.code AS consignor_code, c.name AS consignor_name,
-                       IF(w.method = 'cash', %s, 0) AS from_drawer, %s AS flagged_by
+                       IF(w.method = 'hold', 1, IF(w.method = 'cash', %s, 0)) AS from_drawer, %s AS flagged_by
                 FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id %s
                 WHERE w.status = 'paid' AND DATE(w.paid_at) = ? ORDER BY w.id";
         try {
@@ -616,6 +617,7 @@ class ClosingService
                 'from_drawer' => $sum(array_filter($wages, fn ($w) => $w['drawer_date'] === $date), 'amount')],
             'payouts' => ['rows' => $payouts, 'total' => $sum($payouts, 'amount'),
                 'cash' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'cash'), 'amount'), 'from_drawer' => $f['payout_out'],
+                'hold' => $sum(array_filter($payouts, fn ($w) => $w['method'] === 'hold'), 'amount'),
                 'pending_count' => (int) $pending['n'], 'pending_amount' => round((float) $pending['amount'], 2)],
             'purchases' => ['rows' => $purchases, 'total' => $sum($purchases, 'total'), 'from_drawer' => $f['purchase_out']],
             'skips' => (object) $skips,
