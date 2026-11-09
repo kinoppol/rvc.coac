@@ -80,7 +80,7 @@ class SettingsController
             }
             $body['pos_payment_methods'] = implode(',', $methods);
         }
-        if (array_intersect_key($body, array_flip(['pos_promptpay_enabled', 'pos_promptpay_target', 'pos_promptpay_title', 'pos_promptpay_account']))) {
+        if (array_intersect_key($body, array_flip(['pos_promptpay_enabled', 'pos_promptpay_target', 'pos_promptpay_title', 'pos_promptpay_account', 'pos_promptpay_warning_title', 'pos_promptpay_warning_detail']))) {
             // Where customers' money goes: admins only (the change is in the settings audit log).
             if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
                 return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่กำหนดบัญชีรับเงินและการแสดง QR-Code ได้', 403);
@@ -99,9 +99,9 @@ class SettingsController
             }
             $body['pos_promptpay_enabled'] = $enabled;
             $body['pos_promptpay_target'] = $target;
-            foreach (['pos_promptpay_title', 'pos_promptpay_account'] as $key) {
+            foreach (['pos_promptpay_title' => 100, 'pos_promptpay_account' => 100, 'pos_promptpay_warning_title' => 200, 'pos_promptpay_warning_detail' => 500] as $key => $max) {
                 if (isset($body[$key])) {
-                    $body[$key] = mb_substr(trim((string) $body[$key]), 0, 100);
+                    $body[$key] = mb_substr(trim((string) $body[$key]), 0, $max);
                 }
             }
         }

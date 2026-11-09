@@ -4,7 +4,7 @@ import { confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 import { openKeyboard, closeKeyboard, isKeyboardOpen, keyboardEnabled } from '../osk.js';
-import { loadThaiQr, thaiQrCard } from '../thai-qr.js';
+import { loadThaiQr, thaiQrCard, thaiQrWarning } from '../thai-qr.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -794,6 +794,13 @@ export async function render(container, { user } = {}) {
         function restFor(key) {
             return round2(Math.max(0, total - sumOf(selected.filter((k) => k !== key))));
         }
+        /** The code is always on screen: the QR row's amount, else what the other non-cash rows leave, else the whole bill. */
+        function qrAmount() {
+            const own = selected.includes('qr') ? Number(amounts.qr) || 0 : 0;
+            if (own > 0) return own;
+            const rest = round2(total - sumOf(selected.filter((k) => k !== 'cash' && k !== 'qr')));
+            return rest > 0 ? rest : total;
+        }
         function quickCash() {
             const due = restFor('cash');
             const set = new Set([due]);
@@ -821,11 +828,14 @@ export async function render(container, { user } = {}) {
                 return;
             }
             const f = figures();
+            const scrolled = modal.querySelector('.modal-body')?.scrollTop || 0;
             modal.innerHTML = `
               <div class="modal pos-modal" role="dialog" aria-modal="true" aria-label="ชำระเงิน">
                 <div class="modal-head"><h2>ชำระเงิน</h2><button type="button" class="modal-close" data-pay="close" aria-label="ปิด">✕</button></div>
-                <div class="modal-body">
+                <div class="modal-body pos-pay-grid">
                   <div class="pos-due"><span>ยอดที่ต้องชำระ</span><b>฿${money(total)}</b></div>
+                  <div class="pos-pay-left">
+                  ${options.promptpay ? thaiQrWarning(options.promptpay) + thaiQrCard(options.promptpay, qrAmount()) : ''}
                   <div class="pos-methods">
                     ${methods.map((m) => `<button type="button" class="pos-method${selected.includes(m.key) ? ' active' : ''}" data-method="${m.key}">
                       <span>${METHOD_ICON[m.key] || ''}</span>${escapeHtml(m.label)}</button>`).join('')}
@@ -833,6 +843,8 @@ export async function render(container, { user } = {}) {
                   ${mixed && methods.length > 1 ? `
                   <label class="pos-switch"><input type="checkbox" data-mix ${mixMode ? 'checked' : ''}><span aria-hidden="true"></span>
                     ชำระแบบผสม <small class="muted">${mixMode ? 'แตะเลือกหลายวิธี แล้วใส่จำนวนเงินของแต่ละวิธี' : '(เช่น เงินสดบางส่วน + โอนส่วนที่เหลือ)'}</small></label>` : ''}
+                  </div>
+                  <div class="pos-pay-rest">
                   <div class="pos-pay-lines">
                     ${selected.map((k) => {
                         const m = methods.find((x) => x.key === k);
@@ -844,7 +856,6 @@ export async function render(container, { user } = {}) {
                         </div>`;
                     }).join('') || '<div class="empty">เลือกวิธีชำระเงิน</div>'}
                   </div>
-                  ${options.promptpay && selected.includes('qr') && Number(amounts.qr) > 0 ? thaiQrCard(options.promptpay, Number(amounts.qr)) : ''}
                   <div class="pos-pay-sum">
                     <div><span>รับชำระแล้ว</span><b>฿${money(f.paid)}</b></div>
                     ${f.remaining > 0 ? `<div class="due"><span>คงเหลือต้องชำระ</span><b>฿${money(f.remaining)}</b></div>` : ''}
@@ -852,12 +863,14 @@ export async function render(container, { user } = {}) {
                   </div>
                   ${f.over ? '<div class="error-box">ยอดที่ไม่ใช่เงินสดเกินยอดที่ต้องชำระ</div>' : ''}
                   ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
+                  </div>
                 </div>
                 <div class="modal-foot">
                   <button type="button" class="btn secondary pos-big" data-pay="close">ยกเลิก</button>
                   <button type="button" class="btn pos-big" data-pay="confirm" ${f.ok && !busy ? '' : 'disabled'}>${busy ? 'กำลังบันทึก...' : 'ยืนยันการชำระเงิน'}</button>
                 </div>
               </div>`;
+            modal.querySelector('.modal-body').scrollTop = scrolled;
         }
 
         /** Refresh only the totals and button while typing, so the amount box keeps focus. */
@@ -939,8 +952,6 @@ export async function render(container, { user } = {}) {
             if (t.dataset.method || t.dataset.rest) followCash();
             error = null;
             draw();
-            // On a short screen the customer must still see the whole code to scan it.
-            if (t.dataset.method === 'qr') modal.querySelector('.thai-qr')?.scrollIntoView({ block: 'nearest' });
         });
         modal.addEventListener('change', (e) => {
             if (!e.target.matches('[data-mix]')) return;
@@ -1155,6 +1166,7 @@ export async function render(container, { user } = {}) {
     focusSearch();
     const loadOptions = () => api.get('/sales/options').then((o) => {
         if (o.payment_methods?.length) options = o;
+        if (o.promptpay) loadThaiQr(); // ready before the payment screen opens
         if ('drawer' in o) setDrawer(o.drawer);
     }).catch(() => {});
     firstLoad = loadOptions().then(loadProducts);

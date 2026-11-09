@@ -35,6 +35,9 @@ class SettingsService
         'pos_promptpay_target' => '', // PromptPay number, or the text of the store's merchant QR (App\Support\ThaiQr)
         'pos_promptpay_title' => '',
         'pos_promptpay_account' => '',
+        // Shown above the code; '' = that line is not shown.
+        'pos_promptpay_warning_title' => 'โปรดโอนเงินให้พอดีกับยอดชำระ',
+        'pos_promptpay_warning_detail' => 'หากชำระเกินจะต้องทำเรื่องขอคืนเงินและจะได้รับเงินโอนคืนเข้าบัญชีที่โอนมาเท่านั้น เพื่อการป้องกันการทุจริตและการฟอกเงิน',
         // Roles that may turn on the POS switches (comma list of POS_ROLES):
         // paying one sale with several methods, and selling products whose recorded
         // stock is below 1 (miscounted stock, or goods never received in the system).
@@ -121,7 +124,7 @@ class SettingsService
 
     /**
      * What the POS needs to show its Thai QR Payment, or null when it should not show one.
-     * @return array{target:string,title:string,account_name:string,merchant_code:?string}|null
+     * @return array{target:string,title:string,account_name:string,merchant_code:?string,warning_title:string,warning_detail:string}|null
      */
     public function promptPay(): ?array
     {
@@ -135,6 +138,8 @@ class SettingsService
             'title' => (string) ($s['pos_promptpay_title'] ?? ''),
             'account_name' => (string) ($s['pos_promptpay_account'] ?? ''),
             'merchant_code' => \App\Support\ThaiQr::merchantCode($target),
+            'warning_title' => (string) ($s['pos_promptpay_warning_title'] ?? ''),
+            'warning_detail' => (string) ($s['pos_promptpay_warning_detail'] ?? ''),
         ];
     }
 

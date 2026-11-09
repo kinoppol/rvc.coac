@@ -54,6 +54,15 @@ export function thaiQrPayload(target, amount) {
     return body + crc16(body);
 }
 
+/** The warning above the code (admin's text); a line left empty is not shown. */
+export function thaiQrWarning(cfg) {
+    if (!cfg.warning_title && !cfg.warning_detail) return '';
+    return `<div class="thai-qr-warn" role="note">
+      ${cfg.warning_title ? `<b>${escapeHtml(cfg.warning_title)}</b>` : ''}
+      ${cfg.warning_detail ? `<div>${escapeHtml(cfg.warning_detail)}</div>` : ''}
+    </div>`;
+}
+
 /**
  * The card shown to the customer, like the store's Thai QR sticker.
  * cfg: {target, title, account_name, merchant_code}; call loadThaiQr() first.

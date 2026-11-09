@@ -4,7 +4,7 @@ import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 import { renderPerfPanel } from './settings-perf.js';
 import { renderDiskPanel } from './settings-disk.js';
 import { skPage } from '../skeleton.js';
-import { loadThaiQr, thaiQrCard } from '../thai-qr.js';
+import { loadThaiQr, thaiQrCard, thaiQrWarning } from '../thai-qr.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 
@@ -179,6 +179,11 @@ export async function render(page, { user, permissions, params = {} }) {
                       <label class="field">ชื่อร้าน / หน่วยงาน <input name="promptpay_title" maxlength="100" value="${escapeHtml(s.pos_promptpay_title || '')}"></label>
                       <label class="field">ชื่อบัญชี <input name="promptpay_account" maxlength="100" value="${escapeHtml(s.pos_promptpay_account || '')}"></label>
                     </div>
+                    <label class="field" style="margin-top:12px">คำเตือนบรรทัดแรก (ตัวใหญ่ เหนือ QR-Code)
+                      <input name="promptpay_warning_title" maxlength="200" value="${escapeHtml(s.pos_promptpay_warning_title || '')}"></label>
+                    <label class="field" style="margin-top:12px">คำเตือนบรรทัดที่สอง
+                      <textarea name="promptpay_warning_detail" rows="2" maxlength="500">${escapeHtml(s.pos_promptpay_warning_detail || '')}</textarea></label>
+                    <p class="muted" style="font-size:12.5px;margin:6px 0 0">เว้นว่างบรรทัดใด บรรทัดนั้นจะไม่แสดง</p>
                     <div style="margin-top:14px;font-weight:600;font-size:14px">ตัวอย่าง ยอด ฿1.00 <span class="muted" style="font-size:12.5px;font-weight:400">— ลองสแกนด้วยแอปธนาคารและตรวจชื่อผู้รับก่อนเปิดใช้</span></div>
                     <div id="promptpay-preview"></div>
                   </fieldset>
@@ -239,8 +244,12 @@ export async function render(page, { user, permissions, params = {} }) {
             if (/^000201[\x20-\x7E]+$/.test(raw)) target = raw;
             else if (/^0\d{9}$/.test(digits) || /^\d{13}$/.test(digits) || /^\d{15}$/.test(digits)) target = digits;
             const fromQr = target?.startsWith('000201');
+            const warning = {
+                warning_title: form.elements.promptpay_warning_title.value.trim(),
+                warning_detail: form.elements.promptpay_warning_detail.value.trim(),
+            };
             box.innerHTML = target
-                ? thaiQrCard({
+                ? `<div style="margin-top:8px">${thaiQrWarning(warning)}</div>` + thaiQrCard({
                     target,
                     title: form.elements.promptpay_title.value.trim(),
                     account_name: form.elements.promptpay_account.value.trim(),
@@ -251,7 +260,7 @@ export async function render(page, { user, permissions, params = {} }) {
         const merchantCode = data.promptpay_merchant_code || null;
         drawPreview();
         loadThaiQr().then(drawPreview);
-        ['promptpay_target', 'promptpay_title', 'promptpay_account'].forEach((n) => form.elements[n].addEventListener('input', drawPreview));
+        ['promptpay_target', 'promptpay_title', 'promptpay_account', 'promptpay_warning_title', 'promptpay_warning_detail'].forEach((n) => form.elements[n].addEventListener('input', drawPreview));
         if (!canEdit) return;
         pane.querySelector('#holiday-add').addEventListener('click', () => {
             const list = pane.querySelector('#holiday-list');
@@ -272,6 +281,8 @@ export async function render(page, { user, permissions, params = {} }) {
                         pos_promptpay_target: fd.get('promptpay_target').trim(),
                         pos_promptpay_title: fd.get('promptpay_title').trim(),
                         pos_promptpay_account: fd.get('promptpay_account').trim(),
+                        pos_promptpay_warning_title: fd.get('promptpay_warning_title').trim(),
+                        pos_promptpay_warning_detail: fd.get('promptpay_warning_detail').trim(),
                     } : {}),
                     sale_edit_enabled: fd.get('sale_edit_enabled') === '1' ? '1' : '0', sale_edit_minutes: fd.get('sale_edit_minutes'),
                     store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),
