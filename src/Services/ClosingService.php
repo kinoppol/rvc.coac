@@ -294,7 +294,10 @@ class ClosingService
         return array_map(fn ($r) => ['amount' => $r['amount'] === null ? null : (float) $r['amount']] + $r, $stmt->fetchAll());
     }
 
-    /** Sets ($amount) or takes back (null) the correction of the cash counted at closing; the staff's count is kept. */
+    /**
+     * Sets ($amount) or takes back (null) the correction of the cash counted at closing; the staff's
+     * count is kept. On a day the staff did not count, this is the only closing figure there is.
+     */
     public function adjustCounted(string $date, ?float $amount, string $reason, int $userId, ?string $ip): void
     {
         $drawer = $this->db->prepare('SELECT id, counted_cash FROM cash_drawers WHERE business_date = ?');
@@ -302,9 +305,6 @@ class ClosingService
         $d = $drawer->fetch();
         if (!$d) {
             throw new \RuntimeException('วันนี้ไม่ได้ระบุเงินในลิ้นชัก จึงแก้เงินที่นับตอนปิดยอดไม่ได้');
-        }
-        if ($d['counted_cash'] === null) {
-            throw new \RuntimeException('ยังไม่ได้นับเงินปิดยอดลิ้นชัก ให้ปิดยอดลิ้นชักก่อน');
         }
         $reason = mb_substr(trim($reason), 0, 255);
         $current = $this->countedAdjusts($date)[0] ?? null;
@@ -314,7 +314,7 @@ class ClosingService
                 throw new \RuntimeException('จำนวนเงินไม่ถูกต้อง');
             }
             if ($reason === '') {
-                throw new \RuntimeException('กรุณาระบุเหตุผลที่แก้เงินที่มีอยู่จริงในลิ้นชัก');
+                throw new \RuntimeException('กรุณาระบุเหตุผลที่แก้เงินในลิ้นชักตอนปิดร้าน');
             }
         } elseif ($current === null || $current['amount'] === null) {
             throw new \RuntimeException('ยังไม่มีการแก้เงินที่นับตอนปิดยอดที่จะยกเลิก');
@@ -327,7 +327,7 @@ class ClosingService
         }
         $this->audit->log('cash_drawers', (int) $d['id'], 'update',
             ['closing_counted_cash' => $current['amount'] ?? null],
-            ['closing_date' => $date, 'closing_counted_cash' => $amount, 'staff_counted_cash' => (float) $d['counted_cash'], 'reason' => $reason],
+            ['closing_date' => $date, 'closing_counted_cash' => $amount, 'staff_counted_cash' => $d['counted_cash'] !== null ? (float) $d['counted_cash'] : null, 'reason' => $reason],
             $userId, $ip);
     }
 
@@ -370,8 +370,8 @@ class ClosingService
                 $drawer['opening_cash'] = $adjust['amount'];
             }
         }
-        // Likewise the cash counted at closing: as the staff counted it, unless corrected.
-        $countedHistory = $counted !== null ? $this->countedAdjusts($date) : [];
+        // Likewise the cash counted at closing: as the staff counted it (if they did), unless corrected.
+        $countedHistory = $drawer ? $this->countedAdjusts($date) : [];
         $countedAdjust = isset($countedHistory[0]) && $countedHistory[0]['amount'] !== null ? $countedHistory[0] : null;
         $countedStaff = $counted;
         if ($countedAdjust) {

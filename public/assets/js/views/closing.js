@@ -240,9 +240,8 @@ export async function render(container, { user, permissions = [] } = {}) {
             ${line('+ ขายได้เป็นเงินสด', `฿ ${money(f.cash_sales)}`)}
             ${f.purchase_out ? line('- ซื้อสินค้าด้วยเงินในลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 5)</span>', `฿ ${money(f.purchase_out)}`) : ''}
             ${line('<b>เงินสดที่ควรมีในลิ้นชักตอนปิดยอด</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
-            ${dr.counted_cash !== null ? `
-              ${countedHtml(m, dr, line)}
-              ${line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '')}` : ''}
+            ${countedHtml(m, dr, line)}
+            ${dr.counted_cash !== null ? line('ส่วนต่าง', signed(dr.counted_cash - dr.should_have), isDiff(dr.counted_cash, dr.should_have) ? 'color:var(--bad);font-weight:600' : '') : ''}
             ${f.cash_out || f.payout_out ? `
               ${f.cash_out ? line('- จ่ายค่าแรงจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 3)</span>', `฿ ${money(f.cash_out)}`) : ''}
               ${f.payout_out ? line('- จ่ายเงินผู้ฝากขายจากลิ้นชัก <span class="muted" style="font-size:12px">(ข้อ 4)</span>', `฿ ${money(f.payout_out)}`) : ''}
@@ -364,7 +363,7 @@ export async function render(container, { user, permissions = [] } = {}) {
               <section class="card card-pad" style="margin-top:14px">
                 <h3 style="margin:0 0 8px">6. เงินสดในลิ้นชัก</h3>
                 <table class="cl-t" style="max-width:620px"><tbody>${drawerHtml}</tbody></table>
-                ${dr && dr.counted_cash !== null ? `<div class="muted" style="font-size:11.5px;margin-top:4px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>` : ''}
+                ${dr && dr.counted_staff !== null ? `<div class="muted" style="font-size:11.5px;margin-top:4px">ปิดยอดโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? fmtDateTime(dr.closed_at) : ''}</div>` : ''}
                 ${stepActions(m, 'drawer', !(dr && dr.counted_cash !== null), dr ? 'ยังไม่ได้นับเงินปิดยอดลิ้นชัก' : 'ไม่ได้ระบุเงินในลิ้นชัก / ยังไม่ปิดยอด')}
               </section>
 
@@ -549,30 +548,32 @@ export async function render(container, { user, permissions = [] } = {}) {
     function countedHtml(m, dr, line) {
         const adj = dr.counted_adjust;
         const hist = dr.counted_history || [];
-        const label = '<b>เงินที่มีอยู่จริงในลิ้นชัก</b> <span class="muted" style="font-size:12px">(นับตอนปิดยอด)</span>';
+        const staffCounted = dr.counted_staff !== null;
+        const label = '<b>เงินในลิ้นชักตอนปิดร้าน</b> <span class="muted" style="font-size:12px">(นับจริง)</span>';
         const btns = m.can_submit ? `<span class="no-print" style="display:inline-flex;gap:6px;margin-left:8px">
-            <button type="button" class="btn sm secondary" data-counted-edit>${adj ? 'แก้อีกครั้ง' : 'แก้ยอด'}</button>
+            <button type="button" class="btn sm secondary" data-counted-edit>${adj ? 'แก้อีกครั้ง' : staffCounted ? 'แก้ยอด' : 'ระบุยอด'}</button>
             ${adj ? '<button type="button" class="btn sm secondary" data-counted-undo>ยกเลิกการแก้ไข</button>' : ''}</span>` : '';
         const histHtml = hist.length ? `<tr class="no-print"><td colspan="2" style="padding-top:2px">
-            <details style="font-size:12px"><summary class="muted" style="cursor:pointer">ประวัติการแก้เงินที่นับตอนปิดยอด (${hist.length})</summary>
+            <details style="font-size:12px"><summary class="muted" style="cursor:pointer">ประวัติการแก้เงินตอนปิดร้าน (${hist.length})</summary>
             ${hist.map((h) => `<div class="muted" style="margin:3px 0 0 14px">${fmtDateTime(h.created_at)} · ${escapeHtml(h.user_name || '-')} ·
               ${h.amount === null ? 'ยกเลิกการแก้ไข' : `แก้เป็น ฿${money(h.amount)}`}${h.reason ? ` · ${escapeHtml(h.reason)}` : ''}</div>`).join('')}
             </details></td></tr>` : '';
         if (!adj) {
-            return `${line(`${label}${btns}`, `<b>฿ ${money(dr.counted_cash)}</b>`)}${histHtml}`;
+            return `${line(`${label}${btns}`, staffCounted ? `<b>฿ ${money(dr.counted_cash)}</b>` : '<span class="muted">ยังไม่ได้นับ</span>')}${histHtml}`;
         }
         return `
-            ${line('<span class="muted">เงินที่มีอยู่จริงในลิ้นชัก ที่พนักงานนับตอนปิดยอด</span>', `<span class="muted" style="text-decoration:line-through">฿ ${money(dr.counted_staff)}</span>`)}
-            ${line(`${label} <span class="pill warn" style="font-size:11.5px">ผู้สรุปบัญชีแก้</span>${btns}
+            ${staffCounted ? line('<span class="muted">เงินในลิ้นชักตอนปิดร้าน ที่พนักงานนับ</span>', `<span class="muted" style="text-decoration:line-through">฿ ${money(dr.counted_staff)}</span>`) : ''}
+            ${line(`${label} <span class="pill warn" style="font-size:11.5px">${staffCounted ? 'ผู้สรุปบัญชีแก้' : 'ผู้สรุปบัญชีระบุ'}</span>${btns}
               <div class="muted" style="font-size:12px;margin-top:2px">เหตุผล: ${escapeHtml(adj.reason || '-')} · ${escapeHtml(adj.user_name || '-')} ${fmtDateTime(adj.created_at)}
-                · ต่างจากที่นับ ${signed(adj.amount - dr.counted_staff)}</div>`, `<b>฿ ${money(dr.counted_cash)}</b>`)}
+                ${staffCounted ? `· ต่างจากที่นับ ${signed(adj.amount - dr.counted_staff)}` : '· พนักงานไม่ได้นับ'}</div>`, `<b>฿ ${money(dr.counted_cash)}</b>`)}
             ${histHtml}`;
     }
 
     async function editCounted(m) {
         const dr = m.figures.drawer;
-        const amount = await promptDialog(`พนักงานนับได้ ฿${money(dr.counted_staff)}${dr.counted_adjust ? ` · ตอนนี้ใช้ ฿${money(dr.counted_cash)}` : ''} · ควรมี ฿${money(dr.should_have)}`, {
-            title: 'แก้เงินที่มีอยู่จริงในลิ้นชักตอนปิดยอด (บาท)', okText: 'ถัดไป', value: String(dr.counted_cash), required: 'กรุณากรอกจำนวนเงิน',
+        const staffCounted = dr.counted_staff !== null;
+        const amount = await promptDialog(`${staffCounted ? `พนักงานนับได้ ฿${money(dr.counted_staff)}` : 'พนักงานไม่ได้นับเงินปิดยอด'}${dr.counted_adjust ? ` · ตอนนี้ใช้ ฿${money(dr.counted_cash)}` : ''} · ควรมี ฿${money(dr.should_have)}`, {
+            title: `${staffCounted ? 'แก้' : 'ระบุ'}เงินในลิ้นชักตอนปิดร้าน (บาท)`, okText: 'ถัดไป', value: dr.counted_cash !== null ? String(dr.counted_cash) : '', required: 'กรุณากรอกจำนวนเงิน',
         });
         if (amount === null || amount === undefined || docModalGone(m)) return;
         const v = Number(String(amount).replace(/,/g, ''));
@@ -580,8 +581,8 @@ export async function render(container, { user, permissions = [] } = {}) {
             alertDialog('จำนวนเงินไม่ถูกต้อง', { tone: 'error' });
             return;
         }
-        const reason = await promptDialog(`แก้จาก ฿${money(dr.counted_staff)} (พนักงานนับ) เป็น ฿${money(v)}`, {
-            title: 'เหตุผลที่แก้', okText: 'บันทึก', placeholder: 'เช่น นับใหม่แล้วได้ไม่ตรง ธนบัตรติดกัน', required: 'กรุณาระบุเหตุผล', multiline: true,
+        const reason = await promptDialog(staffCounted ? `แก้จาก ฿${money(dr.counted_staff)} (พนักงานนับ) เป็น ฿${money(v)}` : `ระบุเงินตอนปิดร้าน ฿${money(v)} (พนักงานไม่ได้นับ)`, {
+            title: staffCounted ? 'เหตุผลที่แก้' : 'เหตุผลที่ระบุ', okText: 'บันทึก', placeholder: staffCounted ? 'เช่น นับใหม่แล้วได้ไม่ตรง ธนบัตรติดกัน' : 'เช่น พนักงานลืมปิดยอด นับเงินตอนสรุปบัญชี', required: 'กรุณาระบุเหตุผล', multiline: true,
         });
         if (reason === null || reason === undefined || docModalGone(m)) return;
         await postOpening(m, { amount: v, reason: String(reason).trim() }, 'counted');
@@ -589,8 +590,10 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     async function undoCounted(m) {
         const dr = m.figures.drawer;
-        const note = await promptDialog(`กลับไปใช้ยอดที่พนักงานนับ ฿${money(dr.counted_staff)} (แทน ฿${money(dr.counted_cash)})`, {
-            title: 'ยกเลิกการแก้เงินที่นับตอนปิดยอด?', okText: 'ยกเลิกการแก้ไข', placeholder: 'หมายเหตุ (ไม่บังคับ)', danger: true,
+        const note = await promptDialog(dr.counted_staff !== null
+            ? `กลับไปใช้ยอดที่พนักงานนับ ฿${money(dr.counted_staff)} (แทน ฿${money(dr.counted_cash)})`
+            : `ลบยอด ฿${money(dr.counted_cash)} กลับเป็นยังไม่ได้นับ`, {
+            title: 'ยกเลิกการแก้เงินตอนปิดร้าน?', okText: 'ยกเลิกการแก้ไข', placeholder: 'หมายเหตุ (ไม่บังคับ)', danger: true,
         });
         if (note === null || note === undefined || docModalGone(m)) return;
         await postOpening(m, { amount: null, reason: String(note).trim() }, 'counted');
