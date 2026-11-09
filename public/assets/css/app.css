@@ -737,6 +737,15 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-pay-sum .change { color: var(--ok); }
 .pos-pay-sum .change b { font-size: 30px; }
 .pos-modal .modal-foot .btn { flex: 1; }
+/* Always dark on white, whatever the theme: bank apps must be able to read the code. */
+.thai-qr { width: min(100%, 340px); margin: 14px auto 0; border-radius: 14px; overflow: hidden; border: 1px solid #c9d6ee; background: #fff; color: #1a1a1a; }
+.thai-qr-head { padding: 9px 12px; background: #1a4f9c; color: #fff; font-weight: 700; font-size: 15px; letter-spacing: .06em; text-align: center; }
+.thai-qr-body { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 14px 14px; font-size: 14px; text-align: center; overflow-wrap: anywhere; }
+.thai-qr-body .muted { color: #5c6470; font-size: 12.5px; }
+.thai-qr-code { width: 240px; max-width: 100%; aspect-ratio: 1; display: grid; place-items: center; }
+.thai-qr-code svg { display: block; width: 100%; height: 100%; }
+.thai-qr-amount { font-size: 26px; font-weight: 700; color: #1a4f9c; }
+.thai-qr-title { font-size: 16px; font-weight: 700; }
 .pos-done { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 30px 20px; }
 .pos-done h2 { margin: 0; font-size: 22px; }
 .pos-done-icon { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-bg); color: var(--ok); font-size: 38px; font-weight: 700; }

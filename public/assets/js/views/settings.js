@@ -4,6 +4,7 @@ import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 import { renderPerfPanel } from './settings-perf.js';
 import { renderDiskPanel } from './settings-disk.js';
 import { skPage } from '../skeleton.js';
+import { loadThaiQr, thaiQrCard } from '../thai-qr.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 
@@ -145,6 +146,7 @@ export async function render(page, { user, permissions, params = {} }) {
     function drawPos({ settings: s }) {
         const on = (s.pos_payment_methods || '').split(',');
         const POS_ROLES = ['admin', 'manager', 'advisor', 'cashier'];
+        const isAdmin = user?.role === 'admin';
         const roleBoxes = (name, value) => {
             const picked = (value || '').split(',');
             return `<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px">${POS_ROLES.map((r) => `
@@ -161,6 +163,25 @@ export async function render(page, { user, permissions, params = {} }) {
                     ${Object.entries(PAYMENT_LABEL).map(([k, label]) => `
                       <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="method" value="${k}" ${on.includes(k) ? 'checked' : ''} style="width:20px;height:20px"> ${escapeHtml(label)}</label>`).join('')}
                   </div>
+                </section>
+                <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">QR-Code รับชำระเงิน (Thai QR / พร้อมเพย์)</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">เมื่อเลือกวิธี "สแกน QR-Code" หน้าชำระเงินทั้งเว็บและแอปจะแสดง QR-Code ที่ระบุยอดให้ลูกค้าสแกนจ่าย ต้องเปิดวิธี "สแกน QR-Code" ด้านบนด้วย
+                    ${isAdmin ? '' : '<br><b>เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขส่วนนี้ได้</b>'}</p>
+                  <fieldset ${isAdmin ? '' : 'disabled'} style="border:0;padding:0;margin:0">
+                    <label style="display:flex;align-items:center;gap:10px;font-size:14px"><input type="checkbox" name="promptpay_enabled" value="1" ${s.pos_promptpay_enabled === '1' ? 'checked' : ''} style="width:20px;height:20px"> แสดง QR-Code ในหน้าชำระเงิน</label>
+                    <label class="field" style="margin-top:12px">เลขบัญชีรับเงิน
+                      <input name="promptpay_target" maxlength="512" autocomplete="off" value="${escapeHtml(s.pos_promptpay_target || '')}" placeholder="เบอร์พร้อมเพย์ เลขผู้เสียภาษี หรือข้อความจาก QR-Code ของร้าน"></label>
+                    <p class="muted" style="font-size:12.5px;margin:6px 0 0">ใช้ <b>เบอร์โทรศัพท์ 10 หลัก</b> <b>เลขประจำตัวผู้เสียภาษี/ประชาชน 13 หลัก</b> หรือ <b>เลข e-Wallet 15 หลัก</b> ที่ลงทะเบียนพร้อมเพย์แล้ว
+                      หรือถ้าร้านมี QR-Code ร้านค้าจากธนาคาร ให้ใช้แอปอ่าน QR สแกน แล้ววางข้อความทั้งหมด (ขึ้นต้นด้วย 000201)
+                      — <b>ใช้เลขบัญชีธนาคารโดยตรงไม่ได้</b> เพราะ QR มาตรฐานพร้อมเพย์ไม่รองรับ</p>
+                    <div class="form-grid" style="margin-top:12px">
+                      <label class="field">ชื่อร้าน / หน่วยงาน <input name="promptpay_title" maxlength="100" value="${escapeHtml(s.pos_promptpay_title || '')}"></label>
+                      <label class="field">ชื่อบัญชี <input name="promptpay_account" maxlength="100" value="${escapeHtml(s.pos_promptpay_account || '')}"></label>
+                    </div>
+                    <div style="margin-top:14px;font-weight:600;font-size:14px">ตัวอย่าง ยอด ฿1.00 <span class="muted" style="font-size:12.5px;font-weight:400">— ลองสแกนด้วยแอปธนาคารและตรวจชื่อผู้รับก่อนเปิดใช้</span></div>
+                    <div id="promptpay-preview"></div>
+                  </fieldset>
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
                   <h2 style="margin-bottom:6px">เวลาเปิด-ปิดร้าน</h2>
@@ -208,6 +229,29 @@ export async function render(page, { user, permissions, params = {} }) {
               </fieldset>
             </form>
           </div>`;
+        const form = pane.querySelector('#pos-form');
+        const drawPreview = () => {
+            const box = pane.querySelector('#promptpay-preview');
+            if (!box) return; // left this tab while the generator was loading
+            const raw = form.elements.promptpay_target.value.trim();
+            const digits = raw.replace(/[\s-]/g, '');
+            let target = null;
+            if (/^000201[\x20-\x7E]+$/.test(raw)) target = raw;
+            else if (/^0\d{9}$/.test(digits) || /^\d{13}$/.test(digits) || /^\d{15}$/.test(digits)) target = digits;
+            const fromQr = target?.startsWith('000201');
+            box.innerHTML = target
+                ? thaiQrCard({
+                    target,
+                    title: form.elements.promptpay_title.value.trim(),
+                    account_name: form.elements.promptpay_account.value.trim(),
+                    merchant_code: fromQr && target === s.pos_promptpay_target ? merchantCode : null,
+                }, 1)
+                : `<div class="muted" style="font-size:12.5px;margin-top:6px">${raw ? 'รูปแบบยังไม่ถูกต้อง' : 'ระบุเลขบัญชีรับเงินเพื่อดูตัวอย่าง'}</div>`;
+        };
+        const merchantCode = data.promptpay_merchant_code || null;
+        drawPreview();
+        loadThaiQr().then(drawPreview);
+        ['promptpay_target', 'promptpay_title', 'promptpay_account'].forEach((n) => form.elements[n].addEventListener('input', drawPreview));
         if (!canEdit) return;
         pane.querySelector('#holiday-add').addEventListener('click', () => {
             const list = pane.querySelector('#holiday-list');
@@ -223,6 +267,12 @@ export async function render(page, { user, permissions, params = {} }) {
             try {
                 await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
                     pos_short_stock_always: fd.get('short_always') === '1' ? '1' : '0',
+                    ...(isAdmin ? {
+                        pos_promptpay_enabled: fd.get('promptpay_enabled') === '1' ? '1' : '0',
+                        pos_promptpay_target: fd.get('promptpay_target').trim(),
+                        pos_promptpay_title: fd.get('promptpay_title').trim(),
+                        pos_promptpay_account: fd.get('promptpay_account').trim(),
+                    } : {}),
                     sale_edit_enabled: fd.get('sale_edit_enabled') === '1' ? '1' : '0', sale_edit_minutes: fd.get('sale_edit_minutes'),
                     store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),
                     store_closed_days: WEEKDAYS.map((d, i) => String(i)).filter((i) => !fd.getAll('open_day').includes(i)).join(','),

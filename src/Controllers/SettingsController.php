@@ -11,6 +11,7 @@ use App\Support\Config;
 use App\Support\Db;
 use App\Support\JsonResponse;
 use App\Support\SessionLifetime;
+use App\Support\ThaiQr;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
@@ -25,6 +26,7 @@ class SettingsController
         $userRepo = new UserRepo($db);
         return $this->json($response, [
             'settings' => $settings->all(),
+            'promptpay_merchant_code' => ThaiQr::merchantCode((string) $settings->get('pos_promptpay_target')),
             'role_permissions' => $userRepo->rolePermissions(),
             'audit_log' => $settings->auditLog(),
             'timezones' => \DateTimeZone::listIdentifiers(),
@@ -77,6 +79,31 @@ class SettingsController
                 return $this->error($response, 'ต้องเปิดรับชำระอย่างน้อย 1 วิธี', 422);
             }
             $body['pos_payment_methods'] = implode(',', $methods);
+        }
+        if (array_intersect_key($body, array_flip(['pos_promptpay_enabled', 'pos_promptpay_target', 'pos_promptpay_title', 'pos_promptpay_account']))) {
+            // Where customers' money goes: admins only (the change is in the settings audit log).
+            if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+                return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่กำหนดบัญชีรับเงินและการแสดง QR-Code ได้', 403);
+            }
+            $current = (new SettingsService(Db::connection()))->all();
+            $target = trim((string) ($body['pos_promptpay_target'] ?? $current['pos_promptpay_target'] ?? ''));
+            if ($target !== '') {
+                $target = ThaiQr::normalize($target);
+                if ($target === null) {
+                    return $this->error($response, 'หมายเลขบัญชีรับเงินไม่ถูกต้อง: ใช้เบอร์โทรศัพท์ 10 หลัก เลขประจำตัวผู้เสียภาษี 13 หลัก เลข e-Wallet 15 หลัก หรือข้อความจาก QR-Code ของร้าน', 422);
+                }
+            }
+            $enabled = in_array($body['pos_promptpay_enabled'] ?? $current['pos_promptpay_enabled'] ?? '0', ['1', 1, true], true) ? '1' : '0';
+            if ($enabled === '1' && $target === '') {
+                return $this->error($response, 'กรุณาระบุหมายเลขบัญชีรับเงินก่อนเปิดแสดง QR-Code', 422);
+            }
+            $body['pos_promptpay_enabled'] = $enabled;
+            $body['pos_promptpay_target'] = $target;
+            foreach (['pos_promptpay_title', 'pos_promptpay_account'] as $key) {
+                if (isset($body[$key])) {
+                    $body[$key] = mb_substr(trim((string) $body[$key]), 0, 100);
+                }
+            }
         }
         foreach (['store_open_time', 'store_close_time'] as $key) {
             if (isset($body[$key]) && $body[$key] !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $body[$key])) {

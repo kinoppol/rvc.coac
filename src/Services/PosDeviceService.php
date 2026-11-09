@@ -312,7 +312,8 @@ class PosDeviceService
     public function configHash(array $device): string
     {
         $members = array_map(fn ($m) => [$m['id'], $m['pin_hash'], $m['account']['active'], $m['role'], $m['full_name']], $this->members((int) $device['id']));
-        return sha1(json_encode([$members, $device['user_id'], $device['sync_level'], $device['name']]));
+        // The QR-Code customers pay to is part of it: a changed account reaches the apps at their next /ping.
+        return sha1(json_encode([$members, $device['user_id'], $device['sync_level'], $device['name'], (new SettingsService($this->db))->promptPay()]));
     }
 
     /** The device's token stops working at once; its sales already sent stay. */

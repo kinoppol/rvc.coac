@@ -89,6 +89,7 @@ class DeviceController
         $pos = [
             'payment_methods' => array_map(fn ($m) => ['key' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]], $settings->paymentMethods()),
             'payment_mixed' => $current['pos']['payment_mixed'],
+            'promptpay' => $settings->promptPay(),
             'sell_out_of_stock' => $current['pos']['sell_out_of_stock'],
             'sell_out_of_stock_always' => $settings->get('pos_short_stock_always') === '1',
             'store_hours' => ['open' => (string) $settings->get('store_open_time'), 'close' => (string) $settings->get('store_close_time')],

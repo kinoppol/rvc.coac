@@ -30,6 +30,11 @@ class SettingsService
         'timezone' => '', // '' = app.timezone from config/config.php
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)
         'pos_payment_methods' => 'cash,transfer,qr,card', // comma list of PAYMENT_METHODS accepted at the POS
+        // Thai QR Payment with the amount, shown when "qr" is the payment method (admin only):
+        'pos_promptpay_enabled' => '0',
+        'pos_promptpay_target' => '', // PromptPay number, or the text of the store's merchant QR (App\Support\ThaiQr)
+        'pos_promptpay_title' => '',
+        'pos_promptpay_account' => '',
         // Roles that may turn on the POS switches (comma list of POS_ROLES):
         // paying one sale with several methods, and selling products whose recorded
         // stock is below 1 (miscounted stock, or goods never received in the system).
@@ -113,6 +118,25 @@ class SettingsService
     }
 
     public const PAYMENT_METHODS = ['cash' => 'เงินสด', 'transfer' => 'โอนเงินเข้าบัญชี', 'qr' => 'สแกน QR-Code', 'card' => 'บัตรเครดิต'];
+
+    /**
+     * What the POS needs to show its Thai QR Payment, or null when it should not show one.
+     * @return array{target:string,title:string,account_name:string,merchant_code:?string}|null
+     */
+    public function promptPay(): ?array
+    {
+        $s = $this->all();
+        $target = (string) ($s['pos_promptpay_target'] ?? '');
+        if (($s['pos_promptpay_enabled'] ?? '0') !== '1' || $target === '' || !in_array('qr', $this->paymentMethods(), true)) {
+            return null;
+        }
+        return [
+            'target' => $target,
+            'title' => (string) ($s['pos_promptpay_title'] ?? ''),
+            'account_name' => (string) ($s['pos_promptpay_account'] ?? ''),
+            'merchant_code' => \App\Support\ThaiQr::merchantCode($target),
+        ];
+    }
 
     /** @return string[] payment methods the admin has turned on, in PAYMENT_METHODS order */
     public function paymentMethods(): array

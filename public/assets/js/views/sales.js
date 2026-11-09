@@ -4,6 +4,7 @@ import { confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 import { openKeyboard, closeKeyboard, isKeyboardOpen, keyboardEnabled } from '../osk.js';
+import { loadThaiQr, thaiQrCard } from '../thai-qr.js';
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -774,6 +775,10 @@ export async function render(container, { user } = {}) {
         modal = document.createElement('div');
         modal.className = 'modal-backdrop pos-pay-modal';
         root.appendChild(modal);
+        const thisModal = modal;
+        if (options.promptpay) {
+            loadThaiQr().then(() => { if (modal === thisModal && !done) refreshFigures(); });
+        }
 
         const sumOf = (keys) => keys.reduce((s, k) => s + (Number(amounts[k]) || 0), 0);
         const round2 = (n) => Math.round(n * 100) / 100;
@@ -839,6 +844,7 @@ export async function render(container, { user } = {}) {
                         </div>`;
                     }).join('') || '<div class="empty">เลือกวิธีชำระเงิน</div>'}
                   </div>
+                  ${options.promptpay && selected.includes('qr') && Number(amounts.qr) > 0 ? thaiQrCard(options.promptpay, Number(amounts.qr)) : ''}
                   <div class="pos-pay-sum">
                     <div><span>รับชำระแล้ว</span><b>฿${money(f.paid)}</b></div>
                     ${f.remaining > 0 ? `<div class="due"><span>คงเหลือต้องชำระ</span><b>฿${money(f.remaining)}</b></div>` : ''}
@@ -933,6 +939,8 @@ export async function render(container, { user } = {}) {
             if (t.dataset.method || t.dataset.rest) followCash();
             error = null;
             draw();
+            // On a short screen the customer must still see the whole code to scan it.
+            if (t.dataset.method === 'qr') modal.querySelector('.thai-qr')?.scrollIntoView({ block: 'nearest' });
         });
         modal.addEventListener('change', (e) => {
             if (!e.target.matches('[data-mix]')) return;

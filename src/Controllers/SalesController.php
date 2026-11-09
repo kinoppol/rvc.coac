@@ -128,6 +128,7 @@ class SalesController
         return $this->json($response, [
             'payment_methods' => $methods,
             'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $role),
+            'promptpay' => $settings->promptPay(),
             'sell_out_of_stock' => $settings->posRoleAllows('pos_short_stock_roles', $role),
             'sell_out_of_stock_always' => $settings->get('pos_short_stock_always') === '1',
             'store_hours' => [
