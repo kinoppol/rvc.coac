@@ -46,6 +46,10 @@ class DrawerController
         $db = Db::connection();
         $day = self::currentDay(new SettingsService($db));
         $user = $request->getAttribute('user');
+        // Counted at night it would become the next opening day's drawer, and the next day could not be counted.
+        if (!$day['required']) {
+            return $this->error($response, 'เลยเวลาทำการแล้ว ไม่ต้องระบุเงินเปิดร้าน หากนับเงินตอนปิดร้านให้กรอกในช่องปิดยอด', 422);
+        }
         try {
             $state = $this->service($db)->open($day['date'], (float) $body['amount'], (int) $user['id'], $body['note'] ?? null, $this->ip($request));
         } catch (\RuntimeException $e) {
@@ -71,8 +75,10 @@ class DrawerController
         $db = Db::connection();
         $user = $request->getAttribute('user');
         $manage = $this->canManage($db, $user);
-        $date = $this->dateParam($body['date'] ?? null) ?? self::currentDay(new SettingsService($db))['date'];
-        if ($date !== self::currentDay(new SettingsService($db))['date'] && !$manage) {
+        // Apps send no date: the count belongs to the day being closed, also after closing time.
+        $closing = (new SettingsService($db))->dayToClose(new \DateTimeImmutable());
+        $date = $this->dateParam($body['date'] ?? null) ?? $closing;
+        if ($date !== $closing && !$manage) {
             return $this->error($response, 'ปิดยอดย้อนหลังได้เฉพาะผู้ดูแลระบบหรือผู้จัดการร้าน', 403);
         }
         try {
@@ -80,7 +86,7 @@ class DrawerController
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
-        return $this->json($response, ['ok' => true]);
+        return $this->json($response, ['ok' => true, 'date' => $date]);
     }
 
     public function adjustOpening(Request $request, Response $response, array $args): Response
@@ -106,7 +112,8 @@ class DrawerController
         $db = Db::connection();
         $user = $request->getAttribute('user');
         $manage = $this->canManage($db, $user);
-        $today = self::currentDay(new SettingsService($db))['date'];
+        // After closing time this is still the day just ended: its drawer is the one being counted.
+        $today = (new SettingsService($db))->dayToClose(new \DateTimeImmutable());
         $date = $this->dateParam($request->getQueryParams()['date'] ?? null) ?? $today;
         if ($date !== $today && !$manage) {
             $date = $today; // cashiers see the current day only

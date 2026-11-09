@@ -343,8 +343,8 @@ businessDay(at):
 | `GET /drawer/state` | สถานะลิ้นชักของวันบัญชีปัจจุบัน (รูปแบบเดียวกับ `me.drawer`) |
 | `POST /drawer/open {"amount": 1500, "note": ""}` | นับเงินเปิดร้าน → state; 422 "ระบุเงินในลิ้นชักของวันนี้ไปแล้ว" ถือว่าสำเร็จ |
 | `POST /drawer/skip` | ข้ามชั่วคราว → state (`skip_until`) |
-| `POST /drawer/close {"amount": 3250, "note": ""}` | นับเงินปิดยอด → `{"ok": true}` |
-| `GET /drawer/summary` | สรุปลิ้นชักและยอดแยกตามวิธีชำระของวันนี้ |
+| `POST /drawer/close {"amount": 3250, "note": ""}` | นับเงินปิดยอดของวันที่กำลังปิด แม้หลังเวลาปิดร้าน (ไม่ใช่วันบัญชีถัดไป) → `{"ok": true, "date": "2026-11-03"}` |
+| `GET /drawer/summary` | สรุปลิ้นชักและยอดแยกตามวิธีชำระของวันที่กำลังปิด |
 
 ### 5.6 ประวัติและการแก้ไขการขาย (ออนไลน์)
 `GET /sales/options`, `GET /sales/mine?from&to`, `GET /sales/{id}`, `POST /sales/{id}/edit-requests`, `POST /sale-edits/{id}/cancel`

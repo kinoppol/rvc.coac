@@ -106,6 +106,32 @@ class SettingsService
         return ['date' => $day->format('Y-m-d'), 'after_hours' => $time < $open];
     }
 
+    /**
+     * The accounting day whose drawer is counted at closing. Sales after closing time go to the next
+     * opening day, but the count made then is of the day just ended: today once it has closed,
+     * the last opening day on a day off or before opening time.
+     */
+    public function dayToClose(\DateTimeImmutable $at): string
+    {
+        $day = $this->businessDay($at);
+        if (empty($day['after_hours'])) {
+            return $day['date'];
+        }
+        $today = $at->setTime(0, 0);
+        $close = (string) $this->get('store_close_time');
+        $closedDays = array_filter(explode(',', (string) $this->get('store_closed_days')), 'strlen');
+        $holidays = $this->holidays();
+        $isClosedDay = fn (\DateTimeImmutable $d) => in_array($d->format('w'), $closedDays, true) || isset($holidays[$d->format('Y-m-d')]);
+        if (!$isClosedDay($today) && $close !== '' && $at->format('H:i') >= $close) {
+            return $today->format('Y-m-d');
+        }
+        $d = $today->modify('-1 day');
+        for ($i = 0; $i < 60 && $isClosedDay($d); $i++) {
+            $d = $d->modify('-1 day');
+        }
+        return $d->format('Y-m-d');
+    }
+
     public const POS_ROLES = ['admin', 'manager', 'advisor', 'cashier'];
 
     /** Whether a user in $role may turn on the POS switch whose roles are kept in $key. */
