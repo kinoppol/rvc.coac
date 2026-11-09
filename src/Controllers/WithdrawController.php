@@ -28,10 +28,23 @@ class WithdrawController
     public function index(Request $request, Response $response): Response
     {
         $repo = $this->repo();
+        $params = $request->getQueryParams();
+        $period = [];
+        foreach (['from', 'to'] as $key) {
+            $value = trim((string) ($params[$key] ?? ''));
+            $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+            if ($value !== '' && (!$date || $date->format('Y-m-d') !== $value)) {
+                return $this->error($response, 'วันที่ไม่ถูกต้อง', 422);
+            }
+            $period[$key] = $value !== '' ? $value : null;
+        }
+        // Without a period (the menu's badge) this stays the latest few; the page says if a period reaches the limit.
+        $limit = $period['from'] !== null && $period['to'] !== null ? 1000 : null;
         return $this->json($response, [
-            'data' => $repo->recent(),
+            'data' => $limit !== null ? $repo->recent($limit, $period['from'], $period['to']) : $repo->recent(),
             'pending_count' => $repo->pendingCount(),
-        ]);
+            'can_hold' => (new \App\Services\ConsignorHoldService(Db::connection(), new AuditLogger(Db::connection()), new DocumentNumberService(Db::connection())))->ready(),
+        ] + ($limit !== null ? ['limit' => $limit] : []));
     }
 
     public function store(Request $request, Response $response): Response
@@ -66,6 +79,30 @@ class WithdrawController
         }
 
         return $this->json($response, ['data' => $repo->find($id)], 201);
+    }
+
+    /** Admin only: correct the amount or method of a withdrawal (pending or paid) with a reason. */
+    public function edit(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (($user['role'] ?? '') !== 'admin') {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขรายการเบิกได้', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        $repo = $this->repo();
+        try {
+            $repo->edit(
+                (int) $args['id'],
+                (float) ($body['amount'] ?? 0),
+                (string) ($body['method'] ?? ''),
+                (string) ($body['reason'] ?? ''),
+                (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $repo->find((int) $args['id'])]);
     }
 
     /** Admin only: cancel a withdrawal (pending or paid) with a reason. */

@@ -53,6 +53,18 @@ export function fmtNow(opts = { dateStyle: 'medium', timeStyle: 'short' }) {
     return new Date().toLocaleString('th-TH', { ...opts, timeZone: appTimeZone });
 }
 
+/** The period choices of a list, and each one's first and last day up to today. Custom dates are the page's own. */
+export const DATE_PERIODS = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['custom', 'ระบุช่วงเวลา']];
+
+/** Weeks start on Monday, worked out in UTC so no time zone can shift the date. */
+export function periodRange(period, today) {
+    if (period === 'month') return [`${today.slice(0, 7)}-01`, today];
+    if (period !== 'week') return [today, today];
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return [d.toISOString().slice(0, 10), today];
+}
+
 export function qs(obj) {
     const parts = [];
     for (const [k, v] of Object.entries(obj)) {

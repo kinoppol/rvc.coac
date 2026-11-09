@@ -19,17 +19,148 @@ class WithdrawalRepo
     ) {
     }
 
-    public function recent(int $limit = 20): array
+    /**
+     * Latest first, each with its corrections. With $from/$to (Y-m-d, both inclusive): those paid on
+     * these days (requested, until paid), plus every request still waiting so none drops out of sight.
+     */
+    public function recent(int $limit = 20, ?string $from = null, ?string $to = null): array
     {
+        $where = '';
+        $params = [];
+        if ($from !== null && $to !== null) {
+            $where = "WHERE w.status = 'pending' OR (COALESCE(w.paid_at, w.requested_at) >= ? AND COALESCE(w.paid_at, w.requested_at) < ?)";
+            $params = [$from . ' 00:00:00', (new \DateTimeImmutable($to))->modify('+1 day')->format('Y-m-d') . ' 00:00:00'];
+        }
         $stmt = $this->db->prepare(
-            'SELECT w.*, c.name AS consignor_name, cu.full_name AS cancelled_by_name FROM withdrawals w
+            "SELECT w.*, c.name AS consignor_name, cu.full_name AS cancelled_by_name FROM withdrawals w
              JOIN consignors c ON c.id = w.consignor_id
              LEFT JOIN users cu ON cu.id = w.cancelled_by
-             ORDER BY w.id DESC LIMIT ?'
+             {$where}
+             ORDER BY w.id DESC LIMIT " . max(1, $limit)
         );
-        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
-        $stmt->execute();
-        return $stmt->fetchAll();
+        $stmt->execute($params);
+        return $this->withEdits($stmt->fetchAll());
+    }
+
+    /** Adds each withdrawal's corrections, oldest first, from the audit trail that already keeps them. */
+    private function withEdits(array $rows): array
+    {
+        $edits = [];
+        if ($rows) {
+            $in = implode(',', array_fill(0, count($rows), '?'));
+            $stmt = $this->db->prepare(
+                "SELECT al.record_id, al.old_data, al.new_data, al.created_at, u.full_name AS user_name
+                 FROM audit_logs al LEFT JOIN users u ON u.id = al.user_id
+                 WHERE al.table_name = 'withdrawals' AND al.action = 'update' AND al.new_data LIKE '%\"edit_reason\"%' AND al.record_id IN ($in)
+                 ORDER BY al.id"
+            );
+            $stmt->execute(array_column($rows, 'id'));
+            foreach ($stmt->fetchAll() as $e) {
+                $old = json_decode((string) $e['old_data'], true) ?: [];
+                $new = json_decode((string) $e['new_data'], true) ?: [];
+                $edits[(int) $e['record_id']][] = [
+                    'old_amount' => (float) ($old['amount'] ?? 0), 'new_amount' => (float) ($new['amount'] ?? 0),
+                    'old_method' => $old['method'] ?? null, 'new_method' => $new['method'] ?? null,
+                    'reason' => $new['edit_reason'] ?? '', 'user_name' => $e['user_name'], 'at' => $e['created_at'],
+                ];
+            }
+        }
+        foreach ($rows as &$r) {
+            $r['edits'] = $edits[(int) $r['id']] ?? [];
+        }
+        unset($r);
+        return $rows;
+    }
+
+    private static function methodLabel(string $method): string
+    {
+        return match ($method) {
+            'promptpay' => 'พร้อมเพย์',
+            'bank_transfer' => 'โอนธนาคาร',
+            'hold' => 'พักในบัญชีเพื่อผู้ฝากขาย',
+            default => 'เงินสด',
+        };
+    }
+
+    /**
+     * Admin correction of the amount or method, with a reason. The passbook keeps the original line
+     * and gets one more for the difference, so the balance and reports follow. Moving money out of
+     * the account for consignors is refused once that money has already been handed over.
+     */
+    public function edit(int $id, float $amount, string $method, string $reason, int $userId, ?string $ip): void
+    {
+        $amount = round($amount, 2);
+        $reason = mb_substr(trim($reason), 0, 150);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่แก้ไข');
+        }
+        if ($amount <= 0) {
+            throw new \RuntimeException('จำนวนเงินต้องมากกว่า 0');
+        }
+        if (!in_array($method, ['cash', 'promptpay', 'bank_transfer', 'hold'], true)) {
+            throw new \RuntimeException('ช่องทางจ่ายเงินไม่ถูกต้อง');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM withdrawals WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $old = $stmt->fetch();
+            if (!$old || !in_array($old['status'], ['pending', 'paid'], true)) {
+                throw new \RuntimeException('ไม่พบรายการเบิกเงินที่แก้ไขได้');
+            }
+            $oldAmount = round((float) $old['amount'], 2);
+            if (abs($amount - $oldAmount) < 0.005 && $method === $old['method']) {
+                throw new \RuntimeException('ยังไม่ได้เปลี่ยนจำนวนเงินหรือช่องทาง');
+            }
+            if ($method === 'hold' || $old['method'] === 'hold') {
+                $this->guardHeld($old, $amount, $method);
+            }
+            $this->db->prepare('UPDATE withdrawals SET amount = ?, method = ? WHERE id = ?')->execute([$amount, $method, $id]);
+            if ($old['status'] === 'paid') {
+                $diff = round($amount - $oldAmount, 2);
+                $this->ledger->append(
+                    (int) $old['consignor_id'],
+                    $diff < 0 ? 'withdrawal_cancel' : 'withdrawal',
+                    mb_substr(
+                        'แก้ไขการจ่ายเงินจาก ฿' . number_format($oldAmount, 2) . ' (' . self::methodLabel($old['method']) . ')'
+                        . ' เป็น ฿' . number_format($amount, 2) . ' (' . self::methodLabel($method) . "): {$reason}",
+                        0,
+                        255
+                    ),
+                    $old['doc_no'],
+                    $diff < 0 ? -$diff : 0,
+                    $diff > 0 ? $diff : 0,
+                    $userId
+                );
+            }
+            $this->audit->log('withdrawals', $id, 'update',
+                ['amount' => $oldAmount, 'method' => $old['method']],
+                ['amount' => $amount, 'method' => $method, 'edit_reason' => $reason],
+                $userId, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** What a correction does to the money held for the consignor: it can't leave less than was handed over. */
+    private function guardHeld(array $old, float $amount, string $method): void
+    {
+        $holds = new \App\Services\ConsignorHoldService($this->db, $this->audit, $this->docs);
+        if (!$holds->ready()) {
+            throw new \RuntimeException('ยังพักเงินไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0069) ก่อน');
+        }
+        if ($old['status'] !== 'paid') {
+            throw new \RuntimeException('คำขอเบิกที่รออนุมัติเลือกการพักเงินไม่ได้ ให้พักเงินจากสรุปบัญชีรายวัน');
+        }
+        $lock = $this->db->prepare('SELECT id FROM consignors WHERE id = ? FOR UPDATE');
+        $lock->execute([$old['consignor_id']]);
+        $held = $holds->heldOf((int) $old['consignor_id']);
+        $after = $held - ($old['method'] === 'hold' ? (float) $old['amount'] : 0) + ($method === 'hold' ? $amount : 0);
+        if ($after < -0.005) {
+            throw new \RuntimeException('เงินที่พักไว้ถูกจ่ายให้ผู้ฝากขายไปแล้ว เหลือ ฿' . number_format($held, 2) . ' ให้ยกเลิกการจ่ายเงินในหน้าบัญชีเพื่อผู้ฝากขายก่อน');
+        }
     }
 
     public function pendingCount(): int

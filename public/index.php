@@ -398,6 +398,7 @@ $app->group('/api', function ($group) {
     $group->post('/withdrawals/{id}/approve', [WithdrawController::class, 'approve'])
         ->add(new RoleGuard('withdraw.approve'));
     $group->post('/withdrawals/{id:[0-9]+}/cancel', [WithdrawController::class, 'cancel']);
+    $group->put('/withdrawals/{id:[0-9]+}', [WithdrawController::class, 'edit']);
 
     $group->get('/holds', [ConsignorHoldController::class, 'index'])
         ->add(new RoleGuard('hold.manage'));

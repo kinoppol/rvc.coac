@@ -1,18 +1,7 @@
 import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
-import { money, escapeHtml, fmtDate, fmtDateTime, todayISO, qs } from '../util.js';
+import { money, escapeHtml, fmtDate, fmtDateTime, todayISO, qs, DATE_PERIODS, periodRange } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
-
-const DOC_PERIODS = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['custom', 'ระบุช่วงเวลา']];
-
-/** First and last day of a period, up to today. Weeks start on Monday, worked out in UTC so no time zone can shift the date. */
-function periodRange(period, today) {
-    if (period === 'month') return [`${today.slice(0, 7)}-01`, today];
-    if (period !== 'week') return [today, today];
-    const d = new Date(`${today}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
-    return [d.toISOString().slice(0, 10), today];
-}
 
 export async function render(container, { permissions = [], user } = {}) {
     const isAdmin = user?.role === 'admin';
@@ -552,7 +541,7 @@ export async function render(container, { permissions = [], user } = {}) {
           </div>
           <div class="sv-filters" style="padding:12px 18px;border-bottom:1px solid var(--border)">
             <div class="tabs" role="group" aria-label="ช่วงวันที่รับฝาก" id="rc-docs-periods">
-              ${DOC_PERIODS.map(([k, l]) => `<button type="button" class="tab-btn${k === docsPeriod ? ' active' : ''}" data-period="${k}" aria-pressed="${k === docsPeriod}">${l}</button>`).join('')}
+              ${DATE_PERIODS.map(([k, l]) => `<button type="button" class="tab-btn${k === docsPeriod ? ' active' : ''}" data-period="${k}" aria-pressed="${k === docsPeriod}">${l}</button>`).join('')}
             </div>
             <div class="sv-controls">
               <span id="rc-docs-custom" style="display:${docsPeriod === 'custom' ? 'flex' : 'none'};flex-wrap:wrap;gap:8px;align-items:center">
