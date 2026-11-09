@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDateTime } from '../util.js';
 import { printPassbook } from '../print-slip.js';
+import { mountSalesCharts } from './mypassbook-charts.js';
 
 const VIEWS = [['day', 'รายวัน'], ['week', 'รายสัปดาห์'], ['month', 'รายเดือน'], ['all', 'ทั้งหมด']];
 
@@ -60,7 +61,7 @@ function summarize(view, sales, entries) {
 function periodHtml(view, p, open) {
     const products = [...p.products.values()].sort((a, b) => b.value - a.value || a.name.localeCompare(b.name, 'th'));
     return `
-      <details class="card" data-period style="padding:0;margin-top:10px;box-shadow:none"${open ? ' open' : ''}>
+      <details class="card" data-period="${p.key}" style="padding:0;margin-top:10px;box-shadow:none"${open ? ' open' : ''}>
         <summary style="padding:12px 14px;cursor:pointer">
           <span style="font-weight:700">${escapeHtml(periodLabel(view, p.key))}</span>
           <div class="muted" style="display:flex;flex-wrap:wrap;gap:2px 14px;font-size:12.5px;margin-top:4px;padding-left:16px">
@@ -127,9 +128,13 @@ export async function render(container) {
             <div style="font-weight:700;font-size:16px">${escapeHtml(consignor.name)}</div>
             <div class="muted" style="font-size:12.5px">${escapeHtml(consignor.code)} · ${escapeHtml(consignor.type)} · ${escapeHtml(consignor.pay_channel)}</div>
           </div>
-          <div class="tabs" role="group" aria-label="สรุปตามช่วงเวลา" id="period-tabs">
-            ${VIEWS.map(([k, l]) => `<button type="button" class="tab-btn" data-view="${k}">${l}</button>`).join('')}
+          <div class="sv-filters">
+            <div class="tabs" role="group" aria-label="สรุปตามช่วงเวลา" id="period-tabs">
+              ${VIEWS.map(([k, l]) => `<button type="button" class="tab-btn" data-view="${k}">${l}</button>`).join('')}
+            </div>
+            <div class="sv-controls" id="chart-controls"></div>
           </div>
+          <div class="sales-viz" id="sales-charts"></div>
           <div id="period-list"></div>
         </section>
         <details class="card card-pad" style="margin-top:14px">
@@ -167,15 +172,31 @@ export async function render(container) {
 
     const tabs = container.querySelector('#period-tabs');
     const list = container.querySelector('#period-list');
+    // A column picked in the chart opens that period's table, so both show the same figures.
+    const openPeriod = (key) => {
+        const hit = [...list.querySelectorAll('[data-period]')].find((d) => d.dataset.period === key);
+        if (!hit) return;
+        list.querySelectorAll('[data-period]').forEach((d) => { d.open = d === hit; });
+    };
+    const charts = mountSalesCharts({
+        controls: container.querySelector('#chart-controls'),
+        host: container.querySelector('#sales-charts'),
+        sales,
+        summarize,
+        periodKey,
+        periodLabel,
+        onSelect: openPeriod,
+    });
     const draw = () => {
         tabs.querySelectorAll('[data-view]').forEach((b) => {
             b.classList.toggle('active', b.dataset.view === view);
             b.setAttribute('aria-pressed', String(b.dataset.view === view));
         });
+        charts.setView(view);
         const periods = summarize(view, sales, entries);
-        // The latest period starts open; older ones open on a tap.
+        // The latest period starts open, and the one the charts show; older ones open on a tap.
         list.innerHTML = periods.length
-            ? periods.map((p, i) => periodHtml(view, p, i === 0)).join('')
+            ? periods.map((p, i) => periodHtml(view, p, i === 0 || p.key === charts.selected())).join('')
             : '<div class="empty" style="margin-top:12px">ยังไม่มีรายการ</div>';
     };
     tabs.addEventListener('click', (e) => {
