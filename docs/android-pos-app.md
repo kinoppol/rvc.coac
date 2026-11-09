@@ -400,7 +400,7 @@ businessDay(at):
 ใช้ API เดียวกับหน้าเว็บผ่านโทเคนเครื่อง สิทธิ์ตามบัญชีของผู้ใช้งานอยู่ (`X-Device-User`) — แอปแสดงเมนูเฉพาะผู้มีสิทธิ์
 - **รับฝากสินค้า** (`receive.create`; ย้อนหลัง `receive.backdate`): `GET /consignors/options`, `POST /receive/quote`,
   `GET /receive/history?consignor_id=&q=`, `POST /receive/existing`, `POST /receive`, `GET /receive/requests`,
-  `POST /receive/requests/{id}/reject`, `GET /receive/docs?q=`, `GET /receive/docs/{id}`, `POST /receive/docs/{id}/cancel` (ผู้ดูแลระบบ)
+  `POST /receive/requests/{id}/reject`, `GET /receive/docs?q=&from=&to=`, `GET /receive/docs/{id}`, `POST /receive/docs/{id}/cancel` (ผู้ดูแลระบบ)
 - **ตรวจนับสต๊อก** (`stockcount.create`; ส่งรายงาน `stockcount.submit`; อนุมัติ/ส่งกลับ `stockcount.approve`):
   `GET /stockcounts`, `GET /stockcounts/{id}`, `POST /stockcounts/start`, `GET /stockcounts/{id}/lookup?code=`,
   `GET /stockcounts/{id}/search?q=`, `POST /stockcounts/{id}/count` (ต้องมีรูป `photo`), `POST /stockcounts/{id}/barcode`,

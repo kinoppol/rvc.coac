@@ -1,7 +1,18 @@
 import { api } from '../api.js';
 import { printConsignSlip } from '../print-slip.js';
-import { money, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
+import { money, escapeHtml, fmtDate, fmtDateTime, todayISO, qs } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+
+const DOC_PERIODS = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['custom', 'ระบุช่วงเวลา']];
+
+/** First and last day of a period, up to today. Weeks start on Monday, worked out in UTC so no time zone can shift the date. */
+function periodRange(period, today) {
+    if (period === 'month') return [`${today.slice(0, 7)}-01`, today];
+    if (period !== 'week') return [today, today];
+    const d = new Date(`${today}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return [d.toISOString().slice(0, 10), today];
+}
 
 export async function render(container, { permissions = [], user } = {}) {
     const isAdmin = user?.role === 'admin';
@@ -468,18 +479,65 @@ export async function render(container, { permissions = [], user } = {}) {
     let docs = [];
     let docsQ = '';
     let docsTimer;
+    let docsPeriod = 'today';
+    let docsFrom = ''; // the chosen dates, when the period is 'custom'
+    let docsTo = '';
+    let docsLimit = null; // the most the server sends for a period
+    let docsSeq = 0; // ignore a reply that arrives after a newer filter was chosen
     let docsError = null; // shown in the list, so a failed load doesn't look like an empty one
     let docModal = null; // { el, doc, edit: { item id, fields } | null, error, busy }
 
+    const docsRange = () => (docsPeriod === 'custom' ? [docsFrom, docsTo] : periodRange(docsPeriod, todayISO()));
+
+    function docsRangeProblem() {
+        const [from, to] = docsRange();
+        if (!from || !to) return 'เลือกวันที่เริ่มต้นและวันที่สิ้นสุด';
+        return from > to ? 'วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด' : null;
+    }
+
+    // Only the rows change here, so the filters keep their focus while someone is typing a search or a date.
     async function loadDocs() {
+        const seq = ++docsSeq;
+        docsError = null;
+        if (docsRangeProblem()) {
+            docs = [];
+            drawDocRows();
+            return;
+        }
+        const [from, to] = docsRange();
         try {
-            docs = (await api.get(`/receive/docs?q=${encodeURIComponent(docsQ)}`)).data;
-            docsError = null;
+            const res = await api.get(`/receive/docs${qs({ q: docsQ, from, to })}`);
+            if (seq !== docsSeq) return;
+            docs = res.data;
+            docsLimit = res.limit ?? null;
         } catch (e) {
+            if (seq !== docsSeq) return;
             docs = [];
             docsError = e.message;
         }
-        drawDocs();
+        drawDocRows();
+    }
+
+    function drawDocRows() {
+        const box = container.querySelector('#rc-docs');
+        if (!box) return;
+        const problem = docsRangeProblem();
+        const [from, to] = docsRange();
+        box.querySelector('#rc-docs-range').textContent = docsPeriod === 'custom' ? ''
+            : from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
+        box.querySelector('#rc-docs-note').innerHTML = docsLimit && docs.length >= docsLimit
+            ? `แสดง ${docsLimit.toLocaleString('th-TH')} ใบล่าสุดของช่วงนี้ เลือกช่วงเวลาให้แคบลงเพื่อดูให้ครบ` : '';
+        box.querySelector('#rc-docs-rows').innerHTML = docs.map((d) => `
+              <tr${d.cancelled_at ? ' style="opacity:.6"' : ''}>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(d.doc_no)}${d.cancelled_at ? '<div><span class="pill muted" style="font-size:11px">ยกเลิกแล้ว</span></div>' : ''}</td>
+                <td style="font-size:12.5px;white-space:nowrap">${fmtDateTime(d.created_at)}</td>
+                <td>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</td>
+                <td style="font-size:12.5px;max-width:320px">${escapeHtml(d.names || '')}<div class="muted">${Number(d.items)} รายการ</div>${d.cancelled_at && d.cancel_reason ? `<div class="muted" style="font-size:11.5px">เหตุผลที่ยกเลิก: ${escapeHtml(d.cancel_reason)}</div>` : ''}</td>
+                <td class="num">${Number(d.total_qty)}</td>
+                <td class="num">${money(d.total_value)}</td>
+                <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin && !d.cancelled_at ? 'ดู / แก้ไข' : 'ดู'}</button></td>
+              </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsError ? `โหลดรายการไม่สำเร็จ: ${escapeHtml(docsError)}` : problem ? escapeHtml(problem) : docsQ ? 'ไม่พบใบรับฝากที่ค้นหาในช่วงเวลานี้ ลองเลือกช่วงเวลาอื่น' : 'ไม่มีรายการรับฝากในช่วงเวลานี้'}</td></tr>`;
+        box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => openDoc(Number(b.dataset.doc))));
     }
 
     function drawDocs() {
@@ -492,20 +550,23 @@ export async function render(container, { permissions = [], user } = {}) {
             <h2>รายการที่รับฝากไว้</h2>
             <input id="rc-docs-q" type="search" value="${escapeHtml(docsQ)}" placeholder="ค้นหาเลขที่ ผู้ฝาก หรือชื่อสินค้า" style="max-width:280px;flex:1">
           </div>
+          <div class="sv-filters" style="padding:12px 18px;border-bottom:1px solid var(--border)">
+            <div class="tabs" role="group" aria-label="ช่วงวันที่รับฝาก" id="rc-docs-periods">
+              ${DOC_PERIODS.map(([k, l]) => `<button type="button" class="tab-btn${k === docsPeriod ? ' active' : ''}" data-period="${k}" aria-pressed="${k === docsPeriod}">${l}</button>`).join('')}
+            </div>
+            <div class="sv-controls">
+              <span id="rc-docs-custom" style="display:${docsPeriod === 'custom' ? 'flex' : 'none'};flex-wrap:wrap;gap:8px;align-items:center">
+                <label>ตั้งแต่ <input type="date" id="rc-docs-from" value="${escapeHtml(docsFrom)}"></label>
+                <label>ถึง <input type="date" id="rc-docs-to" value="${escapeHtml(docsTo)}"></label>
+              </span>
+              <span class="muted" id="rc-docs-range" style="font-size:12.5px"></span>
+            </div>
+          </div>
           <div class="table-wrap"><table>
             <thead><tr><th>เลขที่</th><th>วันที่รับฝาก</th><th>ผู้ฝากขาย</th><th>สินค้า</th><th class="num">ชิ้น</th><th class="num">มูลค่า (ราคาขาย)</th><th></th></tr></thead>
-            <tbody>${docs.map((d) => `
-              <tr${d.cancelled_at ? ' style="opacity:.6"' : ''}>
-                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(d.doc_no)}${d.cancelled_at ? '<div><span class="pill muted" style="font-size:11px">ยกเลิกแล้ว</span></div>' : ''}</td>
-                <td style="font-size:12.5px;white-space:nowrap">${fmtDateTime(d.created_at)}</td>
-                <td>${escapeHtml(d.consignor_code)} - ${escapeHtml(d.consignor_name)}</td>
-                <td style="font-size:12.5px;max-width:320px">${escapeHtml(d.names || '')}<div class="muted">${Number(d.items)} รายการ</div>${d.cancelled_at && d.cancel_reason ? `<div class="muted" style="font-size:11.5px">เหตุผลที่ยกเลิก: ${escapeHtml(d.cancel_reason)}</div>` : ''}</td>
-                <td class="num">${Number(d.total_qty)}</td>
-                <td class="num">${money(d.total_value)}</td>
-                <td style="text-align:right"><button type="button" class="btn sm secondary" data-doc="${d.id}">${isAdmin && !d.cancelled_at ? 'ดู / แก้ไข' : 'ดู'}</button></td>
-              </tr>`).join('') || `<tr><td colspan="7" class="empty">${docsError ? `โหลดรายการไม่สำเร็จ: ${escapeHtml(docsError)}` : docsQ ? 'ไม่พบใบรับฝากที่ค้นหา' : 'ยังไม่มีรายการรับฝาก'}</td></tr>`}
-            </tbody>
+            <tbody id="rc-docs-rows"></tbody>
           </table></div>
+          <div class="muted" id="rc-docs-note" style="font-size:12.5px;padding:0 18px"></div>
         </section>`;
         const q = box.querySelector('#rc-docs-q');
         if (focused) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
@@ -514,7 +575,24 @@ export async function render(container, { permissions = [], user } = {}) {
             clearTimeout(docsTimer);
             docsTimer = setTimeout(loadDocs, 300);
         });
-        box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => openDoc(Number(b.dataset.doc))));
+        box.querySelector('#rc-docs-periods').addEventListener('click', (e) => {
+            const b = e.target.closest('[data-period]');
+            if (!b || b.dataset.period === docsPeriod) return;
+            // Custom dates start from what was on screen, so a nearby range takes only a small change.
+            if (b.dataset.period === 'custom') [docsFrom, docsTo] = docsRange();
+            docsPeriod = b.dataset.period;
+            box.querySelectorAll('[data-period]').forEach((t) => {
+                t.classList.toggle('active', t === b);
+                t.setAttribute('aria-pressed', String(t === b));
+            });
+            box.querySelector('#rc-docs-custom').style.display = docsPeriod === 'custom' ? 'flex' : 'none';
+            box.querySelector('#rc-docs-from').value = docsFrom;
+            box.querySelector('#rc-docs-to').value = docsTo;
+            loadDocs();
+        });
+        box.querySelector('#rc-docs-from').addEventListener('change', (e) => { docsFrom = e.target.value; loadDocs(); });
+        box.querySelector('#rc-docs-to').addEventListener('change', (e) => { docsTo = e.target.value; loadDocs(); });
+        drawDocRows();
     }
 
     async function openDoc(id) {

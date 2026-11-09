@@ -179,9 +179,20 @@ class ReceiveService
     }
 
     /** Recent receive documents (newest first), optionally matching a doc no., consignor or product name. */
-    public function documents(string $q = '', int $limit = 50): array
+    /** @param string|null $from,$to Y-m-d: only documents received on these days (both inclusive) */
+    public function documents(string $q = '', int $limit = 50, ?string $from = null, ?string $to = null): array
     {
         $like = '%' . addcslashes($q, '%_\\') . '%';
+        $params = [$q, $like, $like, $like, $like];
+        $period = '';
+        if ($from !== null) {
+            $period .= ' AND rd.created_at >= ?';
+            $params[] = $from . ' 00:00:00';
+        }
+        if ($to !== null) {
+            $period .= ' AND rd.created_at < ?';
+            $params[] = (new \DateTimeImmutable($to))->modify('+1 day')->format('Y-m-d') . ' 00:00:00';
+        }
         // Cancel columns come with migration 0050; until it runs nothing is cancelled.
         $cancel = \App\Support\Db::hasColumn($this->db, 'receive_documents', 'cancelled_at')
             ? 'rd.cancelled_at, rd.cancel_reason' : 'NULL AS cancelled_at, NULL AS cancel_reason';
@@ -194,12 +205,13 @@ class ReceiveService
              FROM receive_documents rd
              JOIN consignors c ON c.id = rd.consignor_id
              LEFT JOIN users u ON u.id = rd.user_id
-             WHERE ? = '' OR rd.doc_no LIKE ? OR c.name LIKE ? OR c.code LIKE ?
-                OR EXISTS (SELECT 1 FROM receive_items ri JOIN products p ON p.id = ri.product_id WHERE ri.receive_document_id = rd.id AND p.name LIKE ?)
+             WHERE (? = '' OR rd.doc_no LIKE ? OR c.name LIKE ? OR c.code LIKE ?
+                OR EXISTS (SELECT 1 FROM receive_items ri JOIN products p ON p.id = ri.product_id WHERE ri.receive_document_id = rd.id AND p.name LIKE ?))
+                {$period}
              ORDER BY rd.id DESC
-             LIMIT " . max(1, min(200, $limit))
+             LIMIT " . max(1, min(1000, $limit))
         );
-        $stmt->execute([$q, $like, $like, $like, $like]);
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 

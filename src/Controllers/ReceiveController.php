@@ -142,8 +142,29 @@ class ReceiveController
     /** Receive documents already saved (?q= doc no., consignor or product name). */
     public function documents(Request $request, Response $response): Response
     {
-        $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
-        return $this->json($response, ['data' => self::service(Db::connection())->documents($q)]);
+        $params = $request->getQueryParams();
+        $q = trim((string) ($params['q'] ?? ''));
+        $period = [];
+        foreach (['from', 'to'] as $key) {
+            $value = trim((string) ($params[$key] ?? ''));
+            if ($value === '') {
+                $period[$key] = null;
+                continue;
+            }
+            $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+            if (!$date || $date->format('Y-m-d') !== $value) {
+                return $this->error($response, 'วันที่ไม่ถูกต้อง', 422);
+            }
+            $period[$key] = $value;
+        }
+        // Without a period (the Android app) this stays the latest few. A month can hold far more,
+        // and the page says so if even this many is not all of them.
+        if ($period['from'] === null && $period['to'] === null) {
+            return $this->json($response, ['data' => self::service(Db::connection())->documents($q)]);
+        }
+        $limit = 1000;
+        $rows = self::service(Db::connection())->documents($q, $limit, $period['from'], $period['to']);
+        return $this->json($response, ['data' => $rows, 'limit' => $limit]);
     }
 
     public function document(Request $request, Response $response, array $args): Response
