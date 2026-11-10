@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
-import { alertDialog, confirmDialog } from '../dialog.js';
+import { alertDialog, choiceDialog, confirmDialog } from '../dialog.js';
 import { PAYMENT_LABEL, statusPill, paymentsText, serverTime, requestHtml } from '../sale-edit.js';
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -52,6 +52,27 @@ export async function render(container, { user }) {
 
     const ownSale = (s) => String(s.cashier_id) === String(user.id);
 
+    /** A payment method picked by mistake: within a few minutes the cashier changes it alone, no approval. */
+    async function fixPayment(id) {
+        const s = data.data.find((r) => String(r.id) === String(id));
+        if (!s) return;
+        const choices = data.payment_methods
+            .filter((m) => !(s.methods.length === 1 && s.methods[0] === m.key))
+            .map((m) => ({ key: m.key, label: `${m.label} ฿${money(s.total_value)}` }));
+        const method = await choiceDialog(
+            `${s.doc_no} · ยอดขาย ฿${money(s.total_value)}\nเดิม: ${s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || '-'}\nเลือกวิธีที่ลูกค้าชำระจริง (ทั้งยอด)`,
+            choices,
+            { title: 'แก้วิธีชำระเงิน' },
+        );
+        if (!method) return;
+        try {
+            await api.post(`/sales/${s.id}/payment-fix`, { method });
+        } catch (err) {
+            alertDialog(err.message, { title: 'แก้วิธีชำระไม่ได้', tone: 'error' });
+        }
+        load();
+    }
+
     function draw() {
         const d = data;
         const rows = d.data;
@@ -95,9 +116,10 @@ export async function render(container, { user }) {
                 <td class="num">${count(s.total_qty)}</td>
                 <td class="num" style="font-weight:600">${money(s.total_value)}</td>
                 <td style="font-size:12.5px">${escapeHtml(s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || (s.pos_import ? 'ไม่ระบุ (POS ภายนอก)' : '-'))}</td>
-                <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}</td>
+                <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}${s.payment_edited_at ? ` <span class="pill warn" title="แก้เมื่อ ${escapeHtml(fmtDateTime(s.payment_edited_at))}">แก้วิธีชำระแล้ว</span>` : ''}</td>
                 <td style="white-space:nowrap;text-align:right">
                   <button type="button" class="btn secondary sm" data-view="${s.id}">ดูรายละเอียด</button>
+                  ${ownSale(s) && s.payment_fix_until && left(s.payment_fix_until) > 0 ? `<button type="button" class="btn secondary sm" data-fix="${s.id}" title="เลือกวิธีชำระผิด แก้ได้ภายใน 5 นาทีหลังขาย ไม่ต้องรออนุมัติ">แก้วิธีชำระ (<span data-until="${escapeHtml(s.payment_fix_until)}">${mmss(left(s.payment_fix_until))}</span>)</button>` : ''}
                   ${ownSale(s) && s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn sm" data-edit="${s.id}">แก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
                 </td>
               </tr>`).join('') || `<tr><td colspan="${self ? 8 : 9}" class="empty">ไม่มีการขายในช่วงนี้</td></tr>`}</tbody>
@@ -281,6 +303,7 @@ export async function render(container, { user }) {
         $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; if (from > to) from = to; load(); } });
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openDetail(b.dataset.view)));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.edit)));
+        container.querySelectorAll('[data-fix]').forEach((b) => b.addEventListener('click', () => fixPayment(b.dataset.fix)));
         container.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => { detail = null; draw(); }));
         container.querySelectorAll('[data-cancel-req]').forEach((b) => b.addEventListener('click', async () => {
             if (!await confirmDialog('ยกเลิกคำขอแก้ไขนี้? การขายจะคงเดิม', { title: 'ยกเลิกคำขอแก้ไข', okText: 'ยกเลิกคำขอ', cancelText: 'ไม่ยกเลิก', danger: true })) return;

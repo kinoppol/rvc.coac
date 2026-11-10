@@ -3,9 +3,12 @@ import { money, count, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 
 const METHODS = { cash: 'เงินสด', transfer: 'โอนเงินเข้าบัญชี', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' };
+// sales.payment_original: "cash:120.00,transfer:30.00" (how it was paid before the first change).
+const originalText = (v) => String(v).split(',').map((p) => { const [m, a] = p.split(':'); return `${METHODS[m] || m} ${money(a)}`; }).join(' + ');
 const EVENT_LABEL = {
     open: ['ระบุเงินในลิ้นชักก่อนขาย', 'ok'], open_late: ['ระบุเงินในลิ้นชักหลังเริ่มขาย', 'warn'], skip: ['ข้ามการระบุเงินในลิ้นชัก', 'warn'],
     close: ['ปิดยอด', 'ok'], recount: ['นับเงินปิดยอดใหม่', 'muted'], adjust_open: ['แก้เงินตั้งต้น', 'muted'], payment_edit: ['แก้วิธีชำระเงิน', 'muted'],
+    payment_fix: ['พนักงานขายแก้วิธีชำระเอง', 'warn'],
     wage_out: ['จ่ายค่าแรงจากลิ้นชัก', 'muted'], wage_cancel: ['ยกเลิกจ่ายค่าแรง', 'muted'],
 };
 
@@ -121,7 +124,7 @@ export async function render(container, { params = {} } = {}) {
               <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(s.doc_no)}</td>
               <td class="muted">${escapeHtml(fmtDateTime(s.sale_datetime))}${Number(s.after_hours) ? ' <span class="pill muted">นอกเวลา</span>' : ''}</td>
               <td>${escapeHtml(s.cashier_name || '-')}</td>
-              <td>${payText(s.payments)}</td>
+              <td>${payText(s.payments)}${s.payment_edited_at ? `<div><span class="pill warn" title="${escapeHtml(`แก้เมื่อ ${fmtDateTime(s.payment_edited_at)}${s.payment_edited_name ? ` โดย ${s.payment_edited_name}` : ''}${s.payment_original ? ` · เดิม ${originalText(s.payment_original)}` : ''}`)}">แก้วิธีชำระแล้ว</span></div>` : ''}</td>
               <td class="num">${money(s.total_value)}</td>
               <td style="text-align:right">${s.payments.length ? `<button type="button" class="btn secondary sm" data-edit-pay="${s.id}">แก้วิธีชำระ</button>` : ''}</td>
             </tr>`).join('') || '<tr><td colspan="6" class="empty">ยังไม่มีรายการขาย</td></tr>'}</tbody>
@@ -147,15 +150,16 @@ export async function render(container, { params = {} } = {}) {
           <div class="card-head"><h2>สรุปพฤติกรรมพนักงาน ${count(behavior.days)} วันล่าสุด</h2></div>
           <div class="table-wrap"><table>
             <thead><tr><th>พนักงาน</th><th class="num" title="ระบุเงินในลิ้นชักก่อนเริ่มขาย">ระบุก่อนขาย</th><th class="num" title="ระบุหลังจากขายไปแล้ว">ระบุหลังเริ่มขาย</th>
-              <th class="num">ข้าม (ครั้ง)</th><th class="num">ข้าม (วัน)</th><th class="num">ปิดยอด</th><th class="num" title="บิลที่พนักงานคนนี้ขาย แล้วต้องแก้วิธีชำระภายหลัง">บิลที่ถูกแก้วิธีชำระ</th></tr></thead>
+              <th class="num">ข้าม (ครั้ง)</th><th class="num">ข้าม (วัน)</th><th class="num">ปิดยอด</th><th class="num" title="บิลที่พนักงานคนนี้ขาย แล้วผู้ดูแลต้องแก้วิธีชำระภายหลัง">บิลที่ถูกแก้วิธีชำระ</th><th class="num" title="พนักงานแก้วิธีชำระเองภายใน 5 นาทีหลังขาย (ไม่ต้องอนุมัติ)">แก้วิธีชำระเอง</th></tr></thead>
             <tbody>${behavior.data.map((u) => `<tr><td>${escapeHtml(u.full_name)}</td>
               <td class="num">${count(u.opens)}</td>
               <td class="num" style="${u.late_opens ? 'color:var(--warn);font-weight:600' : ''}">${count(u.late_opens)}</td>
               <td class="num" style="${u.skips ? 'color:var(--warn);font-weight:600' : ''}">${count(u.skips)}</td>
               <td class="num">${count(u.skip_days)}</td>
               <td class="num">${count(u.closes)}</td>
-              <td class="num" style="${u.corrected ? 'color:var(--warn);font-weight:600' : ''}">${count(u.corrected)}</td></tr>`).join('')
-              || '<tr><td colspan="7" class="empty">ยังไม่มีบันทึก</td></tr>'}</tbody>
+              <td class="num" style="${u.corrected ? 'color:var(--warn);font-weight:600' : ''}">${count(u.corrected)}</td>
+              <td class="num" style="${u.self_fixed ? 'color:var(--warn);font-weight:600' : ''}">${count(u.self_fixed || 0)}</td></tr>`).join('')
+              || '<tr><td colspan="8" class="empty">ยังไม่มีบันทึก</td></tr>'}</tbody>
           </table></div>
         </section>` : ''}`;
     }

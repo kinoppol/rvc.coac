@@ -17,6 +17,12 @@ class CashDrawerService
     /** How long one "skip for now" lets a cashier sell without the opening count. */
     public const SKIP_SECONDS = 300;
 
+    /** How long after a sale its cashier may change the payment method alone (a wrong button). */
+    public const PAYMENT_FIX_SECONDS = 300;
+
+    /** Leeway for a request sent just as the time runs out (the device's countdown, the network). */
+    private const PAYMENT_FIX_GRACE = 60;
+
     public function __construct(private PDO $db, private AuditLogger $audit)
     {
     }
@@ -186,7 +192,7 @@ class CashDrawerService
      * Admin / manager: correct how a sale was paid (the cashier picked the wrong method).
      * @param array<int,array{method:string, amount:float}> $lines must add up to the sale total
      */
-    public function editPayments(int $saleId, array $lines, int $userId, ?string $ip): void
+    public function editPayments(int $saleId, array $lines, int $userId, ?string $ip, bool $selfFix = false): void
     {
         $stmt = $this->db->prepare('SELECT * FROM sales WHERE id = ?');
         $stmt->execute([$saleId]);
@@ -250,10 +256,12 @@ class CashDrawerService
                 fn ($l) => SettingsService::PAYMENT_METHODS[$l['method']] . ' ' . number_format((float) $l['amount'], 2), $ls
             ));
             $newLines = array_map(fn ($m, $a) => ['method' => $m, 'amount' => $a], array_keys($byMethod), $byMethod);
-            $this->event((string) $sale['business_date'], $userId, 'payment_edit', $total,
-                mb_substr("{$sale['doc_no']}: " . ($label($oldLines) ?: 'ไม่มีข้อมูล') . ' → ' . $label($newLines), 0, 500),
+            $this->event((string) $sale['business_date'], $userId, $selfFix ? 'payment_fix' : 'payment_edit', $total,
+                mb_substr("{$sale['doc_no']}: " . ($label($oldLines) ?: 'ไม่มีข้อมูล') . ' → ' . $label($newLines)
+                    . ($selfFix ? ' (พนักงานขายแก้เองภายใน ' . intdiv(self::PAYMENT_FIX_SECONDS, 60) . ' นาที)' : ''), 0, 500),
                 (int) $sale['cashier_id']);
-            $this->audit->log('sale_payments', $saleId, 'update', ['payments' => $oldLines], ['payments' => $newLines], $userId, $ip);
+            $this->markPaymentEdited($sale, $oldLines, $userId);
+            $this->audit->log('sale_payments', $saleId, $selfFix ? 'payment_fix' : 'update', ['payments' => $oldLines], ['payments' => $newLines], $userId, $ip);
             if ($own) {
                 $this->db->commit();
             }
@@ -263,6 +271,118 @@ class CashDrawerService
             }
             throw $e;
         }
+    }
+
+    /**
+     * The cashier puts right a payment method picked by mistake, within PAYMENT_FIX_SECONDS of the
+     * sale, without an approval: the whole amount moves to one method the shop takes. The change is
+     * logged in the drawer's history and the sale keeps a mark (and how it was paid first).
+     */
+    public function selfFixPayment(int $saleId, string $method, array $user, ?string $ip): array
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT s.*, EXISTS (SELECT 1 FROM pos_imports pi WHERE pi.sale_id = s.id) AS pos_import FROM sales s WHERE s.id = ?');
+            $stmt->execute([$saleId]);
+        } catch (\PDOException $e) {
+            // pos_imports not there yet: no imported sales.
+            $stmt = $this->db->prepare('SELECT s.*, 0 AS pos_import FROM sales s WHERE s.id = ?');
+            $stmt->execute([$saleId]);
+        }
+        $sale = $stmt->fetch();
+        if (!$sale || (int) $sale['cashier_id'] !== (int) $user['id']) {
+            throw new \RuntimeException('ไม่พบรายการขายของคุณ');
+        }
+        if ((int) $sale['pos_import']) {
+            throw new \RuntimeException('รายการที่นำเข้าจากเครื่อง POS แก้วิธีชำระที่นี่ไม่ได้');
+        }
+        $until = self::paymentFixUntil($sale);
+        if (time() > strtotime($until) + self::PAYMENT_FIX_GRACE) {
+            throw new \RuntimeException('เกิน ' . intdiv(self::PAYMENT_FIX_SECONDS, 60)
+                . ' นาทีหลังการขายแล้ว แก้วิธีชำระเองไม่ได้ กรุณาขอแก้ไขการขายในประวัติการขายของฉัน');
+        }
+        $settings = new SettingsService($this->db);
+        if (!in_array($method, $settings->paymentMethods(), true)) {
+            throw new \RuntimeException('ร้านไม่ได้เปิดรับวิธีชำระนี้');
+        }
+        $old = $this->db->prepare('SELECT method FROM sale_payments WHERE sale_id = ?');
+        $old->execute([$saleId]);
+        $current = array_values(array_unique($old->fetchAll(PDO::FETCH_COLUMN)));
+        if ($current === [$method]) {
+            throw new \RuntimeException('รายการนี้ชำระด้วย' . SettingsService::PAYMENT_METHODS[$method] . 'อยู่แล้ว');
+        }
+        $this->editPayments($saleId, [['method' => $method, 'amount' => (float) $sale['total_value']]], (int) $user['id'], $ip, true);
+
+        $stmt = $this->db->prepare('SELECT id, doc_no, total_value, cash_received, change_amount, business_date FROM sales WHERE id = ?');
+        $stmt->execute([$saleId]);
+        $row = $stmt->fetch();
+        $pays = $this->db->prepare('SELECT method, amount FROM sale_payments WHERE sale_id = ? ORDER BY id');
+        $pays->execute([$saleId]);
+        return $row + [
+            'payments' => $pays->fetchAll(),
+            'payment_edited' => true,
+            'payment_fix_until' => $until,
+        ];
+    }
+
+    /**
+     * Until when the cashier may change a sale's payment method alone: counted from when the server
+     * took the sale, or, for a sale booked well after it was made (offline, sent later), from when
+     * it was made.
+     */
+    public static function paymentFixUntil(array $sale): string
+    {
+        $made = strtotime((string) $sale['sale_datetime']);
+        $at = strtotime((string) ($sale['created_at'] ?? '')) ?: $made;
+        if ($made && $at - $made > 120) {
+            $at = $made;
+        }
+        return date('Y-m-d H:i:s', $at + self::PAYMENT_FIX_SECONDS);
+    }
+
+    /**
+     * A sale the device changed the payment method of before sending it (made offline, or not
+     * sent yet): booked as finally paid, recorded as changed, as if fixed on the server.
+     */
+    public function recordDeviceFix(int $saleId, array $from, int $userId, ?string $fixedAt, ?string $ip): void
+    {
+        $stmt = $this->db->prepare('SELECT * FROM sales WHERE id = ?');
+        $stmt->execute([$saleId]);
+        $sale = $stmt->fetch();
+        if (!$sale) {
+            return;
+        }
+        $oldLines = [];
+        foreach ($from as $l) {
+            $m = is_array($l) ? (string) ($l['method'] ?? '') : '';
+            if (isset(SettingsService::PAYMENT_METHODS[$m]) && (float) ($l['amount'] ?? 0) > 0) {
+                $oldLines[] = ['method' => $m, 'amount' => round((float) $l['amount'], 2)];
+            }
+        }
+        $pays = $this->db->prepare('SELECT method, amount FROM sale_payments WHERE sale_id = ? ORDER BY id');
+        $pays->execute([$saleId]);
+        $newLines = $pays->fetchAll();
+        $label = fn (array $ls) => implode(' + ', array_map(
+            fn ($l) => SettingsService::PAYMENT_METHODS[$l['method']] . ' ' . number_format((float) $l['amount'], 2), $ls
+        ));
+        $at = $fixedAt && strtotime($fixedAt) ? date('Y-m-d H:i:s', strtotime($fixedAt)) : null;
+        $this->event((string) $sale['business_date'], $userId, 'payment_fix', (float) $sale['total_value'],
+            mb_substr("{$sale['doc_no']}: " . ($label($oldLines) ?: 'ไม่มีข้อมูล') . ' → ' . $label($newLines)
+                . ' (พนักงานขายแก้ในอุปกรณ์ก่อนส่ง' . ($at ? ' เวลา ' . substr($at, 11, 5) : '') . ')', 0, 500),
+            (int) $sale['cashier_id']);
+        $this->markPaymentEdited($sale, $oldLines, $userId, $at);
+        $this->audit->log('sale_payments', $saleId, 'payment_fix', ['payments' => $oldLines], ['payments' => $newLines], $userId, $ip);
+    }
+
+    /** The sale's mark: changed when, by whom, and how it was paid first (kept from the first change). */
+    private function markPaymentEdited(array $sale, array $oldLines, int $userId, ?string $at = null): void
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'sales', 'payment_edited_at')) {
+            return; // migration 0073 not run yet: the drawer's history still has it
+        }
+        $first = implode(',', array_map(fn ($l) => $l['method'] . ':' . number_format((float) $l['amount'], 2, '.', ''), $oldLines));
+        $this->db->prepare(
+            'UPDATE sales SET payment_edited_at = ?, payment_edited_by = ?, payment_original = COALESCE(payment_original, ?) WHERE id = ?'
+        )->execute([$at ?? date('Y-m-d H:i:s'), $userId, $first !== '' ? mb_substr($first, 0, 255) : null, $sale['id']]);
     }
 
     /** Day summary: drawer, totals per payment method, the sales and what staff did. */
@@ -321,7 +441,8 @@ class CashDrawerService
                     SUM(e.event = 'skip' AND e.user_id = u.id) AS skips,
                     COUNT(DISTINCT CASE WHEN e.event = 'skip' AND e.user_id = u.id THEN e.business_date END) AS skip_days,
                     SUM(e.event IN ('close', 'recount') AND e.user_id = u.id) AS closes,
-                    SUM(e.event = 'payment_edit' AND e.subject_user_id = u.id) AS corrected
+                    SUM(e.event = 'payment_edit' AND e.subject_user_id = u.id) AS corrected,
+                    SUM(e.event = 'payment_fix' AND e.subject_user_id = u.id) AS self_fixed
              FROM cash_drawer_events e
              JOIN users u ON u.id = e.user_id OR u.id = e.subject_user_id
              WHERE e.business_date >= ?
@@ -329,7 +450,7 @@ class CashDrawerService
              ORDER BY skips DESC, late_opens DESC, u.full_name"
         );
         $stmt->execute([date('Y-m-d', strtotime("-{$days} days"))]);
-        $ints = ['id', 'opens', 'late_opens', 'skips', 'skip_days', 'closes', 'corrected'];
+        $ints = ['id', 'opens', 'late_opens', 'skips', 'skip_days', 'closes', 'corrected', 'self_fixed'];
         return array_map(function ($r) use ($ints) {
             foreach ($ints as $k) {
                 $r[$k] = (int) $r[$k];
@@ -340,8 +461,11 @@ class CashDrawerService
 
     private function salesOf(string $date): array
     {
+        $edited = \App\Support\Db::hasColumn($this->db, 'sales', 'payment_edited_at')
+            ? 's.payment_edited_at, s.payment_original, (SELECT eu.full_name FROM users eu WHERE eu.id = s.payment_edited_by) AS payment_edited_name,'
+            : 'NULL AS payment_edited_at, NULL AS payment_original, NULL AS payment_edited_name,';
         $stmt = $this->db->prepare(
-            "SELECT s.id, s.doc_no, s.sale_datetime, s.total_value, s.after_hours, u.full_name AS cashier_name,
+            "SELECT s.id, s.doc_no, s.sale_datetime, s.total_value, s.after_hours, u.full_name AS cashier_name, {$edited}
                     (SELECT GROUP_CONCAT(CONCAT(sp.method, ':', sp.amount) ORDER BY sp.id SEPARATOR ',') FROM sale_payments sp WHERE sp.sale_id = s.id) AS pays
              FROM sales s LEFT JOIN users u ON u.id = s.cashier_id
              WHERE s.business_date = ? ORDER BY s.sale_datetime DESC, s.id DESC"

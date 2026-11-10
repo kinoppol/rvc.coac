@@ -146,6 +146,8 @@ $app->group('/api/device/v1', function ($group) {
     $group->get('/sales/{id:[0-9]+}', [SaleEditController::class, 'show']);
     $group->post('/sales/{id:[0-9]+}/edit-requests', [SaleEditController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
+    $group->post('/sales/{id:[0-9]+}/payment-fix', [SalesController::class, 'fixPayment'])
+        ->add(new RoleGuard('sales.create'));
     $group->post('/sale-edits/{id:[0-9]+}/cancel', [SaleEditController::class, 'cancel'])
         ->add(new RoleGuard('sales.create'));
     foreach (['state' => 'get', 'summary' => 'get', 'open' => 'post', 'skip' => 'post', 'close' => 'post'] as $action => $method) {
@@ -296,6 +298,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.create'));
     $group->get('/sales/{id:[0-9]+}', [SaleEditController::class, 'show']);
     $group->post('/sales/{id:[0-9]+}/edit-requests', [SaleEditController::class, 'store'])
+        ->add(new RoleGuard('sales.create'));
+    $group->post('/sales/{id:[0-9]+}/payment-fix', [SalesController::class, 'fixPayment'])
         ->add(new RoleGuard('sales.create'));
     $group->post('/sale-edits/{id:[0-9]+}/cancel', [SaleEditController::class, 'cancel'])
         ->add(new RoleGuard('sales.create'));

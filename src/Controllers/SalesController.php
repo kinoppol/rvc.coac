@@ -191,7 +191,29 @@ class SalesController
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
+        $result['payment_fix_until'] = date('Y-m-d H:i:s', time() + CashDrawerService::PAYMENT_FIX_SECONDS);
 
         return $this->json($response, ['data' => $result], 201);
+    }
+
+    /**
+     * POST /sales/{id}/payment-fix {method}: the cashier changes the payment method of their own
+     * sale, within a few minutes of it, without an approval (web POS and the Android app alike).
+     */
+    public function fixPayment(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $db = Db::connection();
+        try {
+            $sale = (new CashDrawerService($db, new AuditLogger($db)))->selfFixPayment(
+                (int) $args['id'],
+                (string) ($body['method'] ?? ''),
+                $request->getAttribute('user'),
+                $request->getServerParams()['REMOTE_ADDR'] ?? null
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $sale]);
     }
 }

@@ -1,10 +1,15 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate } from '../util.js';
-import { confirmDialog, isDialogOpen } from '../dialog.js';
+import { alertDialog, choiceDialog, confirmDialog, isDialogOpen } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 import { openKeyboard, closeKeyboard, isKeyboardOpen, keyboardEnabled } from '../osk.js';
 import { loadThaiQr, thaiQrCard, thaiQrWarning } from '../thai-qr.js';
+
+// After a sale is saved, the next one starts by itself this soon (the done screen counts it down).
+const NEXT_SALE_MS = 2000;
+// How long the cashier may change a sale's payment method alone (the server allows the same, plus a little).
+const PAYMENT_FIX_MS = 5 * 60 * 1000;
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -102,6 +107,10 @@ export async function render(container, { user } = {}) {
     let skipEnds = 0; // Date.now() when this cashier's skip runs out
     let drawerModal = null; // the opening-count dialog while open
     let msgTimer;
+    // The sale just made: its change stays on screen, and its payment method can be put right
+    // for a few minutes (a wrong button) without an approval. { id, doc_no, total, change, methods, until }
+    let last = null;
+    let lastTimer = null;
     // Products matching the search that cannot be sold (stock below 1, switch off).
     let outHints = { term: '', items: [] };
     let outTimer;
@@ -163,6 +172,7 @@ export async function render(container, { user } = {}) {
             </div>
             <div class="pos-held" data-el="held" hidden></div>
             <div class="pos-cart-list" data-el="cart"></div>
+            <div class="pos-last" data-el="last" hidden></div>
             <div class="pos-cart-foot">
               <div class="pos-total"><span>ยอดรวม <small data-el="cart-qty"></small></span><b data-el="total">฿ 0.00</b></div>
               <button type="button" class="btn pos-pay" data-act="pay">ชำระเงิน</button>
@@ -207,6 +217,60 @@ export async function render(container, { user } = {}) {
         clearTimeout(msgTimer);
         el('msg').innerHTML = text ? `<div class="pos-msg ${type}">${escapeHtml(text)}</div>` : '';
         if (text && type === 'ok') msgTimer = setTimeout(() => message(''), 4000);
+    }
+
+    const PAY_LABEL = (k) => options.payment_methods.find((m) => m.key === k)?.label || { cash: 'เงินสด', transfer: 'โอนเงิน', qr: 'สแกน QR-Code', card: 'บัตรเครดิต' }[k] || k;
+    const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+    /** The last sale's strip under the cart: what it was paid with, its change, and the fix button while it may be used. */
+    function drawLast() {
+        const box = el('last');
+        clearInterval(lastTimer);
+        if (!last) { box.hidden = true; box.innerHTML = ''; return; }
+        const left = () => Math.max(0, Math.floor((last.until - Date.now()) / 1000));
+        box.hidden = false;
+        box.innerHTML = `
+          <div class="pos-last-main">
+            <div><b>ขายล่าสุด</b> ฿${money(last.total)} · ${escapeHtml(last.methods.map(PAY_LABEL).join(' + '))}${last.fixed ? ' <span class="pill warn">แก้วิธีชำระแล้ว</span>' : ''}</div>
+            <div class="pos-last-doc">${escapeHtml(last.doc_no)}${last.change > 0 ? ` · <span class="pos-last-change">เงินทอน ฿${money(last.change)}</span>` : ''}</div>
+          </div>
+          ${left() > 0 ? `<button type="button" class="btn secondary sm" data-fix-pay title="เลือกวิธีชำระผิด แก้ได้ภายใน 5 นาทีหลังขาย ไม่ต้องรออนุมัติ">แก้วิธีชำระ (<span data-left>${mmss(left())}</span>)</button>` : ''}`;
+        if (left() > 0) {
+            lastTimer = setInterval(() => {
+                const s = left();
+                const span = box.querySelector('[data-left]');
+                if (!s || !span) { drawLast(); return; }
+                span.textContent = mmss(s);
+            }, 1000);
+        }
+    }
+
+    async function fixLastPayment() {
+        if (!last || modal) return;
+        const sale = last;
+        const choices = options.payment_methods
+            .filter((m) => !(sale.methods.length === 1 && sale.methods[0] === m.key))
+            .map((m) => ({ key: m.key, label: `${m.label} ฿${money(sale.total)}` }));
+        if (!choices.length) return;
+        const method = await choiceDialog(
+            `${sale.doc_no} · ยอดขาย ฿${money(sale.total)}\nเดิม: ${sale.methods.map(PAY_LABEL).join(' + ')}\nเลือกวิธีที่ลูกค้าชำระจริง (ทั้งยอด)`,
+            choices,
+            { title: 'แก้วิธีชำระเงิน' },
+        );
+        if (!method) { focusSearch(); return; }
+        try {
+            const res = await api.post(`/sales/${sale.id}/payment-fix`, { method });
+            if (last === sale) {
+                last = { ...sale, methods: (res.data.payments || []).map((p) => p.method), change: Number(res.data.change_amount) || 0, fixed: true };
+                drawLast();
+            }
+            message(`แก้วิธีชำระ ${sale.doc_no} เป็น${PAY_LABEL(method)}แล้ว`);
+            refreshDrawer();
+        } catch (e) {
+            await alertDialog(e.message, { title: 'แก้วิธีชำระไม่ได้', tone: 'error' });
+            if (e.status === 422 && last === sale && /เกิน/.test(e.message)) { last = { ...sale, until: 0 }; drawLast(); }
+        }
+        focusSearch();
     }
 
     function photoUrl(p) {
@@ -763,6 +827,10 @@ export async function render(container, { user } = {}) {
         let busy = false;
         let error = null;
         let done = null;
+        let nextTimer = null;
+        let nextTick = null;
+        let paidWith = [];
+        life.signal.addEventListener('abort', () => { clearTimeout(nextTimer); clearInterval(nextTick); }, { once: true });
         // Until the cashier types a cash amount, cash follows whatever the other methods leave.
         let cashTouched = false;
         // Normally one method pays the whole bill; the cashier turns this on to split it.
@@ -813,18 +881,29 @@ export async function render(container, { user } = {}) {
 
         function draw() {
             if (done) {
+                const secs = Math.ceil(NEXT_SALE_MS / 1000);
                 modal.innerHTML = `
-                  <div class="modal pos-modal" role="dialog" aria-modal="true">
+                  <div class="modal pos-modal" role="dialog" aria-modal="true" style="--pos-next-ms:${NEXT_SALE_MS}ms">
                     <div class="modal-body pos-done">
                       <div class="pos-done-icon">✓</div>
                       <h2>บันทึกการขายแล้ว</h2>
                       <div class="muted">เลขที่ ${escapeHtml(done.doc_no)} · ยอดขาย ฿${money(done.total_value)}</div>
                       ${done.after_hours ? `<div class="pos-hours-note">ขายนอกเวลาทำการ · ลงบัญชีวันที่ ${escapeHtml(fmtDate(done.business_date))}</div>` : ''}
                       ${done.change > 0 ? `<div class="pos-change">เงินทอน <b>฿${money(done.change)}</b></div>` : ''}
-                      <button type="button" class="btn pos-big" data-pay="next">ขายรายการถัดไป</button>
+                      <button type="button" class="btn pos-big pos-next" data-pay="next">
+                        <svg class="pos-next-ring" viewBox="0 0 26 26" aria-hidden="true"><circle class="track" cx="13" cy="13" r="10"/><circle class="run" cx="13" cy="13" r="10"/></svg>
+                        เริ่มขายรายการถัดไปใน <span data-secs>${secs}</span> วินาที</button>
+                      <div class="pos-done-hint">ไม่ต้องกดปุ่ม ระบบเริ่มการขายใหม่ให้เอง${done.change > 0 ? ' · เงินทอนยังแสดงใต้ตะกร้า' : ''}</div>
                     </div>
                   </div>`;
                 modal.querySelector('[data-pay="next"]').focus();
+                // Both hands stay on the next customer's goods: the next sale starts by itself.
+                const started = Date.now();
+                nextTick = setInterval(() => {
+                    const s = modal?.querySelector('[data-secs]');
+                    if (s) s.textContent = String(Math.max(1, Math.ceil((NEXT_SALE_MS - (Date.now() - started)) / 1000)));
+                }, 250);
+                nextTimer = setTimeout(close, NEXT_SALE_MS);
                 return;
             }
             const f = figures();
@@ -886,11 +965,19 @@ export async function render(container, { user } = {}) {
         }
 
         function close() {
+            clearTimeout(nextTimer);
+            clearInterval(nextTick);
+            if (!modal) return;
             modal.remove();
             modal = null;
             if (done) {
                 cart = [];
                 message(`บันทึกการขาย ${done.doc_no} แล้ว`);
+                last = {
+                    id: done.id, doc_no: done.doc_no, total: Number(done.total_value) || 0, change: Number(done.change) || 0,
+                    methods: paidWith, until: Date.now() + PAYMENT_FIX_MS, fixed: false,
+                };
+                drawLast();
                 loadProducts();
             }
             focusSearch();
@@ -909,6 +996,7 @@ export async function render(container, { user } = {}) {
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
                 done = res.data;
+                paidWith = selected.filter((k) => (Number(amounts[k]) || 0) > 0);
                 play('pay');
                 refreshDrawer();
             } catch (e) {
@@ -924,6 +1012,7 @@ export async function render(container, { user } = {}) {
         }
 
         modal.addEventListener('click', (e) => {
+            if (done) return close(); // a tap anywhere starts the next sale at once
             const t = e.target.closest('button');
             if (!t) return;
             const act = t.dataset.pay;
@@ -1038,6 +1127,9 @@ export async function render(container, { user } = {}) {
         if (!e.target.closest?.('.pos-dd')) toggleDropdown(null);
     });
     on(document, 'keydown', (e) => { if (e.key === 'Escape') toggleDropdown(null); });
+
+    on(el('last'), 'click', (e) => { if (e.target.closest('[data-fix-pay]')) fixLastPayment(); });
+    life.signal.addEventListener('abort', () => clearInterval(lastTimer));
 
     on(el('cart'), 'change', (e) => {
         const i = e.target.dataset.qty;

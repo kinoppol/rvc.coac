@@ -13,7 +13,7 @@ export function isDialogOpen() {
 
 const TONE_ICON = { info: 'i', warn: '?', danger: '!', error: '!' };
 
-function open({ title, message, okText, cancelText, tone, input, html, width, strict }) {
+function open({ title, message, okText, cancelText, tone, input, html, width, strict, choices }) {
     return new Promise((resolve) => {
         const prev = document.activeElement;
         const el = document.createElement('div');
@@ -32,12 +32,13 @@ function open({ title, message, okText, cancelText, tone, input, html, width, st
                 <h2 id="app-dialog-title">${escapeHtml(title)}</h2>
                 ${message ? `<p>${escapeHtml(message)}</p>` : ''}
                 ${html || ''}
+                ${choices ? `<div class="app-dialog-choices">${choices.map((c) => `<button type="button" class="btn secondary" data-choice="${escapeHtml(c.key)}">${escapeHtml(c.label)}</button>`).join('')}</div>` : ''}
                 ${field}
               </div>
             </div>
             <div class="modal-foot app-dialog-foot">
               ${cancelText ? `<button type="button" class="btn secondary" data-cancel>${escapeHtml(cancelText)}</button>` : ''}
-              <button type="button" class="btn ${tone === 'danger' ? 'danger' : ''}" data-ok>${escapeHtml(okText)}</button>
+              ${okText ? `<button type="button" class="btn ${tone === 'danger' ? 'danger' : ''}" data-ok>${escapeHtml(okText)}</button>` : ''}
             </div>
           </div>`;
         // A view in element full screen (e.g. counting on a phone) only shows its own subtree.
@@ -77,7 +78,8 @@ function open({ title, message, okText, cancelText, tone, input, html, width, st
                 e.preventDefault();
                 e.stopPropagation();
                 if (e.target.matches?.('[data-cancel]')) cancel();
-                else ok();
+                else if (e.target.matches?.('[data-choice]')) finish(e.target.dataset.choice);
+                else if (!choices) ok();
             } else if (e.key === 'Tab') {
                 const items = [...el.querySelectorAll('button, input, textarea')];
                 const i = items.indexOf(document.activeElement);
@@ -92,6 +94,7 @@ function open({ title, message, okText, cancelText, tone, input, html, width, st
         el.addEventListener('click', (e) => {
             if (e.target === el) { if (!strict) cancel(); }
             else if (e.target.closest('[data-ok]')) ok();
+            else if (e.target.closest('[data-choice]')) finish(e.target.closest('[data-choice]').dataset.choice);
             else if (e.target.closest('[data-cancel]')) cancel();
         });
         el.addEventListener('input', () => { const err = el.querySelector('[data-error]'); if (err) err.hidden = true; });
@@ -100,7 +103,7 @@ function open({ title, message, okText, cancelText, tone, input, html, width, st
             inputEl.focus();
             inputEl.select?.();
         } else {
-            okBtn.focus();
+            (okBtn || el.querySelector('[data-choice]'))?.focus();
         }
     });
 }
@@ -116,6 +119,11 @@ export function alertDialog(message, { title = 'แจ้งเตือน', ok
  */
 export function confirmDialog(message, { title = 'ยืนยันการทำรายการ', okText = 'ยืนยัน', cancelText = 'ยกเลิก', danger = false, html = '', width = 0, strict = false } = {}) {
     return open({ title, message, okText, cancelText, tone: danger ? 'danger' : 'warn', html, width, strict });
+}
+
+/** Buttons to pick from ({ key, label }); resolves to the key picked, or null when cancelled. */
+export function choiceDialog(message, choices, { title = 'เลือก', cancelText = 'ยกเลิก', html = '' } = {}) {
+    return open({ title, message, okText: null, cancelText, tone: 'info', html, choices }).then((v) => (typeof v === 'string' ? v : null));
 }
 
 /**

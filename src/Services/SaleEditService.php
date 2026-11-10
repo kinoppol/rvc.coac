@@ -49,11 +49,13 @@ class SaleEditService
      */
     public function mine(?int $userId, string $from, string $to, bool $withImports = false): array
     {
+        $edited = \App\Support\Db::hasColumn($this->db, 'sales', 'payment_edited_at')
+            ? ' s.payment_edited_at, s.payment_original,' : ' NULL AS payment_edited_at, NULL AS payment_original,';
         $stmt = $this->db->prepare(
             "SELECT s.id, s.doc_no, s.sale_datetime, s.business_date, s.after_hours, s.total_qty, s.total_value,
                     s.cashier_id, (SELECT u.full_name FROM users u WHERE u.id = s.cashier_id) AS cashier_name,
                     pim.id AS pos_import, pim.source_label AS pos_source,
-                    s.cash_received, s.change_amount,
+                    s.cash_received, s.change_amount, s.created_at,{$edited}
                     (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS line_count,
                     (SELECT GROUP_CONCAT(DISTINCT sp.method ORDER BY sp.id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
                     (SELECT r.status FROM sale_edit_requests r WHERE r.sale_id = s.id ORDER BY r.id DESC LIMIT 1) AS edit_status,
@@ -69,6 +71,9 @@ class SaleEditService
         foreach ($rows as &$r) {
             $r['methods'] = $r['methods'] ? explode(',', $r['methods']) : [];
             $r['editable_until'] = $r['edit_status'] === 'pending' ? null : $this->editableUntil($r);
+            // The quick payment-method fix (no approval): the cashier's own POS sales, for a few minutes.
+            $until = $r['pos_import'] ? null : CashDrawerService::paymentFixUntil($r);
+            $r['payment_fix_until'] = $until && strtotime($until) > time() ? $until : null;
         }
         unset($r);
         return $rows;

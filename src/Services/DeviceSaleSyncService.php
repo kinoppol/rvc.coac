@@ -189,6 +189,13 @@ class DeviceSaleSyncService
             if (!empty($result['payment_warning'])) {
                 $warnings[] = $result['payment_warning'];
             }
+            // The cashier changed the payment method on the device before it was sent.
+            $fixed = $sale['payment_fixed'] ?? null;
+            if (is_array($fixed) && is_array($fixed['from'] ?? null)) {
+                (new CashDrawerService($this->db, $audit))->recordDeviceFix(
+                    (int) $result['id'], $fixed['from'], (int) $user['id'], isset($fixed['at']) ? (string) $fixed['at'] : null, $ip
+                );
+            }
             if (isset($sale['total_value']) && is_numeric($sale['total_value']) && abs((float) $sale['total_value'] - $result['total_value']) > 0.004) {
                 $warnings[] = 'ยอดขายบนอุปกรณ์ ฿' . number_format((float) $sale['total_value'], 2) . ' ไม่ตรงกับที่บันทึก ฿' . number_format($result['total_value'], 2);
             }
@@ -237,7 +244,8 @@ class DeviceSaleSyncService
         $this->db->prepare('UPDATE pos_devices SET last_sync_at = NOW() WHERE id = ?')->execute([$deviceId]);
         return [
             'client_uuid' => $uuid, 'status' => 'synced', 'warnings' => $warnings,
-            'sale' => array_intersect_key($result, array_flip(['id', 'doc_no', 'total_qty', 'total_value', 'change', 'business_date', 'after_hours'])),
+            'sale' => array_intersect_key($result, array_flip(['id', 'doc_no', 'total_qty', 'total_value', 'change', 'business_date', 'after_hours']))
+                + ['payment_fix_until' => CashDrawerService::paymentFixUntil(['created_at' => date('Y-m-d H:i:s'), 'sale_datetime' => $soldAt->format('Y-m-d H:i:s')])],
         ];
     }
 
