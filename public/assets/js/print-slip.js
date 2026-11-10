@@ -405,61 +405,88 @@ export function printClosingReport(r, { weekday, status, send }) {
     const f = r.figures;
     const dr = f.drawer;
     const c = r.closing;
+    const ex = r.expenses;
     const n = (v) => money(v);
     const row = (label, v, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="num">${v}</td></tr>`;
-    // A difference said in words: "เงินขาด 143.00" / "เงินเกิน 20.00" / "ตรงกัน".
-    const shortOver = (what, diff) => (Math.abs(diff) < 0.005 ? row(`${what}ตรงกัน`, '0.00')
-        : row(`${what}${diff < 0 ? 'ขาด' : 'เกิน'}`, money(Math.abs(diff))));
+    // A difference said in words: "ขาด 143.00" / "เกิน 20.00" / "ตรงกัน".
+    const os = (v) => (v === null || v === undefined ? '-' : Math.abs(v) < 0.005 ? 'ตรงกัน' : `${v < 0 ? 'ขาด' : 'เกิน'} ${money(Math.abs(v))}`);
     const none = (text) => `<tr><td colspan="2" class="muted">${text}</td></tr>`;
-    const section = (title, rows) => `<table class="led"><thead><tr><th colspan="2">${title}</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const head = (text) => `<tr class="head"><td colspan="2">${text}</td></tr>`;
+    const box = (title, body) => `<div class="box"><div class="box-h">${title}</div><table class="led"><tbody>${body}</tbody></table></div>`;
 
-    const sales = section('1. ยอดขาย', `
-        ${f.methods.map((x) => row(`&nbsp;&nbsp;${escapeHtml(x.label)}`, n(x.amount))).join('')}
-        ${f.unknown_sales ? row('&nbsp;&nbsp;นำเข้าจาก POS (ไม่ทราบวิธีชำระ)', n(f.unknown_sales)) : ''}
-        ${row(`รวมยอดขาย (${f.sales_count} บิล)`, n(f.total_sales), 'total')}`);
+    // 1. Cash in the drawer.
+    const drawer = box('1. เงินในลิ้นชัก', dr ? `
+        ${row(dr.opening_adjust ? `เงินทอนตั้งต้น (ผู้สรุปบัญชีแก้จาก ${n(dr.opening_counted)}: ${escapeHtml(dr.opening_adjust.reason || '-')})` : 'เงินทอนตั้งต้น (ก่อนเปิดร้าน)', n(dr.opening_cash))}
+        ${row('บวก ยอดขายเงินสด', n(f.cash_sales))}
+        ${row('1.1 เงินก่อนปิดร้าน', n(dr.opening_cash + f.cash_sales), 'sub')}
+        ${row('1.2 หัก ค่าซื้อสินค้าที่ใช้เงินในลิ้นชัก (ข้อ 3.3)', n(f.purchase_out))}
+        ${row('ยอดเงินที่ควรมีในลิ้นชัก', n(dr.should_have), 'sub')}
+        ${dr.counted_cash !== null
+            ? `${row(dr.counted_adjust ? `1.3 ยอดเงินที่มีในลิ้นชัก (ผู้สรุปบัญชี${dr.counted_staff !== null ? `แก้จาก ${n(dr.counted_staff)}` : 'ระบุ'}: ${escapeHtml(dr.counted_adjust.reason || '-')})` : '1.3 ยอดเงินที่มีในลิ้นชัก (นับจริง)', n(dr.counted_cash), 'total')}
+               ${Math.abs(dr.counted_cash - dr.should_have) >= 0.005 ? row('ส่วนต่าง', os(dr.counted_cash - dr.should_have)) : ''}`
+            : row('1.3 ยอดเงินที่มีในลิ้นชัก (นับจริง)', 'ยังไม่ได้นับ')}
+        ${dr.counted_staff !== null ? `<tr><td colspan="2" class="muted">ปิดยอดลิ้นชักโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? escapeHtml(fmtDateTime(dr.closed_at)) : ''}</td></tr>` : ''}`
+        : none('ไม่ได้ระบุเงินในลิ้นชัก'));
 
-    const drawer = section('6. เงินสดในลิ้นชัก', dr ? `
-        ${dr.opening_adjust ? row('เงินในลิ้นชักตอนเปิดร้าน ที่พนักงานนับ', n(dr.opening_counted)) : ''}
-        ${row(dr.opening_adjust ? `เงินในลิ้นชักตอนเปิดร้าน (ผู้สรุปบัญชีแก้: ${escapeHtml(dr.opening_adjust.reason || '-')})` : 'เงินในลิ้นชักตอนเปิดร้าน', n(dr.opening_cash))}
-        ${row('บวก ขายได้เป็นเงินสด', n(f.cash_sales))}
-        ${row('หัก ซื้อสินค้าด้วยเงินในลิ้นชัก (ข้อ 5)', n(f.purchase_out))}
-        ${row('เงินสดที่ควรมีตอนปิดยอด', n(dr.should_have), 'sub')}
-        ${dr.counted_cash !== null ? `${dr.counted_adjust && dr.counted_staff !== null ? row('เงินในลิ้นชักตอนปิดร้าน ที่พนักงานนับ', n(dr.counted_staff)) : ''}
-          ${row(dr.counted_adjust ? `เงินในลิ้นชักตอนปิดร้าน (ผู้สรุปบัญชี${dr.counted_staff !== null ? 'แก้' : 'ระบุ'}: ${escapeHtml(dr.counted_adjust.reason || '-')})` : 'เงินในลิ้นชักตอนปิดร้าน (นับจริง)', n(dr.counted_cash))}
-          ${shortOver('เงิน', dr.counted_cash - dr.should_have)}` : row('เงินในลิ้นชักตอนปิดร้าน (นับจริง)', 'ยังไม่ได้นับ')}
-        ${row('หัก จ่ายค่าแรงจากลิ้นชัก (ข้อ 3)', n(f.cash_out))}
-        ${row('หัก จ่ายเงินผู้ฝากขายจากลิ้นชัก (ข้อ 4)', n(f.payout_out || 0))}
-        ${row('เงินสดคงเหลือในลิ้นชักหลังจ่าย', n(dr.after_pay), 'sub')}
-        ${row('หัก คงไว้เป็นเงินทอนวันถัดไป', n(send.float_kept ?? f.float_kept))}
-        ${row('เงินสดที่ต้องส่งวิทยาลัย', n(send.expected_send), 'total')}` : none('ไม่ได้ระบุเงินในลิ้นชัก'));
-
-    const accounts = section('2. เงินเข้าบัญชีที่รับโอน / QR-Code / บัตรเครดิต', r.accounts.length ? r.accounts.map((a) => {
-        const got = send.actual?.[a.method];
-        const has = got !== undefined && got !== null && got !== '';
-        return row(`${escapeHtml(a.label)} <span class="muted">ควรได้ ${n(a.expected)}${has && Math.abs(Number(got) - a.expected) >= 0.005 ? ` · ${Number(got) < a.expected ? 'ขาด' : 'เกิน'} ${n(Math.abs(Number(got) - a.expected))}` : ''}</span>`,
-            has ? n(got) : 'ยังไม่ได้ตรวจ');
+    // 2. Transfers.
+    const actual = (a) => {
+        const v = send.actual?.[a.method];
+        return v === undefined || v === null || v === '' ? null : Number(v);
+    };
+    const bank = box('2. เงินโอน', r.accounts.length ? r.accounts.map((a) => {
+        const got = actual(a);
+        return `${head(escapeHtml(a.label))}
+            ${row('ยอดขายที่เป็นเงินโอน', n(a.expected))}
+            ${row('ยอดเงินโอนที่ธนาคารแจ้ง', got === null ? 'ยังไม่ได้ตรวจ' : n(got), 'total')}
+            ${got !== null && Math.abs(got - a.expected) >= 0.005 ? row('ส่วนต่าง', os(got - a.expected)) : ''}`;
     }).join('') : none('ไม่ได้เปิดรับชำระด้วยการโอน / QR-Code / บัตร'));
 
-    const wages = section('3. การจ่ายค่าแรง', r.wages.rows.length ? `
-        ${r.wages.rows.map((w) => row(`${escapeHtml(w.employee_name || '-')} <span class="muted">${escapeHtml(w.doc_no)} · ${w.drawer_date === f.date ? 'จากลิ้นชัก' : w.method === 'cash' ? 'เงินสด' : 'โอน'}</span>`, n(w.amount))).join('')}
-        ${row('รวม', n(r.wages.total), 'total')}` : none('ไม่มีการจ่ายค่าแรง'));
-
-    const payouts = section('4. การจ่ายเงินค่าสินค้าฝากขาย', r.payouts.rows.length ? `
+    // 3. Expenses.
+    const wages = r.wages.rows.length ? `
+        ${r.wages.rows.map((w) => row(`${escapeHtml(w.employee_name || '-')} <span class="muted">${escapeHtml(w.doc_no)} · ${w.drawer_date === f.date ? 'จากลิ้นชัก' : w.method === 'cash' ? 'เงินสด (ไม่ใช้เงินลิ้นชัก)' : 'โอน'}</span>`, n(w.amount))).join('')}
+        ${row('รวม', n(r.wages.total), 'sub')}` : none('ไม่มีการจ่ายค่าแรง');
+    const payouts = r.payouts.rows.length ? `
         ${r.payouts.rows.map((w) => row(`${escapeHtml(w.consignor_code)} ${escapeHtml(w.consignor_name)} <span class="muted">${escapeHtml(w.doc_no)} · ${CLOSING_PAY[w.method] || w.method}${w.method === 'hold' ? ' จากลิ้นชัก' : w.method === 'cash' ? (w.from_drawer ? ' จากลิ้นชัก' : ' (ไม่ใช้เงินลิ้นชัก)') : ''}</span>`, n(w.amount))).join('')}
-        ${row('รวม', n(r.payouts.total), 'total')}` : none('ไม่มีการจ่ายเงินผู้ฝากขาย'));
-
-    const purchases = section('5. การเบิกเงินซื้อสินค้าเข้าร้าน', r.purchases.rows.length ? `
+        ${row('รวม', n(r.payouts.total), 'sub')}` : none('ไม่มีการจ่ายเงินผู้ฝากขาย');
+    const purchases = r.purchases.rows.length ? `
         ${r.purchases.rows.map((p) => row(`${escapeHtml(p.supplier_name || '-')} <span class="muted">${escapeHtml(p.doc_no)}${p.receipt_no ? ` · ใบเสร็จ ${escapeHtml(p.receipt_no)}` : ''} · ${p.from_drawer ? 'จากลิ้นชัก' : 'ไม่ใช้เงินลิ้นชัก'}</span>`, n(p.total))).join('')}
-        ${row('รวม', n(r.purchases.total), 'total')}` : none('ไม่มีการซื้อสินค้าเข้าร้าน'));
+        ${row(`รวม${ex.other_purchases ? ` (ใช้เงินในลิ้นชัก ${n(r.purchases.from_drawer)})` : ''}`, n(r.purchases.total), 'sub')}` : none('ไม่มีการซื้อสินค้าเข้าร้าน');
+    const expenses = `<div class="box"><div class="box-h">3. ค่าใช้จ่าย</div>
+        <div class="cols">
+          <table class="led"><tbody>${head('3.1 การจ่ายค่าแรง')}${wages}${head('3.3 ค่าซื้อสินค้าเข้าร้าน')}${purchases}</tbody></table>
+          <table class="led"><tbody>${head('3.2 ค่าสินค้าฝากขาย')}${payouts}</tbody></table>
+        </div>
+        <table class="led" style="margin-top:2px;border-top:1px solid #000"><tbody>
+          ${row('3.4 ค่าใช้จ่ายทั้งหมดที่นำออกจากลิ้นชัก', n(ex.drawer_total), 'total')}
+          ${row('&nbsp;&nbsp;3.4.1 จ่ายระหว่างวัน ก่อนนับปิดยอด (ค่าซื้อสินค้า) — หักแล้วในข้อ 1.2', n(ex.drawer_before))}
+          ${row('&nbsp;&nbsp;3.4.2 จ่ายหลังนับปิดยอด (ค่าแรง + ค่าสินค้าฝากขาย) — หักในข้อ 4.1', n(ex.drawer_after))}
+          ${row(`3.5 ค่าใช้จ่ายที่ไม่ได้ใช้เงินจากลิ้นชัก${ex.other_total ? ` <span class="muted">(${[
+              ex.other_wages ? `ค่าแรง ${n(ex.other_wages)}` : '', ex.other_payouts ? `ฝากขาย ${n(ex.other_payouts)}` : '', ex.other_purchases ? `ซื้อสินค้า ${n(ex.other_purchases)}` : '',
+          ].filter(Boolean).join(' · ')})</span>` : ''}`, n(ex.other_total))}
+        </tbody></table></div>`;
 
+    // 4. Summary.
     const sent = send.cash_sent !== undefined && send.cash_sent !== null && send.cash_sent !== '';
-    const handover = section('7. ส่งเงินสดให้วิทยาลัย', `
-        ${row('ยอดที่ควรส่ง', n(send.expected_send))}
-        ${row('เงินสดที่ส่ง', sent ? n(send.cash_sent) : '..........................', 'total')}
-        ${sent && Math.abs(Number(send.cash_sent) - send.expected_send) >= 0.005 ? shortOver('ส่ง', Number(send.cash_sent) - send.expected_send) : ''}
-        ${row('ส่งให้', escapeHtml(send.sent_to || '-'))}
+    const summary = box('4. สรุป', `
+        ${dr ? `
+          ${row(`เงินในลิ้นชัก (ข้อ 1.3)${dr.counted_cash === null ? ' — ยังไม่ได้นับ ใช้ยอดที่ควรมี' : ''}`, n(dr.counted_cash ?? dr.should_have))}
+          ${row('หัก ค่าใช้จ่ายหลังนับปิดยอด (ข้อ 3.4.2)', n(ex.drawer_after))}
+          ${row('4.1 เงินสดคงเหลือ', n(dr.after_pay), 'sub')}
+          ${row('4.2 เก็บไว้ในลิ้นชักเป็นเงินทอนวันถัดไป', n(send.float_kept ?? f.float_kept))}` : ''}
+        ${row(`4.3 เงินที่นำส่งวิทยาลัยฯ ผ่าน${escapeHtml(send.sent_to || '..........................')}`, n(send.expected_send), 'total')}
+        ${row('เงินสดที่ส่งจริง', sent ? n(send.cash_sent) : '..........................')}
+        ${sent && Math.abs(Number(send.cash_sent) - send.expected_send) >= 0.005 ? row('ส่งต่างจากยอดที่ควรส่ง', os(Number(send.cash_sent) - send.expected_send)) : ''}
         ${row('เลขที่ใบเสร็จ / ใบรับเงิน', escapeHtml(send.receipt_no || '..........................'))}
         ${send.note ? `<tr><td colspan="2">หมายเหตุ: ${escapeHtml(send.note)}</td></tr>` : ''}`);
+
+    // 5. Over / short.
+    const cd = send.cash_diff ?? null;
+    const td = send.transfer_diff ?? null;
+    const overShort = box('5. เงินขาด / เกิน', `
+        ${row('เงินสด (ข้อ 1.3 เทียบยอดที่ควรมี)', dr ? os(cd) : '-')}
+        ${row('เงินโอน (ข้อ 2 เทียบยอดขาย)', r.accounts.length ? os(td) : '-')}
+        ${row('รวม', cd === null && td === null ? '-' : os((cd || 0) + (td || 0)), 'total')}
+        <tr><td colspan="2" style="padding-top:3px">คำอธิบาย: ${send.over_short_note ? escapeHtml(send.over_short_note) : (Math.abs(cd || 0) >= 0.005 || Math.abs(td || 0) >= 0.005 ? '..................................................' : '-')}</td></tr>`);
 
     const html = `<!doctype html>
 <html lang="th"><head><meta charset="utf-8">
@@ -478,35 +505,37 @@ export function printClosingReport(r, { weekday, status, send }) {
   .head h1 { font-size: 18pt; margin: 0; }
   .head div { font-size: 14pt; }
   .info { display: flex; justify-content: space-between; border-top: 1.5px solid #000; border-bottom: 1.5px solid #000; padding: 1px 0; margin-bottom: 6px; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 6mm; align-items: start; }
-  .led { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
-  .led th { text-align: left; font-weight: 700; border-bottom: 1px solid #000; padding: 1px 0; }
-  .led td { padding: 0 0; vertical-align: top; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 4mm; align-items: stretch; margin-bottom: 3mm; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 5mm; align-items: start; }
+  .box { border: 1.2px solid #000; border-radius: 2mm; padding: 1.5mm 2.5mm 2mm; margin-bottom: 3mm; break-inside: avoid; }
+  .row2 .box { margin-bottom: 0; }
+  .box-h { font-weight: 700; font-size: 15pt; border-bottom: 1px solid #000; margin-bottom: 1mm; }
+  .led { width: 100%; border-collapse: collapse; }
+  .led td { padding: 0; vertical-align: top; }
   .led td.num { text-align: right; white-space: nowrap; padding-left: 8px; font-variant-numeric: tabular-nums; width: 1%; }
+  .led tr.head td { font-weight: 700; padding-top: 2px; text-decoration: underline; text-align: left; }
   .led tr.sub td { font-weight: 700; }
   .led tr.sub td.num { border-top: 1px solid #000; }
   .led tr.total td { font-weight: 700; }
   .led tr.total td.num { border-top: 1px solid #000; border-bottom: 3px double #000; }
   .muted { color: #444; font-size: 12pt; }
-  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; margin-top: 14mm; text-align: center; }
+  .sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; margin-top: 12mm; text-align: center; }
   .sign .line { border-top: 1px dotted #000; margin: 0 4mm 1px; padding-top: 1px; }
   .foot { margin-top: 4mm; font-size: 11pt; color: #444; text-align: right; }
 </style></head><body>
   <div class="head"><h1>รายงานสรุปบัญชีประจำวัน</h1><div>ร้านค้าสหการ</div></div>
   <div class="info">
     <span>วัน${escapeHtml(weekday)}ที่ ${escapeHtml(fmtDate(f.date))}</span>
+    <span>ยอดขายรวม ${n(f.total_sales)} (${f.sales_count} บิล)</span>
     <span>ผู้มีเวรสรุปบัญชี: ${escapeHtml(r.on_duty.map((p) => p.full_name).join(', ') || '-')}</span>
     <span>สถานะ: ${escapeHtml(status)}</span>
   </div>
-  <div class="cols">
-    <div>${sales}${accounts}${wages}${payouts}${purchases}</div>
-    <div>${drawer}
-      ${dr && dr.counted_staff !== null ? `<div class="muted" style="margin:-4px 0 6px">ปิดยอดลิ้นชักโดย ${escapeHtml(dr.closed_by_name || '-')} ${dr.closed_at ? escapeHtml(fmtDateTime(dr.closed_at)) : ''}</div>` : ''}
-      ${handover}</div>
-  </div>
+  <div class="row2">${drawer}${bank}</div>
+  ${expenses}
+  <div class="row2">${summary}${overShort}</div>
   <div class="sign">
     <div><div class="line">(${escapeHtml(c?.closer_name || '.......................................')})</div>ผู้สรุปบัญชี</div>
-    <div><div class="line">(.......................................)</div>ผู้รับเงิน (วิทยาลัย)</div>
+    <div><div class="line">(.......................................)</div>ผู้รับเงิน (${escapeHtml(send.sent_to || 'วิทยาลัย')})</div>
     <div><div class="line">(${escapeHtml(c?.verified_by_name || '.......................................')})</div>ผู้ตรวจสอบ</div>
   </div>
   <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>

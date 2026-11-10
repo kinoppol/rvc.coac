@@ -60,6 +60,10 @@ class ClosingController
             'can_submit' => $date <= date('Y-m-d') && ($this->canManage($db, $user) || $service->isOnDuty((int) $user['id'], $date)),
             'close_time_reached' => $settings->closeTimeReached($date, new \DateTimeImmutable()),
             'close_time_message' => $settings->closeTimeMessage('สรุปบัญชี'),
+            'defaults' => [
+                'sent_to' => (string) (new \App\Services\SettingsService($db))->get('closing_sent_to'),
+                'float' => $service->defaultFloat(),
+            ],
         ]]);
     }
 
@@ -144,6 +148,33 @@ class ClosingController
         return $this->json($response, ['data' => $service->report($date)]);
     }
 
+    /** Records what the bank says reached a receiving account that day (body: method, amount; amount null takes it back). */
+    public function account(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $body = (array) $request->getParsedBody();
+        $raw = $body['amount'] ?? null;
+        if ($raw !== null && $raw !== '' && !is_numeric($raw)) {
+            return $this->error($response, 'จำนวนเงินไม่ถูกต้อง', 422);
+        }
+        $service = $this->service($db);
+        try {
+            $closing = $service->find($date);
+            if ($closing && $closing['verified_at'] !== null && !$this->canManage($db, $request->getAttribute('user'))) {
+                throw new \RuntimeException('สรุปบัญชีวันนี้ได้รับการยืนยันแล้ว แก้ไขได้เฉพาะผู้ดูแลระบบหรือผู้จัดการร้าน');
+            }
+            $service->setAccountReport($date, (string) ($body['method'] ?? ''), $raw === null || $raw === '' ? null : (float) $raw,
+                (int) $request->getAttribute('user')['id'], $this->ip($request));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $service->report($date)]);
+    }
+
     /** Whether a purchase of the day was paid from the drawer (body: from_drawer). */
     public function purchaseDrawer(Request $request, Response $response, array $args): Response
     {
@@ -204,6 +235,8 @@ class ClosingController
             // A consignor payout is dated when it is made, so only today's report can pay one.
             'can_payout' => $date === date('Y-m-d'),
             'can_hold' => $this->holds($db)->ready(),
+            'default_wage' => (string) (new \App\Services\SettingsService($db))->get('closing_default_wage'),
+            'payout_method' => (string) (new \App\Services\SettingsService($db))->get('closing_payout_method'),
             'can_overdraw' => (new UserRepo($db))->hasPermission((string) $request->getAttribute('user')['role'], 'withdraw.approve'),
             'consignors' => $db->query(
                 "SELECT c.id, c.code, c.name, COALESCE((SELECT l.balance_after FROM ledger_entries l WHERE l.consignor_id = c.id ORDER BY l.id DESC LIMIT 1), 0) AS balance
@@ -312,6 +345,94 @@ class ClosingController
             return $this->error($response, 'ช่วงวันที่ไม่ถูกต้อง', 422);
         }
         return $this->json($response, ['data' => $this->payouts($db)->unpaid((int) ($q['consignor_id'] ?? 0), $from, $to)]);
+    }
+
+    /**
+     * Every consignor with sales of the day not paid out yet, and their share: what
+     * "pay every consignor" would pay (item 3.2).
+     */
+    public function payoutAllPreview(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args, true);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        try {
+            return $this->json($response, ['data' => $this->unpaidByConsignor($db, $date)]);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Pays every consignor their share of the day's sales not paid out yet (body: items [{consignor_id, method}]).
+     * The amounts are worked out again here; each consignor is paid on its own, so one that fails
+     * does not stop the others. Cash comes out of today's drawer.
+     */
+    public function payoutAll(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        [$date, $err] = $this->actDate($db, $request, $args, true);
+        if ($err) {
+            return $this->error($response, $err[0], $err[1]);
+        }
+        $user = $request->getAttribute('user');
+        $holdReady = $this->holds($db)->ready();
+        $methods = [];
+        foreach ((array) (((array) $request->getParsedBody())['items'] ?? []) as $it) {
+            $m = (string) ($it['method'] ?? '');
+            if (!in_array($m, ['cash', 'promptpay', 'bank_transfer', 'hold'], true) || ($m === 'hold' && !$holdReady)) {
+                return $this->error($response, $m === 'hold' ? 'ยังพักเงินไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0069) ก่อน' : 'ช่องทางจ่ายเงินไม่ถูกต้อง', 422);
+            }
+            $methods[(int) ($it['consignor_id'] ?? 0)] = $m;
+        }
+        if (!$methods) {
+            return $this->error($response, 'ไม่มีผู้ฝากขายที่เลือกจ่าย', 422);
+        }
+        $paid = [];
+        $failed = [];
+        try {
+            $due = $this->unpaidByConsignor($db, $date);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        foreach ($due as $c) {
+            $method = $methods[$c['consignor_id']] ?? null;
+            if ($method === null) {
+                continue;
+            }
+            try {
+                $id = $this->payouts($db)->pay([
+                    'consignor_id' => $c['consignor_id'], 'from' => $date, 'to' => $date, 'amount' => $c['amount'], 'method' => $method,
+                    'product_ids' => $c['product_ids'], 'reason' => '',
+                ], (int) $user['id'], $this->ip($request));
+                $paid[] = ['consignor' => "{$c['code']} - {$c['name']}", 'amount' => $c['amount'], 'method' => $method, 'doc_no' => $this->withdrawals($db)->find($id)['doc_no'] ?? ''];
+            } catch (\RuntimeException $e) {
+                $failed[] = ['consignor' => "{$c['code']} - {$c['name']}", 'amount' => $c['amount'], 'error' => $e->getMessage()];
+            }
+        }
+        return $this->json($response, ['data' => $this->service($db)->report($date), 'paid' => $paid, 'failed' => $failed], 201);
+    }
+
+    /** Consignors' shares of one day's sales not paid out yet, with the products behind them. */
+    private function unpaidByConsignor(\PDO $db, string $date): array
+    {
+        if (!$this->payouts($db)->ready()) {
+            throw new \RuntimeException('ยังจ่ายตามรายการขายไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0057) ก่อน');
+        }
+        $stmt = $db->prepare(
+            "SELECT si.consignor_id, c.code, c.name, ROUND(SUM(si.cost_amount), 2) AS amount, COUNT(*) AS line_count,
+                    GROUP_CONCAT(DISTINCT si.product_id) AS product_ids
+             FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN consignors c ON c.id = si.consignor_id
+             WHERE si.withdrawal_id IS NULL AND COALESCE(s.business_date, DATE(s.sale_datetime)) = ?
+             GROUP BY si.consignor_id, c.code, c.name HAVING amount > 0 ORDER BY c.code"
+        );
+        $stmt->execute([$date]);
+        return array_map(fn ($r) => [
+            'consignor_id' => (int) $r['consignor_id'], 'code' => $r['code'], 'name' => $r['name'], 'amount' => (float) $r['amount'],
+            'lines' => (int) $r['line_count'], 'product_ids' => array_map('intval', explode(',', (string) $r['product_ids'])),
+        ], $stmt->fetchAll());
     }
 
     private function holds(\PDO $db): \App\Services\ConsignorHoldService

@@ -33,6 +33,12 @@ export async function render(container) {
         const q = new URLSearchParams({ from, to });
         if (employee) q.set('user_id', employee);
         data = (await api.get(`/wages?${q}`)).data;
+        // The admin's daily rate fills an untouched day-wage form.
+        if (form.wage_type === 'day' && form.rate === '' && Number(data.default_wage) > 0) {
+            form.rate = String(Number(data.default_wage));
+            if (form.units === '') form.units = '1';
+            if (!amountTouched) form.amount = autoAmount();
+        }
         draw();
     }
 

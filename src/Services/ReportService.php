@@ -391,6 +391,28 @@ class ReportService
         $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'), 'total_sales');
         $line('ข้อมูลประกอบ', 'ยอดขายสินค้าฝากขาย (เงินของผู้ฝาก หักค่าฝากแล้วจ่ายคืน)', $v('consign_sales'), 'consign_sales');
         $line('ข้อมูลประกอบ', 'จำนวนบิลขาย', $v('bills'), 'bills');
+        // Over (+) / short (−) found when the days were summed up: kept for statistics, not counted in the profit.
+        $os = function (string $f, string $t): array {
+            try {
+                $stmt = $this->db->prepare(
+                    'SELECT COALESCE(SUM(cash_over_short), 0) AS cash, COALESCE(SUM(transfer_over_short), 0) AS transfer,
+                            SUM(ABS(COALESCE(cash_over_short, 0)) >= 0.005 OR ABS(COALESCE(transfer_over_short, 0)) >= 0.005) AS days
+                     FROM daily_closings WHERE business_date BETWEEN ? AND ?'
+                );
+                $stmt->execute([$f, $t]);
+                return $stmt->fetch() ?: [];
+            } catch (\PDOException $e) {
+                return []; // migration 0072 not run yet
+            }
+        };
+        $osNow = $os($from, $to);
+        $osPrev = $os($prevFrom, $prevTo);
+        if ($osNow || $osPrev) {
+            $pick = fn (string $k) => fn (array $s, bool $isNow) => (float) (($isNow ? $osNow : $osPrev)[$k] ?? 0);
+            $line('ข้อมูลประกอบ', 'เงินสดขาด (−) / เกิน (+) สุทธิ', $pick('cash'), 'over_short');
+            $line('ข้อมูลประกอบ', 'เงินโอนขาด (−) / เกิน (+) สุทธิ', $pick('transfer'), 'over_short_transfer');
+            $line('ข้อมูลประกอบ', 'จำนวนวันที่ยอดเงินขาดหรือเกิน', $pick('days'), 'over_short_days');
+        }
         // Capital is not income: shown for reference, with the profit it earned.
         $capital = new CapitalService($this->db, new AuditLogger($this->db), new DocumentNumberService($this->db));
         try {
@@ -617,6 +639,9 @@ class ReportService
             'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
             'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
             'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
+            'over_short' => 'เงินสดที่นับได้ตอนปิดร้านเทียบกับที่ควรมี (เงินทอนตั้งต้น + ขายเงินสด − ซื้อสินค้าด้วยเงินในลิ้นชัก) รวมทุกวันที่สรุปบัญชีแล้ว ไม่นับในกำไร',
+            'over_short_transfer' => 'ยอดเงินโอนที่ธนาคารแจ้งเทียบกับยอดขายที่ชำระด้วยการโอน / QR-Code / บัตร รวมทุกวันที่สรุปบัญชีแล้ว ไม่นับในกำไร',
+            'over_short_days' => 'จำนวนวันที่สรุปบัญชีแล้วพบเงินสดหรือเงินโอนขาดหรือเกิน',
             'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
             'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
             'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน',
@@ -699,6 +724,15 @@ class ReportService
                 $section('สรุปรายเดือน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['period', 'เดือน', 'text'], ['capital_purchases', 'ซื้อของด้วยเงินลงทุน', 'money'], ['other_invest', 'ลงทุนอื่น', 'money'], ['profit_withdrawn', 'เบิกออกจากกำไร', 'money'], ['capital_balance', 'งบลงทุนคงเหลือ', 'money']],
                     array_slice($this->capital($this->firstDay(), $to), 1)),
             ], 'capital'],
+            'over_short', 'over_short_transfer', 'over_short_days' => ['เงินขาด / เกิน จากการสรุปบัญชีรายวัน', [
+                $section('วันที่ยอดเงินขาดหรือเกิน', [['date', 'วันที่', 'date'], ['cash', 'เงินสด', 'money'], ['transfer', 'เงินโอน', 'money'], ['note', 'คำอธิบาย', 'text'], ['closer', 'ผู้สรุปบัญชี', 'text']], $q(
+                    'SELECT dc.business_date AS date, dc.cash_over_short AS cash, dc.transfer_over_short AS transfer, dc.over_short_note AS note, u.full_name AS closer
+                     FROM daily_closings dc LEFT JOIN users u ON u.id = dc.closer_id
+                     WHERE dc.business_date BETWEEN ? AND ? AND (ABS(COALESCE(dc.cash_over_short, 0)) >= 0.005 OR ABS(COALESCE(dc.transfer_over_short, 0)) >= 0.005)
+                     ORDER BY dc.business_date',
+                    $p
+                )),
+            ], 'closing'],
             'consign_sales' => ['ยอดขายสินค้าฝากขาย', [
                 $section('แยกตามผู้ฝาก', [['consignor', 'ผู้ฝาก', 'text'], ['qty', 'ชิ้น', 'qty'], ['sales', 'ยอดขาย', 'money'], ['fee', 'ค่าฝากขาย (ร้าน)', 'money'], ['cost', 'ผู้ฝากได้', 'money']], $byConsignor()),
             ], 'passbook'],

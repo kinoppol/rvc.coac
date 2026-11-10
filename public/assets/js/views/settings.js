@@ -230,6 +230,25 @@ export async function render(page, { user, permissions, params = {} }) {
                   <label class="field" style="margin-top:12px;max-width:260px">แก้ไขได้ภายใน (นาที หลังขายเสร็จ)
                     <input type="number" name="sale_edit_minutes" min="1" max="1440" step="1" value="${escapeHtml(s.sale_edit_minutes || '5')}"></label>
                 </section>
+                <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">ค่าเริ่มต้นของสรุปบัญชีรายวัน</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">ใช้เป็นค่าเริ่มต้นในหน้าสรุปบัญชี ผู้สรุปบัญชียังแก้แต่ละวันได้
+                    ${isAdmin ? '' : '<br><b>เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขส่วนนี้ได้</b>'}</p>
+                  <fieldset ${isAdmin ? '' : 'disabled'} style="border:0;padding:0;margin:0">
+                    <div class="form-grid">
+                      <label class="field">ค่าแรงรายวัน (บาท/วัน) <input type="number" name="closing_default_wage" min="0" step="1" value="${escapeHtml(s.closing_default_wage || '')}" placeholder="ไม่กำหนด">
+                        <span class="muted" style="font-size:11.5px;font-weight:400">เติมอัตราให้อัตโนมัติเมื่อจ่ายค่าแรงแบบรายวัน (ข้อ 3.1)</span></label>
+                      <label class="field">เงินทอนสำหรับวันถัดไป (บาท) <input type="number" name="closing_float_default" min="0" step="1" value="${escapeHtml(s.closing_float_default ?? '1500')}">
+                        <span class="muted" style="font-size:11.5px;font-weight:400">เก็บไว้ในลิ้นชัก ถ้าเงินเหลือน้อยกว่านี้ใช้เท่าที่มี (ข้อ 4.2)</span></label>
+                      <label class="field">ผู้รับเงินที่นำส่งวิทยาลัย <input name="closing_sent_to" maxlength="150" value="${escapeHtml(s.closing_sent_to || '')}">
+                        <span class="muted" style="font-size:11.5px;font-weight:400">ข้อ 4.3</span></label>
+                      <label class="field">ช่องทางจ่ายเงินผู้ฝากขาย (ปุ่มจ่ายทุกรายการ)
+                        <select name="closing_payout_method">${[['hold', 'พักเงินในบัญชีเพื่อผู้ฝากขาย'], ['cash', 'เงินสดจากลิ้นชัก'], ['promptpay', 'พร้อมเพย์'], ['bank_transfer', 'โอนธนาคาร']]
+                            .map(([k, v]) => `<option value="${k}" ${(s.closing_payout_method || 'hold') === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+                        <span class="muted" style="font-size:11.5px;font-weight:400">ข้อ 3.2 · เปลี่ยนรายคนได้ก่อนยืนยันจ่าย</span></label>
+                    </div>
+                  </fieldset>
+                </section>
                 ${canEdit ? `<div style="margin-top:16px">${saved ? '<span class="pill ok" style="margin-right:10px">บันทึกแล้ว</span>' : ''}${error ? `<span class="error-box">${escapeHtml(error)}</span>` : ''}<button type="submit" class="btn">บันทึกการตั้งค่า</button></div>` : ''}
               </fieldset>
             </form>
@@ -283,6 +302,10 @@ export async function render(page, { user, permissions, params = {} }) {
                         pos_promptpay_account: fd.get('promptpay_account').trim(),
                         pos_promptpay_warning_title: fd.get('promptpay_warning_title').trim(),
                         pos_promptpay_warning_detail: fd.get('promptpay_warning_detail').trim(),
+                        closing_default_wage: fd.get('closing_default_wage').trim(),
+                        closing_float_default: fd.get('closing_float_default').trim(),
+                        closing_sent_to: fd.get('closing_sent_to').trim(),
+                        closing_payout_method: fd.get('closing_payout_method'),
                     } : {}),
                     sale_edit_enabled: fd.get('sale_edit_enabled') === '1' ? '1' : '0', sale_edit_minutes: fd.get('sale_edit_minutes'),
                     store_open_time: fd.get('store_open_time'), store_close_time: fd.get('store_close_time'),

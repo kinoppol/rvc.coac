@@ -105,6 +105,26 @@ class SettingsController
                 }
             }
         }
+        if (array_intersect_key($body, array_flip(['closing_default_wage', 'closing_float_default', 'closing_sent_to', 'closing_payout_method']))) {
+            if (($request->getAttribute('user')['role'] ?? '') !== 'admin') {
+                return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่กำหนดค่าเริ่มต้นของสรุปบัญชีรายวันได้', 403);
+            }
+            foreach (['closing_default_wage', 'closing_float_default'] as $key) {
+                if (isset($body[$key])) {
+                    $v = trim((string) $body[$key]);
+                    if (($v !== '' || $key === 'closing_float_default') && (!is_numeric($v) || (float) $v < 0 || (float) $v > 1000000)) {
+                        return $this->error($response, $key === 'closing_float_default' ? 'เงินทอนเริ่มต้นไม่ถูกต้อง' : 'ค่าแรงรายวันเริ่มต้นไม่ถูกต้อง', 422);
+                    }
+                    $body[$key] = $v === '' ? '' : (string) round((float) $v, 2);
+                }
+            }
+            if (isset($body['closing_sent_to'])) {
+                $body['closing_sent_to'] = mb_substr(trim((string) $body['closing_sent_to']), 0, 150);
+            }
+            if (isset($body['closing_payout_method']) && !in_array($body['closing_payout_method'], ['hold', 'cash', 'promptpay', 'bank_transfer'], true)) {
+                return $this->error($response, 'ช่องทางจ่ายเงินผู้ฝากขายไม่ถูกต้อง', 422);
+            }
+        }
         foreach (['store_open_time', 'store_close_time'] as $key) {
             if (isset($body[$key]) && $body[$key] !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $body[$key])) {
                 return $this->error($response, 'เวลาเปิด-ปิดร้านไม่ถูกต้อง', 422);

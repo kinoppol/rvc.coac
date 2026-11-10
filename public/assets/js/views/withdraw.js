@@ -185,7 +185,7 @@ export async function render(container, { permissions, user }) {
               </div>
               <label class="field">เหตุผลที่แก้ไข *
                 <input id="we-reason" maxlength="150" value="${escapeHtml(e.reason)}" placeholder="เช่น กรอกจำนวนเงินผิด เลือกช่องทางผิด"></label>
-              ${paid ? `<div class="muted" style="font-size:12px;margin-top:10px">สมุดบัญชีผู้ฝากจะมีรายการแก้ไขต่อท้าย รายการเดิมยังอยู่${after !== null ? ` · <span id="we-after">ยอดคงเหลือหลังแก้ไข ฿${money(after)}</span>` : ''}<br>ตัวเลขข้อ 4 และเงินที่ต้องส่งในสรุปบัญชีของวันที่จ่ายจะเปลี่ยนตาม ถ้าส่งสรุปวันนั้นแล้วให้ตรวจอีกครั้ง</div>` : ''}
+              ${paid ? `<div class="muted" style="font-size:12px;margin-top:10px">สมุดบัญชีผู้ฝากจะมีรายการแก้ไขต่อท้าย รายการเดิมยังอยู่${after !== null ? ` · <span id="we-after">ยอดคงเหลือหลังแก้ไข ฿${money(after)}</span>` : ''}<br>ค่าสินค้าฝากขาย (ข้อ 3.2) และเงินที่นำส่งในสรุปบัญชีของวันที่จ่ายจะเปลี่ยนตาม ถ้าส่งสรุปวันนั้นแล้วให้ตรวจอีกครั้ง</div>` : ''}
               ${e.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(e.error)}</div>` : ''}
             </div>
             <div class="modal-foot">

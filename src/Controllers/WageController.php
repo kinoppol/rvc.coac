@@ -36,6 +36,7 @@ class WageController
             'methods' => WageService::METHODS,
             // Paying cash out of the drawer needs today's drawer counted (closing it does not matter).
             'drawer_open' => $row !== false,
+            'default_wage' => (string) (new \App\Services\SettingsService($db))->get('closing_default_wage'), // daily rate set by the admin
         ]]);
     }
 

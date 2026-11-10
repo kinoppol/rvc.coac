@@ -180,7 +180,7 @@ export async function render(container, { permissions, navigate }) {
             const info = r.section === 'ข้อมูลประกอบ';
             const head = r.section !== section ? `<tr><td colspan="5" style="padding-top:16px;font-weight:700;border-top:${section ? '1px solid var(--border)' : '0'}">${escapeHtml(r.section)}</td></tr>` : '';
             section = r.section;
-            const fmt = (v) => (r.item === 'จำนวนบิลขาย' ? count(v) : amount(v, total));
+            const fmt = (v) => (r.item === 'จำนวนบิลขาย' || r.key === 'over_short_days' ? count(v) : amount(v, total));
             const profitRow = r.section === 'ผลประกอบการ';
             return `${head}<tr style="${profitRow ? 'background:var(--soft);font-size:16px' : ''}${info ? ';color:var(--muted)' : ''}">
               <td style="padding-left:${total ? 14 : 30}px;${total ? 'font-weight:700' : ''}">${escapeHtml(r.item)}</td>

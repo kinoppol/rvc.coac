@@ -53,6 +53,11 @@ class SettingsService
         'store_close_time' => '',
         'store_closed_days' => '', // comma list of weekdays the store is closed, 0 = Sunday … 6 = Saturday
         'store_holidays' => '[]', // JSON [{date: "Y-m-d", name}]: public holidays and other days the store is closed
+        // Daily summary (สรุปบัญชีรายวัน), set by the admin.
+        'closing_default_wage' => '', // daily wage filled in when paying a day's wage ('' = none)
+        'closing_float_default' => '1500', // change kept in the drawer for the next day
+        'closing_sent_to' => 'งานศูนย์บ่มเพาะ', // who receives the day's cash for the college
+        'closing_payout_method' => 'hold', // how "pay every consignor" pays: hold | cash | promptpay | bank_transfer
         'asset_mode' => 'production', // production | development — how JS/CSS are cached (App\Support\AppShell)
     ];
 

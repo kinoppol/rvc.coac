@@ -333,6 +333,59 @@ class ClosingService
     }
 
     /** The change left in the drawer for the next day, as saved with the day's summary (null = not set). */
+    /** The change kept in the drawer for the next day unless said otherwise (admin setting). */
+    public function defaultFloat(): float
+    {
+        $v = (new SettingsService($this->db))->get('closing_float_default');
+        return is_numeric($v) && (float) $v >= 0 ? round((float) $v, 2) : 1500.0;
+    }
+
+    /**
+     * What the bank said reached each receiving account that day, recorded before the summary:
+     * method => [amount, user_name, created_at] (the latest record; amount null = taken back).
+     * Empty before migration 0072.
+     */
+    public function accountReports(string $date): array
+    {
+        try {
+            $stmt = $this->db->prepare(
+                'SELECT r.id, r.method, r.amount, r.created_at, u.full_name AS user_name FROM closing_account_reports r
+                 LEFT JOIN users u ON u.id = r.user_id WHERE r.business_date = ? ORDER BY r.id'
+            );
+            $stmt->execute([$date]);
+        } catch (\PDOException $e) {
+            return [];
+        }
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $out[$r['method']] = ['amount' => $r['amount'] === null ? null : (float) $r['amount']] + $r;
+        }
+        return array_filter($out, fn ($r) => $r['amount'] !== null);
+    }
+
+    /** Records ($amount) or takes back (null) what the bank said reached one receiving account that day. */
+    public function setAccountReport(string $date, string $method, ?float $amount, int $userId, ?string $ip): void
+    {
+        if (!in_array($method, array_column($this->accounts($this->figures($date)), 'method'), true)) {
+            throw new \RuntimeException('ไม่พบช่องทางรับเงินนี้ของวันนี้');
+        }
+        if ($amount !== null) {
+            $amount = round($amount, 2);
+            if ($amount < 0 || $amount > 100000000) {
+                throw new \RuntimeException('จำนวนเงินไม่ถูกต้อง');
+            }
+        }
+        $old = $this->accountReports($date)[$method]['amount'] ?? null;
+        try {
+            $this->db->prepare('INSERT INTO closing_account_reports (business_date, method, amount, user_id, created_at) VALUES (?, ?, ?, ?, NOW())')
+                ->execute([$date, $method, $amount, $userId]);
+        } catch (\PDOException $e) {
+            throw new \RuntimeException('ยังบันทึกไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0072) ก่อน');
+        }
+        $this->audit->log('daily_closings', 0, 'update', ['account' => $method, 'amount' => $old],
+            ['closing_date' => $date, 'account' => $method, 'amount' => $amount], $userId, $ip);
+    }
+
     private function savedFloat(string $date): ?float
     {
         if (!\App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
@@ -383,7 +436,8 @@ class ClosingService
         $atClose = $drawer ? round((float) $drawer['opening_cash'] + $cash - $purchaseOut, 2) : null;
         $afterPay = $drawer ? round(($counted ?? $atClose) - $cashOut - $payoutOut, 2) : null;
         $out = round($cashOut + $payoutOut + $purchaseOut, 2);
-        $float = $drawer ? round($floatKept ?? $this->savedFloat($date) ?? (float) $drawer['opening_cash'], 2) : 0.0;
+        // Change kept for the next day: as saved, else the default set by the admin, or all the cash left when less.
+        $float = $drawer ? round($floatKept ?? $this->savedFloat($date) ?? min($this->defaultFloat(), max(0.0, $afterPay)), 2) : 0.0;
         $expected = $drawer
             ? round($afterPay - $float, 2) // what is left in the drawer, less the change kept for the next day
             : round($cash - $out, 2);
@@ -410,6 +464,8 @@ class ClosingService
                 // Left in the drawer after wages and consignors were paid from it (from the count once closed).
                 'after_pay' => $afterPay,
                 'counted_cash' => $counted, // the one used: corrected, else as counted
+                // Over (+) or short (−) of what should be in the drawer at closing.
+                'over_short' => $counted !== null ? round($counted - $atClose, 2) : null,
                 'counted_staff' => $countedStaff,
                 'counted_adjust' => $countedAdjust,
                 'counted_history' => $countedHistory,
@@ -501,27 +557,42 @@ class ClosingService
             }
         }
         $f = $this->figures($date, $float);
-        if ($f['drawer'] && $f['float_kept'] > $f['drawer']['after_pay'] + 0.005) {
+        if ($f['drawer'] && $f['float_kept'] > max(0.0, $f['drawer']['after_pay']) + 0.005) {
             throw new \RuntimeException('เงินที่คงไว้เป็นเงินทอนมากกว่าเงินสดที่เหลือในลิ้นชัก (฿' . number_format($f['drawer']['after_pay'], 2) . ')');
         }
         if (abs($sent - $f['expected_send']) >= 0.005 && $note === null) {
             throw new \RuntimeException('เงินที่ส่งไม่ตรงกับยอดที่ควรส่ง (฿' . number_format($f['expected_send'], 2) . ') กรุณาระบุหมายเหตุ');
         }
-        // What actually reached each receiving account, for every non-cash method in use.
+        // What actually reached each receiving account, for every non-cash method in use
+        // (as typed, else as recorded from the bank before the summary).
         $actual = null;
+        $transferDiff = null;
+        $reports = $this->accountReports($date);
         if (\App\Support\Db::hasColumn($this->db, 'daily_closings', 'actual_accounts')) {
             $given = is_array($data['actual_accounts'] ?? null) ? $data['actual_accounts'] : [];
             $actual = [];
             foreach ($this->accounts($f) as $a) {
-                $v = $given[$a['method']] ?? null;
+                $v = $given[$a['method']] ?? $reports[$a['method']]['amount'] ?? null;
                 if ($v === null || $v === '' || !is_numeric($v) || (float) $v < 0) {
-                    throw new \RuntimeException("กรุณากรอกยอดที่ได้รับจริง: {$a['label']}");
+                    throw new \RuntimeException("กรุณากรอกยอดเงินโอนที่ธนาคารแจ้ง: {$a['label']}");
                 }
                 $actual[$a['method']] = round((float) $v, 2);
-                if (abs($actual[$a['method']] - $a['expected']) >= 0.005 && $note === null) {
-                    throw new \RuntimeException("{$a['label']} ได้รับจริงไม่ตรงกับยอดขาย (฿" . number_format($a['expected'], 2) . ') กรุณาระบุหมายเหตุ');
-                }
+                $transferDiff = round(($transferDiff ?? 0) + $actual[$a['method']] - $a['expected'], 2);
             }
+        }
+        // Cash and transfers over or short of what they should be: the closer explains why.
+        $cashDiff = $f['drawer']['over_short'] ?? null;
+        $overShortNote = $text('over_short_note', 500);
+        $off = fn (?float $v) => $v !== null && abs($v) >= 0.005;
+        if (($off($cashDiff) || $off($transferDiff)) && $overShortNote === null) {
+            throw new \RuntimeException('ยอดเงิน' . ($off($cashDiff) ? ($cashDiff < 0 ? 'สดขาด' : 'สดเกิน') . ' ฿' . number_format(abs($cashDiff), 2) : '')
+                . ($off($cashDiff) && $off($transferDiff) ? ' และเงินโอน' : ($off($transferDiff) ? 'โอน' : ''))
+                . ($off($transferDiff) ? ($transferDiff < 0 ? 'ขาด' : 'เกิน') . ' ฿' . number_format(abs($transferDiff), 2) : '')
+                . ' กรุณาระบุคำอธิบายเงินขาด/เกิน (ข้อ 5)');
+        }
+        $hasOverShort = \App\Support\Db::hasColumn($this->db, 'daily_closings', 'cash_over_short');
+        if (!$hasOverShort && $overShortNote !== null) {
+            $note = mb_substr(trim('เงินขาด/เกิน: ' . $overShortNote . ($note !== null ? " · {$note}" : '')), 0, 500); // migration 0072 not run yet
         }
         $values = [
             $userId, $f['total_sales'], $f['cash_sales'], $f['transfer_sales'], $f['card_sales'], $f['unknown_sales'],
@@ -530,6 +601,17 @@ class ClosingService
         $this->saveRow($old, $date, $values, $actual);
         if ($f['drawer'] && \App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
             $this->db->prepare('UPDATE daily_closings SET float_kept = ? WHERE business_date = ?')->execute([$f['float_kept'], $date]);
+        }
+        if ($hasOverShort) {
+            $this->db->prepare('UPDATE daily_closings SET cash_over_short = ?, transfer_over_short = ?, over_short_note = ? WHERE business_date = ?')
+                ->execute([$cashDiff, $transferDiff, $overShortNote, $date]);
+            // The bank figures typed with the summary become the recorded ones.
+            foreach ((array) $actual as $method => $v) {
+                if (($reports[$method]['amount'] ?? null) !== $v) {
+                    $this->db->prepare('INSERT INTO closing_account_reports (business_date, method, amount, user_id, created_at) VALUES (?, ?, ?, ?, NOW())')
+                        ->execute([$date, $method, $v, $userId]);
+                }
+            }
         }
         $strip = fn (?array $r) => $r ? array_diff_key($r, array_flip(['snapshot', 'closer_name', 'verified_by_name'])) : null;
         $new = $this->find($date);
@@ -610,9 +692,25 @@ class ClosingService
             $skips[$s['item']] = $s;
         }
         $sum = fn (array $rows, string $k) => round(array_sum(array_map(fn ($r) => (float) $r[$k], $rows)), 2);
+        $wageTotal = $sum($wages, 'amount');
+        $payoutTotal = $sum($payouts, 'amount');
+        $purchaseTotal = $sum($purchases, 'total');
+        $wageDrawer = $sum(array_filter($wages, fn ($w) => $w['drawer_date'] === $date), 'amount');
         return [
             'figures' => $f,
             'accounts' => $this->accounts($f),
+            'bank' => (object) $this->accountReports($date),
+            // Item 3: what left the drawer before the closing count (goods bought during the day, item 1.2),
+            // what was paid from it after the count (wages and consignors, item 4.1), and what was paid with other money.
+            'expenses' => [
+                'drawer_before' => $f['purchase_out'],
+                'drawer_after' => round($wageDrawer + $f['payout_out'], 2),
+                'drawer_total' => round($f['purchase_out'] + $wageDrawer + $f['payout_out'], 2),
+                'other_wages' => round($wageTotal - $wageDrawer, 2),
+                'other_payouts' => round($payoutTotal - $f['payout_out'], 2),
+                'other_purchases' => round($purchaseTotal - $f['purchase_out'], 2),
+                'other_total' => round($wageTotal - $wageDrawer + $payoutTotal - $f['payout_out'] + $purchaseTotal - $f['purchase_out'], 2),
+            ],
             'wages' => ['rows' => $wages, 'total' => $sum($wages, 'amount'),
                 'from_drawer' => $sum(array_filter($wages, fn ($w) => $w['drawer_date'] === $date), 'amount')],
             'payouts' => ['rows' => $payouts, 'total' => $sum($payouts, 'amount'),
