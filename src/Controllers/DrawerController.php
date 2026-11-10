@@ -76,10 +76,16 @@ class DrawerController
         $user = $request->getAttribute('user');
         $manage = $this->canManage($db, $user);
         // Apps send no date: the count belongs to the day being closed, also after closing time.
-        $closing = (new SettingsService($db))->dayToClose(new \DateTimeImmutable());
+        $settings = new SettingsService($db);
+        $now = new \DateTimeImmutable();
+        $closing = $settings->dayToClose($now);
         $date = $this->dateParam($body['date'] ?? null) ?? $closing;
         if ($date !== $closing && !$manage) {
             return $this->error($response, 'ปิดยอดย้อนหลังได้เฉพาะผู้ดูแลระบบหรือผู้จัดการร้าน', 403);
+        }
+        // Nobody closes before closing time: sales can still come in until then.
+        if (!$settings->closeTimeReached($date, $now)) {
+            return $this->error($response, $settings->closeTimeMessage('ปิดยอด'), 422);
         }
         try {
             $this->service($db)->close($date, (float) $body['amount'], (int) $user['id'], $body['note'] ?? null, $manage, $this->ip($request));
@@ -113,13 +119,20 @@ class DrawerController
         $user = $request->getAttribute('user');
         $manage = $this->canManage($db, $user);
         // After closing time this is still the day just ended: its drawer is the one being counted.
-        $today = (new SettingsService($db))->dayToClose(new \DateTimeImmutable());
+        $settings = new SettingsService($db);
+        $now = new \DateTimeImmutable();
+        $today = $settings->dayToClose($now);
         $date = $this->dateParam($request->getQueryParams()['date'] ?? null) ?? $today;
         if ($date !== $today && !$manage) {
             $date = $today; // cashiers see the current day only
         }
         $data = $this->service($db)->summary($date, $manage);
         $data['today'] = $today;
+        $data['can_close'] = $settings->closeTimeReached($date, $now);
+        $data['close_time'] = substr((string) $settings->get('store_close_time'), 0, 5);
+        // During selling hours the opening count is still taken; after hours it is not.
+        $selling = self::currentDay($settings);
+        $data['can_open'] = $selling['required'] && $selling['date'] === $date;
         $data['can_manage'] = $manage;
         return $this->json($response, ['data' => $data]);
     }

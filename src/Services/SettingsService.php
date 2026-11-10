@@ -132,7 +132,31 @@ class SettingsService
         return $d->format('Y-m-d');
     }
 
-    public const POS_ROLES = ['admin', 'manager', 'advisor', 'cashier'];
+    /**
+     * Whether the selling of $date is over, so its drawer may be closed and its day summed
+     * up: the last sale can be made up to closing time. Past days always are, future days
+     * never; today once closing time has come, or when the store does not open today.
+     */
+    public function closeTimeReached(string $date, \DateTimeImmutable $at): bool
+    {
+        $today = $at->format('Y-m-d');
+        if ($date !== $today) {
+            return $date < $today;
+        }
+        if ((string) $this->get('store_close_time') === '') {
+            return true; // no store hours set: nothing to wait for
+        }
+        // Sales are booked on another day once closing time has passed or on a day off.
+        return $this->businessDay($at)['date'] !== $today;
+    }
+
+    /** The message for counting before closing time. */
+    public function closeTimeMessage(string $action): string
+    {
+        return "{$action}ได้ตั้งแต่เวลาปิดร้าน (" . substr((string) $this->get('store_close_time'), 0, 5) . ' น.) เป็นต้นไป เพราะยังมีการขายได้จนถึงเวลาปิดร้าน';
+    }
+
+    public const POS_ROLES =['admin', 'manager', 'advisor', 'cashier'];
 
     /** Whether a user in $role may turn on the POS switch whose roles are kept in $key. */
     public function posRoleAllows(string $key, ?string $role): bool

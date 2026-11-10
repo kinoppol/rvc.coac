@@ -148,7 +148,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         try {
             const d = (await api.get(`/closing/${date}`)).data;
             modal = { el: document.createElement('div'), date, ...d, error: null, busy: false, editing: false, form: null };
-            if (!d.closing && d.can_submit) startEdit();
+            if (!d.closing && d.can_submit && d.close_time_reached !== false) startEdit();
             document.body.appendChild(modal.el);
             drawDay();
             if (d.can_submit) loadPayOptions(modal);
@@ -406,7 +406,8 @@ export async function render(container, { user, permissions = [] } = {}) {
               <button type="button" class="btn" id="cl-save" ${m.busy ? 'disabled' : ''}>${m.busy ? 'กำลังบันทึก...' : 'บันทึกสรุปบัญชี'}</button>
             </div>`;
         }
-        if (!c) return `<div class="muted">ยังไม่มีการสรุปบัญชีวันนี้${m.can_submit ? '' : ' — สรุปได้เฉพาะผู้ที่มีเวรวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ'}</div>`;
+        const early = m.close_time_reached === false;
+        if (!c) return `<div class="muted">ยังไม่มีการสรุปบัญชีวันนี้${!m.can_submit ? ' — สรุปได้เฉพาะผู้ที่มีเวรวันนี้ ผู้จัดการ หรือผู้ดูแลระบบ' : early ? ` — ${escapeHtml(m.close_time_message || '')}` : ''}</div>`;
         const self = Number(c.closer_id) === Number(user?.id);
         return `
           <table class="cl-t"><tbody>
@@ -423,7 +424,7 @@ export async function render(container, { user, permissions = [] } = {}) {
           ${isDiff(c.total_sales, f.total_sales) ? `<div class="pill warn" style="font-size:12px;margin-top:6px">ยอดขายเปลี่ยนไปหลังสรุป (ตอนสรุป ฿${money(c.total_sales)}) — ควรสรุปใหม่</div>` : ''}
           ${m.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(m.error)}</div>` : ''}
           <div class="no-print" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px">
-            ${m.can_submit && (!c.verified_at || data.can_manage) ? '<button type="button" class="btn secondary" id="cl-edit">แก้ไข / สรุปใหม่</button>' : ''}
+            ${m.can_submit && !early && (!c.verified_at || data.can_manage) ? '<button type="button" class="btn secondary" id="cl-edit">แก้ไข / สรุปใหม่</button>' : ''}
             ${data.can_manage && !c.verified_at ? (self
                 ? '<span class="muted" style="font-size:12px;align-self:center">คุณเป็นผู้สรุปวันนี้ ให้ผู้จัดการหรือผู้ดูแลระบบคนอื่นยืนยัน</span>'
                 : `<button type="button" class="btn" id="cl-verify" ${m.busy ? 'disabled' : ''}>ยืนยันว่าวิทยาลัยได้รับเงินแล้ว</button>`) : ''}

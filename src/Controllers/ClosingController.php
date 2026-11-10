@@ -11,6 +11,7 @@ use App\Services\ClosingService;
 use App\Services\ConsignorPayoutService;
 use App\Services\DocumentNumberService;
 use App\Services\LedgerService;
+use App\Services\SettingsService;
 use App\Services\WageService;
 use App\Support\Db;
 use App\Support\JsonResponse;
@@ -52,10 +53,13 @@ class ClosingController
         }
         $service = $this->service($db);
         $user = $request->getAttribute('user');
+        $settings = new SettingsService($db);
         return $this->json($response, ['data' => $service->report($date) + [
             'closing' => $service->find($date),
             'on_duty' => $service->roster()[$service->weekdayOf($date)],
             'can_submit' => $date <= date('Y-m-d') && ($this->canManage($db, $user) || $service->isOnDuty((int) $user['id'], $date)),
+            'close_time_reached' => $settings->closeTimeReached($date, new \DateTimeImmutable()),
+            'close_time_message' => $settings->closeTimeMessage('สรุปบัญชี'),
         ]]);
     }
 
@@ -67,6 +71,11 @@ class ClosingController
             return $this->error($response, 'วันที่ไม่ถูกต้อง', 422);
         }
         $user = $request->getAttribute('user');
+        // Nobody sums up the day before closing time: sales can still come in until then.
+        $settings = new SettingsService($db);
+        if (!$settings->closeTimeReached($date, new \DateTimeImmutable())) {
+            return $this->error($response, $settings->closeTimeMessage('สรุปบัญชี'), 422);
+        }
         try {
             $row = $this->service($db)->submit($date, (array) $request->getParsedBody(), (int) $user['id'], $this->canManage($db, $user), date('Y-m-d'), $this->ip($request));
         } catch (\RuntimeException $e) {

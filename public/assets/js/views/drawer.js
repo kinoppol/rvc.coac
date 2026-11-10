@@ -78,7 +78,7 @@ export async function render(container, { params = {} } = {}) {
 
           <section class="card card-pad">
             <h2 style="margin-bottom:10px">${!dr ? 'ระบุเงินในลิ้นชักตอนเปิดร้าน' : closed ? 'นับเงินปิดยอดใหม่' : 'ปิดยอด (นับเงินในลิ้นชักเมื่อปิดร้าน)'}</h2>
-            ${!dr && d.date === d.today ? `
+            ${!dr && d.can_open ? `
                  <div class="muted" style="margin-bottom:10px">ยังไม่ได้ระบุเงินในลิ้นชักของวันนี้ — นับเงินสดทั้งหมดในลิ้นชักแล้วใส่จำนวนเงิน
                    ${d.cash_sales > 0 ? `<br><b>วันนี้ขายเป็นเงินสดไปแล้ว ฿${money(d.cash_sales)}</b> ระบบจะหักยอดนี้ออกจากเงินที่นับได้ให้อัตโนมัติ` : ''}</div>
                  <label class="field">เงินในลิ้นชัก (บาท) <input id="dr-open" inputmode="decimal" placeholder="0.00"></label>
@@ -86,6 +86,8 @@ export async function render(container, { params = {} } = {}) {
                  <button type="button" class="btn" id="dr-open-save" style="width:100%;margin-top:12px">บันทึกเงินในลิ้นชักตอนเปิดร้าน</button>`
               : !dr ? '<div class="muted">วันนี้ไม่มีการระบุเงินในลิ้นชัก</div>'
               : closed && !d.can_manage ? '<div class="pill ok">ปิดยอดของวันนี้แล้ว</div>'
+              : !d.can_close ? `<div class="muted">ยังปิดยอดไม่ได้ — ปิดยอดได้ตั้งแต่เวลาปิดร้าน${d.close_time ? ` (${escapeHtml(d.close_time)} น.)` : ''} เป็นต้นไป เพราะยังมีการขายได้จนถึงเวลาปิดร้าน</div>
+                 <div class="muted" style="margin-top:8px">เงินที่ควรมีตอนนี้ ฿${money(d.expected_cash)}</div>`
               : `<label class="field">เงินสดที่นับได้ในลิ้นชัก (บาท) <input id="dr-count" inputmode="decimal" placeholder="0.00"></label>
                  <div id="dr-diff" class="muted" style="margin:8px 0;font-size:13.5px">เงินที่ควรมี ฿${money(d.expected_cash)}</div>
                  <label class="field">หมายเหตุ (ถ้ามี) <input id="dr-note" maxlength="200" placeholder="เช่น นำเงินฝากธนาคาร / เงินขาดเพราะ..."></label>
