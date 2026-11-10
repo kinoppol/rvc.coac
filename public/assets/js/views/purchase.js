@@ -34,7 +34,8 @@ function emptyItem() {
     // pickedId: an existing product the user paired the line with by hand (it restocks that product)
     // forceNew: the user said the line is not the matched product, so saving creates a new one (notMatch = the product it is not)
     // presetPrice: a sale price that came with an AI draft or an order, used only if the line turns out to be a new product
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, presetPrice: 0, priceTouched: false, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
+    // promo: this round sells at the manufacturer's promotion price (sale_price); regular_price = the normal price meanwhile
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, presetPrice: 0, priceTouched: false, promo: false, regular_price: 0, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const PER_PAGE = [10, 20, 50, 100];
@@ -83,11 +84,13 @@ export async function render(container, { user } = {}) {
         it.prevSupply = p.previous_type === 'supply';
         it.match = p.match;
         // A known pack barcode fills in how many pieces the pack holds.
-        const packFilled = p.pack_size > 1 && Number(it.pack_size) <= 1;
+        const packFilled = !it.packFixed && p.pack_size > 1 && Number(it.pack_size) <= 1;
         if (packFilled) it.pack_size = p.pack_size;
-        it.suggested = p.match ? p.match.sale_price : p.suggested_price;
-        // Restocking an existing product keeps its current sale price; only a new product gets a preset or suggested one.
-        if (!it.priceTouched) it.sale_price = (p.match ? it.suggested : it.presetPrice || it.suggested) || 0;
+        it.suggested = p.match ? normalPrice(p.match) : p.suggested_price;
+        // Restocking an existing product keeps its normal sale price (a promotion is for its own round only);
+        // only a new product gets a preset or suggested one.
+        if (!it.priceTouched && !it.promo) it.sale_price = (p.match ? it.suggested : it.presetPrice || it.suggested) || 0;
+        if (it.promo && !(Number(it.regular_price) > 0)) it.regular_price = it.suggested || 0;
         return hintBefore !== it.prevSupply || packFilled;
     }
 
@@ -134,6 +137,7 @@ export async function render(container, { user } = {}) {
             item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: !!it.item_type,
             barcode: it.barcode || '', qty: it.qty, unit_cost: it.unit_cost,
             line_total: it.line_total, sale_price: it.sale_price || 0, presetPrice: Number(it.sale_price) || 0,
+            ...(it.promo ? { promo: true, regular_price: Number(it.regular_price) || 0, priceTouched: true } : {}),
         }));
         if (!items.length) items = [emptyItem()];
         warnings = d.warnings || [];
@@ -145,7 +149,7 @@ export async function render(container, { user } = {}) {
     /** Loads a saved purchase into the form; saving then updates it in place. */
     function startEdit(d, { receive = false } = {}) {
         const ordered = d.status === 'ordered' || d.status === 'draft';
-        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, draft: d.status === 'draft', receive: d.status === 'ordered' && receive };
+        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, draft: d.status === 'draft', receive: d.status === 'ordered' && receive, orig: d };
         header = {
             ...emptyHeader(),
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
@@ -161,7 +165,8 @@ export async function render(container, { user } = {}) {
                 item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: true,
                 pack_size: Number(it.pack_size) || 1, barcode: it.barcode || '', qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                 line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, presetPrice: Number(it.sale_price) || 0,
-                pickedId: it.product_id ? Number(it.product_id) : null, forceNew: !!it.new_product,
+                pickedId: it.product_id ? Number(it.product_id) : null, forceNew: !!it.new_product, packFixed: !!it.pack_fixed,
+                ...(it.promo ? { promo: true, regular_price: Number(it.regular_price) || 0, priceTouched: true } : {}),
             }));
             // Receiving: the delivery date, unless the order already carries the receipt's own date.
             if (editing.receive && !header.receipt_date) header.receipt_date = todayISO();
@@ -172,6 +177,8 @@ export async function render(container, { user } = {}) {
                 receipt_name: it.receipt_name, item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: true,
                 pack_size: Number(it.pack_size) || 1, barcode: it.barcode || '', qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                 line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, priceTouched: it.item_type === 'stock',
+                promo: it.item_type === 'stock' && Number(it.is_promo) === 1, regular_price: Number(it.regular_price) || 0,
+                packFixed: true, orig: it, // the saved line: compared on save (review of the changes)
             };
         });
         if (!items.length) items = [emptyItem()];
@@ -369,7 +376,9 @@ export async function render(container, { user } = {}) {
                   <td class="num" data-piece>${money(pieceCost(it))}</td>
                   <td>${it.item_type === 'supply'
                     ? '<span class="muted" title="ใช้ในกิจการ ไม่มีราคาขาย">—</span>'
-                    : `<input data-f="sale_price" type="number" min="0" step="0.25" value="${it.sale_price || ''}" placeholder="${it.suggested || ''}" class="num ${priceClass(it)}" style="width:85px">
+                    : `${priceModeHtml(it)}
+                       <input data-f="sale_price" type="number" min="0" step="0.25" value="${it.sale_price || ''}" placeholder="${it.promo ? 'ราคาโปร' : it.suggested || ''}" class="num ${priceClass(it)}" style="width:85px" title="${it.promo ? 'ราคาโปรโมชัน/ชิ้น ขายในรอบนี้' : 'ราคาขายปกติ/ชิ้น'}">
+                       ${it.promo ? `<label class="pc-reg" title="ราคาปกติ/ชิ้น เก็บไว้ใช้เมื่อหมดโปรโมชัน">ปกติ <input data-f="regular_price" type="number" min="0" step="0.25" value="${it.regular_price || ''}" class="num" style="width:62px"></label>` : ''}
                        <div data-price-tag>${priceTagHtml(it)}</div>`}</td>
                   <td data-status>${statusHtml(it)}</td>
                   <td><button type="button" class="btn secondary sm" data-remove-row="${i}" title="ลบรายการ">✕</button></td>
@@ -484,21 +493,63 @@ export async function render(container, { user } = {}) {
         return pack > 1 ? `<b>${unitsOf(it)}</b> <span class="muted" style="font-size:11.5px">ชิ้น</span>` : `${unitsOf(it)}`;
     }
 
+    /** A product's normal price: while it sells at a promotion price, the normal one kept aside. */
+    function normalPrice(m) {
+        return Number(m.regular_price) || Number(m.sale_price) || 0;
+    }
+    /** Normal / promotion price buttons: the product's normal price and its latest promotion price, when known. */
+    function priceModeHtml(it) {
+        const reg = it.match ? normalPrice(it.match) : 0;
+        const promo = Number(it.match?.promo_price) || 0;
+        return `<div class="pc-pmode" role="group" aria-label="ราคาขายรอบนี้">
+          <button type="button" data-pmode="regular" class="${it.promo ? '' : 'on'}" aria-pressed="${!it.promo}" title="ขายราคาปกติ${reg ? ` ฿${money(reg)}` : ''}">ปกติ${reg ? ` ${money(reg)}` : ''}</button>
+          <button type="button" data-pmode="promo" class="promo ${it.promo ? 'on' : ''}" aria-pressed="${it.promo}" title="${promo ? `ราคาโปรโมชันครั้งล่าสุด ฿${money(promo)}` : 'ผู้ผลิตจัดโปรโมชัน: ขายราคาโปรเฉพาะรอบนี้'}">โปร${promo ? ` ${money(promo)}` : ''}</button>
+        </div>`;
+    }
+    /** Switches a line between the normal and the promotion price. */
+    function setPriceMode(it, promo) {
+        if (it.promo === promo) return;
+        const reg = it.match ? normalPrice(it.match) : 0;
+        if (promo) {
+            it.regular_price = Number(it.regular_price) || reg || Number(it.sale_price) || Number(it.suggested) || 0;
+            it.sale_price = Number(it.match?.promo_price) || 0;
+            it.priceTouched = true;
+        } else {
+            it.sale_price = reg || Number(it.regular_price) || Number(it.sale_price) || 0;
+            it.priceTouched = !it.match && !!it.sale_price;
+        }
+        it.promo = promo;
+    }
+
     /** Restock lines compare the new selling price with the product's current one. */
     function priceDir(it) {
-        if (it.item_type !== 'stock' || !it.match) return null;
+        if (it.item_type !== 'stock' || !it.match || it.promo) return null;
         const old = Number(it.match.sale_price) || 0;
         const cur = Number(it.sale_price) || old;
         return cur > old + 0.004 ? 'up' : cur < old - 0.004 ? 'down' : 'same';
     }
     function priceClass(it) {
+        if (it.item_type === 'stock' && it.promo) return 'pc-price promo';
         const dir = priceDir(it);
         return dir ? `pc-price ${dir}` : '';
     }
     function priceTagHtml(it) {
+        if (it.item_type === 'stock' && it.promo) {
+            const price = Number(it.sale_price) || 0;
+            const reg = Number(it.regular_price) || 0;
+            if (!price) return '<div class="pc-price-tag promo">ใส่ราคาโปร/ชิ้น</div>';
+            if (!reg) return '<div class="pc-price-tag down">ใส่ราคาปกติด้วย</div>';
+            if (price >= reg) return '<div class="pc-price-tag down" title="ราคาโปรต้องต่ำกว่าราคาปกติ">ไม่ต่ำกว่าปกติ</div>';
+            return `<div class="pc-price-tag promo" title="ขายราคาโปรเฉพาะรอบนี้ ซื้อรอบหน้ากลับเป็นราคาปกติได้">โปรรอบนี้ ลด ${money(round2(reg - price))}</div>`;
+        }
         const dir = priceDir(it);
         if (!dir) return '';
         const old = Number(it.match.sale_price) || 0;
+        if (it.match.on_promo) {
+            // Selling at the last round's promotion price: this round goes back to normal unless picked again.
+            const cur = Number(it.sale_price) || old;
+            return `<div class="pc-price-tag ${cur > old + 0.004 ? 'up' : cur < old - 0.004 ? 'down' : 'same'}" title="ตอนนี้ขายราคาโปร ฿${money(old)}">ตอนนี้ขายโปร ${money(old)}</div>`;
+        }
         const diff = round2(Math.abs((Number(it.sale_price) || old) - old));
         if (dir === 'same') return `<div class="pc-price-tag same" title="ราคาขายปัจจุบันของสินค้านี้">ราคาเดิม ${money(old)}</div>`;
         return dir === 'up'
@@ -508,7 +559,7 @@ export async function render(container, { user } = {}) {
     function updatePriceCell(it, tr) {
         const sp = tr?.querySelector('[data-f="sale_price"]');
         if (!sp) return;
-        sp.classList.remove('pc-price', 'same', 'up', 'down');
+        sp.classList.remove('pc-price', 'same', 'up', 'down', 'promo');
         const cls = priceClass(it);
         if (cls) sp.classList.add(...cls.split(' '));
         tr.querySelector('[data-price-tag]').innerHTML = priceTagHtml(it);
@@ -605,7 +656,7 @@ export async function render(container, { user } = {}) {
             list.innerHTML = rows.length ? `${res.matched ? `<div class="muted" style="font-size:12.5px;margin-bottom:6px">ไม่พบคำเต็ม แสดงผลที่มีคำว่า "<b>${escapeHtml(res.matched)}</b>"</div>` : ''}<table><thead><tr><th>สินค้า</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">ราคาขาย</th><th></th></tr></thead><tbody>
               ${rows.map((p, i) => `<tr><td>${escapeHtml(p.name)}<div class="muted" style="font-size:11.5px">${escapeHtml([p.barcode, p.packs].filter(Boolean).join(' · ') || 'ไม่มีบาร์โค้ด')}</div></td>
                 <td class="num" style="${Number(p.qty_stock) < 0 ? 'color:var(--bad);font-weight:600' : ''}">${Number(p.qty_stock)}</td>
-                <td class="num">${money(p.cost_price)}</td><td class="num">${money(p.sale_price)}</td>
+                <td class="num">${money(p.cost_price)}</td><td class="num">${money(p.sale_price)}${p.on_promo ? `<div class="pc-price-tag promo">โปร · ปกติ ${money(p.regular_price)}</div>` : ''}</td>
                 <td><button type="button" class="btn sm" data-choose="${i}">เลือก</button></td></tr>`).join('')}</tbody></table>`
                 : '<div class="empty">ไม่พบสินค้า ลองพิมพ์คำสั้นลง</div>';
             list.querySelectorAll('[data-choose]').forEach((b) => b.addEventListener('click', () => {
@@ -613,9 +664,12 @@ export async function render(container, { user } = {}) {
                 it.pickedId = Number(p.id);
                 it.forceNew = false;
                 it.notMatch = '';
-                it.match = { product_id: Number(p.id), name: p.name, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), cost_price: Number(p.cost_price) };
-                it.suggested = Number(p.sale_price);
-                if (!it.priceTouched) it.sale_price = Number(p.sale_price) || it.sale_price;
+                it.match = {
+                    product_id: Number(p.id), name: p.name, sale_price: Number(p.sale_price), qty_stock: Number(p.qty_stock), cost_price: Number(p.cost_price),
+                    regular_price: p.regular_price != null ? Number(p.regular_price) : null, promo_price: p.promo_price != null ? Number(p.promo_price) : null, on_promo: !!p.on_promo,
+                };
+                it.suggested = normalPrice(it.match);
+                if (!it.priceTouched && !it.promo) it.sale_price = it.suggested || it.sale_price;
                 close();
                 draw();
                 refreshPreview();
@@ -746,7 +800,7 @@ export async function render(container, { user } = {}) {
                   <tr><td>${escapeHtml(it.receipt_name)}${it.product_name && it.product_name !== it.receipt_name ? `<div class="muted" style="font-size:12px">→ ${escapeHtml(it.product_name)}</div>` : ''}${it.barcode ? `<div class="muted" style="font-size:11.5px">บาร์โค้ด${Number(it.pack_size) > 1 ? 'แพ็ค' : ''}: ${escapeHtml(it.barcode)}</div>` : ''}</td>
                       <td class="num">${it.qty}${Number(it.pack_size) > 1 ? ` × ${it.pack_size}` : ''}</td><td class="num">${money(it.unit_cost)}</td><td class="num">${money(it.line_total)}</td>
                       <td class="num">${it.item_type === 'supply' ? '—' : it.units}</td><td class="num">${money(it.piece_cost)}</td>
-                      <td class="num">${it.item_type === 'supply' ? '—' : money(it.sale_price)}</td>
+                      <td class="num">${it.item_type === 'supply' ? '—' : money(it.sale_price)}${Number(it.is_promo) ? `<div class="pc-price-tag promo" title="ขายราคาโปรโมชันในรอบนี้">โปร${Number(it.regular_price) ? ` · ปกติ ${money(it.regular_price)}` : ''}</div>` : ''}</td>
                       <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : isDraft(d) ? '<span class="pill muted">ร่าง</span>' : isOrdered(d) ? '<span class="pill warn">รอส่งของ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
                 </tbody></table></div>
               ${evidenceHtml(d)}
@@ -872,6 +926,13 @@ export async function render(container, { user } = {}) {
                 });
             });
         });
+        container.querySelectorAll('tr[data-row] [data-pmode]').forEach((b) => b.addEventListener('click', () => {
+            const row = Number(b.closest('tr').dataset.row);
+            setPriceMode(items[row], b.dataset.pmode === 'promo');
+            draw();
+            const sp = container.querySelector(`tr[data-row="${row}"] [data-f="sale_price"]`);
+            if (items[row].promo && !(Number(items[row].sale_price) > 0)) sp?.focus();
+        }));
         container.querySelectorAll('tr[data-row] [data-type]').forEach((sel) => sel.addEventListener('change', () => {
             const it = items[Number(sel.closest('tr').dataset.row)];
             it.item_type = sel.value;
@@ -994,6 +1055,7 @@ export async function render(container, { user } = {}) {
             it.priceTouched = value !== '';
         } else if (field === 'pack_size') {
             it.pack_size = Math.max(1, Math.round(Number(value) || 1));
+            it.packFixed = true; // set by hand: not guessed again from the name or a pack barcode
         }
         tr.querySelector('[data-units]').innerHTML = unitsHtml(it);
         tr.querySelector('[data-piece]').textContent = money(pieceCost(it));
@@ -1006,7 +1068,7 @@ export async function render(container, { user } = {}) {
         previewTimer = setTimeout(async () => {
             const payload = items.map((it) => ({
                 name: it.receipt_name || it.name, product_name: it.name, barcode: it.barcode, qty: it.qty,
-                pack_size: it.pack_size, unit_cost: it.unit_cost, line_total: it.line_total,
+                pack_size: it.pack_size, pack_fixed: !!it.packFixed, unit_cost: it.unit_cost, line_total: it.line_total,
                 item_type: it.typeTouched ? it.item_type : null, product_id: chosenProductId(it), new_product: it.forceNew,
             }));
             try {
@@ -1021,8 +1083,20 @@ export async function render(container, { user } = {}) {
                     tr.querySelector('[data-status]').innerHTML = statusHtml(it);
                     bindStatus(tr);
                     const sp = tr.querySelector('[data-f="sale_price"]');
-                    sp.placeholder = it.suggested || '';
+                    if (!it.promo) sp.placeholder = it.suggested || '';
                     if (!it.priceTouched && document.activeElement !== sp) sp.value = it.sale_price || '';
+                    // The normal / promotion buttons show the matched product's prices.
+                    const mode = tr.querySelector('.pc-pmode');
+                    if (mode) {
+                        mode.outerHTML = priceModeHtml(it);
+                        tr.querySelectorAll('[data-pmode]').forEach((b) => b.addEventListener('click', () => {
+                            setPriceMode(it, b.dataset.pmode === 'promo');
+                            draw();
+                            if (it.promo && !(Number(it.sale_price) > 0)) container.querySelector(`tr[data-row="${i}"] [data-f="sale_price"]`)?.focus();
+                        }));
+                    }
+                    const reg = tr.querySelector('[data-f="regular_price"]');
+                    if (reg && document.activeElement !== reg) reg.value = it.regular_price || '';
                     updatePriceCell(it, tr);
                 });
                 // A history hint or a pack size filled in from a known barcode changes the row.
@@ -1032,6 +1106,65 @@ export async function render(container, { user } = {}) {
     }
 
     // ---------------- Actions ----------------
+
+    /**
+     * Before an edit of a saved purchase is saved: every change against the saved document
+     * (header, lines changed / added / removed, stock and price effects), confirmed by the user.
+     */
+    async function confirmEditReview(rows) {
+        const d = editing.orig;
+        const num = (v) => Number(v) || 0;
+        const same = (a, b) => Math.abs(num(a) - num(b)) < 0.005;
+        const arrow = (a, b, fmt = money) => `${fmt(a)} → <b>${fmt(b)}</b>`;
+        const head = [];
+        const hf = [['supplier_name', 'ร้าน/ผู้ขาย'], ['receipt_no', 'เลขที่ใบเสร็จ'], ['receipt_date', 'วันที่ในใบเสร็จ'], ['note', 'หมายเหตุ']];
+        hf.forEach(([k, label]) => {
+            if (String(d[k] || '').trim() !== String(header[k] || '').trim()) head.push(`${label}: ${escapeHtml(d[k] || '-')} → <b>${escapeHtml(header[k] || '-')}</b>`);
+        });
+        [['discount', 'ส่วนลด'], ['vat', 'VAT'], ['total', 'ยอดสุทธิ']].forEach(([k, label]) => {
+            if (!same(d[k], header[k])) head.push(`${label}: ${arrow(d[k], header[k])}`);
+        });
+        const lines = [];
+        const kept = new Set();
+        rows.forEach((it) => {
+            const o = it.orig;
+            const name = escapeHtml(it.name.trim());
+            if (!o) {
+                lines.push(`<li><span class="pill warn">เพิ่ม</span> ${name} · ${it.qty}${num(it.pack_size) > 1 ? ` × ${it.pack_size}` : ''} = ${unitsOf(it)} ชิ้น · ฿${money(it.line_total)}</li>`);
+                return;
+            }
+            kept.add(o);
+            const ch = [];
+            if (o.item_type !== it.item_type) ch.push(`ประเภท: ${o.item_type === 'supply' ? 'ใช้ในกิจการ' : 'เพื่อขาย'} → <b>${it.item_type === 'supply' ? 'ใช้ในกิจการ' : 'เพื่อขาย'}</b>`);
+            if (((o.item_type === 'stock' && o.product_name) || o.receipt_name) !== it.name.trim()) ch.push(`ชื่อ: ${escapeHtml(o.product_name || o.receipt_name)} → <b>${name}</b>`);
+            if (String(o.barcode || '') !== it.barcode.trim()) ch.push(`บาร์โค้ด: ${escapeHtml(o.barcode || '-')} → <b>${escapeHtml(it.barcode.trim() || '-')}</b>`);
+            if (num(o.qty) !== num(it.qty)) ch.push(`จำนวนซื้อ: ${arrow(o.qty, it.qty, String)}`);
+            if (num(o.pack_size) !== num(it.pack_size)) {
+                ch.push(`ชิ้น/แพ็ค: ${arrow(o.pack_size, it.pack_size, String)}`);
+                if (num(it.pack_size) === 1 && num(o.pack_size) > 1 && it.barcode.trim()) ch.push(`บาร์โค้ด ${escapeHtml(it.barcode.trim())} จะเลิกเป็นบาร์โค้ดแพ็ค×${o.pack_size} ใช้เป็นบาร์โค้ดชิ้น`);
+            }
+            if (!same(o.unit_cost, it.unit_cost)) ch.push(`ทุน/หน่วยซื้อ: ${arrow(o.unit_cost, it.unit_cost)}`);
+            if (!same(o.line_total, it.line_total)) ch.push(`รวม: ${arrow(o.line_total, it.line_total)}`);
+            if (!same(o.piece_cost, pieceCost(it))) ch.push(`ทุน/ชิ้น: ${arrow(o.piece_cost, pieceCost(it))}`);
+            if (it.item_type === 'stock' && !same(o.sale_price, it.sale_price)) ch.push(`ราคาขาย/ชิ้น: ${arrow(o.sale_price, it.sale_price)}`);
+            if (it.item_type === 'stock' && !!Number(o.is_promo) !== !!it.promo) ch.push(it.promo ? `<b>เป็นราคาโปร</b> (ปกติ ฿${money(it.regular_price)})` : '<b>เลิกราคาโปร</b> ใช้ราคาปกติ');
+            const delta = (it.item_type === 'stock' ? unitsOf(it) : 0) - (o.item_type === 'stock' ? num(o.units) : 0);
+            if (delta) {
+                ch.push(`สต๊อก <b style="color:var(${delta < 0 ? '--bad' : '--ok'})">${delta > 0 ? '+' : ''}${delta} ชิ้น</b>`
+                    + (o.counted_on ? ` <span style="color:var(--warn)">— ตรวจนับแล้ววันที่ ${fmtDate(o.counted_on)}: สต๊อกคงตามที่นับ ส่วนต่างไปอยู่ในผลต่างของรอบนับ</span>` : ''));
+            }
+            if (ch.length) lines.push(`<li><span class="pill">แก้ไข</span> ${escapeHtml(o.product_name || o.receipt_name)}<ul style="margin:2px 0 0;padding-left:18px">${ch.map((c) => `<li>${c}</li>`).join('')}</ul></li>`);
+        });
+        (d.items || []).filter((o) => !kept.has(o)).forEach((o) => {
+            lines.push(`<li><span class="pill bad">ลบ</span> ${escapeHtml(o.product_name || o.receipt_name)} · ${o.item_type === 'stock' ? `สต๊อก <b style="color:var(--bad)">−${num(o.units)} ชิ้น</b>` : 'ใช้ในกิจการ'} · ฿${money(o.line_total)}${o.counted_on ? ` <span style="color:var(--warn)">— ตรวจนับแล้ว สต๊อกคงตามที่นับ</span>` : ''}</li>`);
+        });
+        if (!head.length && !lines.length) return confirmDialog('ไม่มีการเปลี่ยนแปลงจากใบเดิม บันทึกซ้ำหรือไม่?', { title: `บันทึก ${editing.doc_no}?`, okText: 'บันทึก' });
+        const html = `<div style="max-height:55vh;overflow:auto;font-size:13px;line-height:1.55;text-align:left">
+          ${head.length ? `<b>ข้อมูลใบเสร็จ</b><ul style="margin:4px 0 10px;padding-left:18px">${head.map((h) => `<li>${h}</li>`).join('')}</ul>` : ''}
+          ${lines.length ? `<b>รายการสินค้า (${lines.length})</b><ul style="margin:4px 0 0;padding-left:18px;list-style:none">${lines.join('')}</ul>` : ''}
+        </div>`;
+        return confirmDialog(`ทวนรายการเปลี่ยนแปลงของ ${editing.doc_no} ก่อนบันทึก`, { title: 'ยืนยันการแก้ไขใบซื้อ', okText: 'ยืนยันบันทึกการแก้ไข', html, width: 680 });
+    }
 
     async function addPhotos(files) {
         const room = MAX_PHOTOS - photos.length;
@@ -1198,9 +1331,13 @@ export async function render(container, { user } = {}) {
         } else {
             const bad = rows.findIndex((it) => !it.name.trim() || Number(it.qty) <= 0 || Number(it.unit_cost) <= 0);
             if (bad >= 0) error = `รายการที่ ${items.indexOf(rows[bad]) + 1} ต้องมีชื่อ จำนวน และราคาทุน`;
+            const promoBad = rows.findIndex((it) => it.item_type === 'stock' && it.promo
+                && !(Number(it.sale_price) > 0 && Number(it.regular_price) > Number(it.sale_price)));
+            if (!error && promoBad >= 0) error = `รายการที่ ${items.indexOf(rows[promoBad]) + 1} ราคาโปรโมชัน: ต้องระบุราคาโปรและราคาปกติ และราคาโปรต้องต่ำกว่าราคาปกติ`;
         }
         if (error) { draw(); return; }
 
+        if (editing && !editing.ordered && !(await confirmEditReview(rows))) return;
         if (mode === 'receive' && !(await confirmDialog('สินค้าตามรายการในฟอร์มจะเข้าสต๊อกทันที และใบสั่งซื้อจะกลายเป็นใบซื้อ (แก้ไขภายหลังได้เหมือนใบซื้อทั่วไป)',
             { title: `ยืนยันรับสินค้าตาม ${editing.doc_no}?`, okText: 'ยืนยันรับสินค้าเข้าสต๊อก' }))) return;
         busy = mode;
@@ -1210,9 +1347,11 @@ export async function render(container, { user } = {}) {
                 header: { ...header },
                 items: rows.map((it) => ({
                     name: (it.receipt_name || it.name).trim(), product_name: it.name.trim(), pack_size: Math.max(1, Number(it.pack_size) || 1),
+                    pack_fixed: !!it.packFixed,
                     item_type: it.item_type, product_id: chosenProductId(it), new_product: it.item_type === 'stock' && it.forceNew,
                     barcode: it.barcode.trim(), qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                     line_total: Number(it.line_total), sale_price: Number(it.sale_price) || null,
+                    ...(it.item_type === 'stock' && it.promo ? { promo: true, regular_price: Number(it.regular_price) || null } : {}),
                 })),
                 attachments: photos.map((p) => p.token),
                 source,

@@ -24,6 +24,28 @@ class PurchaseService
     ) {
     }
 
+    /** Promotion prices are kept once migration 0070 has run. */
+    public function promoReady(): bool
+    {
+        return \App\Support\Db::hasColumn($this->db, 'products', 'on_promo');
+    }
+
+    /** A product's normal price: while it sells at a promotion price, the price kept aside. */
+    public static function regularOf(array $p): float
+    {
+        return !empty($p['on_promo']) && (float) ($p['regular_price'] ?? 0) > 0 ? (float) $p['regular_price'] : (float) $p['sale_price'];
+    }
+
+    /** What the form shows for a product's prices: normal, the latest promotion, and which one sells now. */
+    public static function pricesOf(array $p): array
+    {
+        return [
+            'regular_price' => self::regularOf($p),
+            'promo_price' => isset($p['promo_price']) && (float) $p['promo_price'] > 0 ? (float) $p['promo_price'] : null,
+            'on_promo' => !empty($p['on_promo']),
+        ];
+    }
+
     public function markupPercent(): float
     {
         return (float) ($this->settings->get('purchase_markup_percent') ?? 20);
@@ -108,9 +130,13 @@ class PurchaseService
         $receiptName = trim((string) ($item['name'] ?? ''));
         [$guessName, $guessPack] = ReceiptExtractor::splitPack($receiptName);
         $barcode = trim((string) ($item['barcode'] ?? ''));
-        $pack = isset($item['pack_size']) && (int) $item['pack_size'] > 1 ? min((int) $item['pack_size'], 1000) : $guessPack;
+        // pack_fixed: the pack size was set by hand (or comes from a saved purchase), even 1 —
+        // never guessed again from the name ("60" may be grams) or a pack barcode saved before.
+        $packFixed = !empty($item['pack_fixed']) && isset($item['pack_size']) && (int) $item['pack_size'] >= 1;
+        $pack = $packFixed ? min((int) $item['pack_size'], 1000)
+            : (isset($item['pack_size']) && (int) $item['pack_size'] > 1 ? min((int) $item['pack_size'], 1000) : $guessPack);
         // A known pack barcode tells how many pieces are in it, even when the receipt does not.
-        if ($pack <= 1 && $barcode !== '' && ($known = $this->products->findByPackBarcode($barcode))) {
+        if (!$packFixed && $pack <= 1 && $barcode !== '' && ($known = $this->products->findByPackBarcode($barcode))) {
             $pack = (int) $known['pack_size'];
         }
         $productName = trim((string) ($item['product_name'] ?? ''));
@@ -129,6 +155,9 @@ class PurchaseService
             : round($packCost * max($qty, 0), 2);
         $units = max($qty, 0) * $pack;
         $type = $item['item_type'] ?? null;
+        $salePrice = isset($item['sale_price']) && (float) $item['sale_price'] > 0 ? round((float) $item['sale_price'], 2) : null;
+        // Bought on a manufacturer's promotion: sale_price is the promotion price for this round.
+        $promo = !empty($item['promo']) && $salePrice !== null;
         return [
             // 'supply' = bought for use in the business: cost only, never stocked or priced.
             'item_type' => in_array($type, ['stock', 'supply'], true) ? $type : null,
@@ -140,12 +169,16 @@ class PurchaseService
             'new_product' => !empty($item['new_product']),
             'qty' => $qty,
             'pack_size' => $pack,
+            'pack_fixed' => $packFixed,
             'units' => $units,
             'pack_cost' => $packCost,
             'line_total' => $lineTotal,
             // Line total already reflects per-line discounts.
             'piece_cost' => $units > 0 ? round($lineTotal / $units, 2) : 0.0,
-            'sale_price' => isset($item['sale_price']) && (float) $item['sale_price'] > 0 ? round((float) $item['sale_price'], 2) : null,
+            'sale_price' => $salePrice,
+            'promo' => $promo,
+            // The normal price while this round sells at the promotion price (null = the product's own).
+            'regular_price' => $promo && isset($item['regular_price']) && (float) $item['regular_price'] > 0 ? round((float) $item['regular_price'], 2) : null,
         ];
     }
 
@@ -166,7 +199,7 @@ class PurchaseService
                     'product_id' => (int) $match['id'], 'name' => $match['name'],
                     'sale_price' => (float) $match['sale_price'], 'qty_stock' => (int) $match['qty_stock'],
                     'cost_price' => (float) $match['cost_price'],
-                ] : null,
+                ] + self::pricesOf($match) : null,
                 'pack_size' => $l['pack_size'],
                 'units' => $l['units'],
                 'piece_cost' => $l['piece_cost'],
@@ -472,7 +505,7 @@ class PurchaseService
             $this->keepCountedStock($stockBefore, (string) ($doc['receipt_date'] ?: substr((string) $doc['created_at'], 0, 10)), $userId, $ip);
             $snapshot = array_map(fn ($it) => array_intersect_key($it, array_flip([
                 'product_id', 'product_name', 'item_type', 'receipt_name', 'barcode', 'qty', 'unit_cost', 'pack_size', 'units',
-                'piece_cost', 'line_total', 'sale_price', 'is_new_product',
+                'piece_cost', 'line_total', 'sale_price', 'is_new_product', 'is_promo', 'regular_price',
             ])), $old['items']); // an order not delivered: its ordered lines (find() shapes them the same way)
             $this->db->prepare('DELETE FROM purchase_items WHERE purchase_document_id = ?')->execute([$id]);
             $this->removeUnusedCreated($createdHere, [], $userId, $ip);
@@ -567,6 +600,11 @@ class PurchaseService
                 : (float) $p['cost_price'];
             $this->products->addStock($productId, -$units, $userId, $ip);
             $this->db->prepare('UPDATE products SET cost_price = ?, updated_at = NOW() WHERE id = ?')->execute([$cost, $productId]);
+            // The promotion round taken back while its price still sells: the normal price returns.
+            if (!empty($it['is_promo']) && !empty($p['on_promo']) && (float) ($p['regular_price'] ?? 0) > 0
+                && abs((float) $p['sale_price'] - (float) $it['sale_price']) < 0.005) {
+                $this->db->prepare('UPDATE products SET sale_price = regular_price, on_promo = 0, regular_price = NULL WHERE id = ?')->execute([$productId]);
+            }
         }
         return $createdHere;
     }
@@ -650,6 +688,9 @@ class PurchaseService
                 throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' ข้อมูลไม่ครบ (ต้องมีชื่อ จำนวน และราคาทุน)');
             }
             $l['item_type'] ??= 'stock';
+            if (!empty($item['promo']) && $l['item_type'] === 'stock' && $l['sale_price'] === null) {
+                throw new \RuntimeException('รายการที่ ' . ($i + 1) . ' เลือกราคาโปรโมชัน กรุณาระบุราคาโปรโมชัน/ชิ้น');
+            }
             $lines[] = $l;
         }
         if (!$lines) {
@@ -787,17 +828,19 @@ class PurchaseService
      */
     private function applyLines(int $docId, array $lines, array $createdHere, int $userId, ?string $ip): array
     {
+        $promoReady = $this->promoReady();
         $insItem = $this->db->prepare(
             'INSERT INTO purchase_items
-                (purchase_document_id, product_id, item_type, receipt_name, barcode, qty, unit_cost, pack_size, units, piece_cost, line_total, sale_price, is_new_product)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                (purchase_document_id, product_id, item_type, receipt_name, barcode, qty, unit_cost, pack_size, units, piece_cost, line_total, sale_price, is_new_product'
+                . ($promoReady ? ', is_promo, regular_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' : ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         );
+        $promoArgs = fn (bool $promo, ?float $regular) => $promoReady ? [$promo ? 1 : 0, $promo ? $regular : null] : [];
         $result = [];
         foreach ($lines as $l) {
             if ($l['item_type'] === 'supply') {
                 $insItem->execute([
                     $docId, null, 'supply', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
-                    $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], 0, 0,
+                    $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], 0, 0, ...$promoArgs(false, null),
                 ]);
                 $result[] = [
                     'product_id' => null, 'type' => 'supply', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
@@ -816,7 +859,13 @@ class PurchaseService
             }
             if ($match) {
                 $productId = (int) $match['id'];
-                $salePrice = $l['sale_price'] ?? (float) $match['sale_price'];
+                // A round at the normal price ends a promotion: no price given = back to the normal one.
+                $regular = self::regularOf($match);
+                $promo = $promoReady && $l['promo'];
+                if ($promo) {
+                    $regular = $l['regular_price'] ?? $regular;
+                }
+                $salePrice = $l['sale_price'] ?? $regular;
                 // Moving weighted-average cost: blend what is on the shelf with this lot.
                 $before = $this->products->find($productId);
                 $onHand = max((int) $before['qty_stock'], 0);
@@ -830,10 +879,15 @@ class PurchaseService
                      WHERE id = ?'
                 );
                 $upd->execute([$avgCost, $salePrice, $pieceBarcode, $productId]);
+                if ($promoReady) {
+                    $this->savePromo($productId, $promo, $salePrice, $regular);
+                }
                 $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
                 $isNew = isset($createdHere[$productId]);
             } else {
                 $salePrice = $l['sale_price'] ?? $this->suggestedPrice($l['piece_cost']);
+                $promo = $promoReady && $l['promo'];
+                $regular = $promo ? ($l['regular_price'] ?? $this->suggestedPrice($l['piece_cost'])) : $salePrice;
                 $productId = $this->products->create([
                     'consignor_id' => null,
                     'name' => mb_substr($l['product_name'], 0, 191),
@@ -847,21 +901,57 @@ class PurchaseService
                     'listing_fee_status' => 'waived',
                     'listing_fee_amount' => 0,
                 ], $userId, $ip);
+                if ($promo) {
+                    $this->savePromo($productId, true, $salePrice, $regular);
+                }
                 $isNew = true;
             }
             if ($packBarcode !== null) {
                 $this->products->savePackBarcode($productId, $packBarcode, $l['pack_size']);
+            } elseif ($l['pack_fixed'] && $l['barcode'] !== null) {
+                $this->dropWrongPackBarcode($productId, $l['barcode'], $userId, $ip);
             }
             $insItem->execute([
                 $docId, $productId, 'stock', mb_substr($l['receipt_name'], 0, 191), $l['barcode'], $l['qty'], $l['pack_cost'],
-                $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], $salePrice, $isNew ? 1 : 0,
+                $l['pack_size'], $l['units'], $l['piece_cost'], $l['line_total'], $salePrice, $isNew ? 1 : 0, ...$promoArgs($promo, $regular),
             ]);
             $result[] = [
                 'product_id' => $productId, 'type' => 'stock', 'name' => $l['product_name'], 'qty' => $l['qty'], 'pack_size' => $l['pack_size'],
                 'units' => $l['units'], 'piece_cost' => $l['piece_cost'], 'sale_price' => $salePrice, 'new' => $isNew,
+                'promo' => $promo, 'regular_price' => $promo ? $regular : null,
             ];
         }
         return $result;
+    }
+
+    /**
+     * A line set by hand to single pieces whose barcode was saved as a pack of the same product
+     * (e.g. "60" read as 60 pieces when it is 60 grams): the barcode is the piece's, not a pack's.
+     */
+    private function dropWrongPackBarcode(int $productId, string $barcode, int $userId, ?string $ip): void
+    {
+        $stmt = $this->db->prepare('SELECT * FROM product_pack_barcodes WHERE product_id = ? AND barcode = ?');
+        $stmt->execute([$productId, $barcode]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return;
+        }
+        $this->db->prepare('DELETE FROM product_pack_barcodes WHERE id = ?')->execute([$row['id']]);
+        $this->db->prepare('UPDATE products SET barcode = ?, updated_at = NOW() WHERE id = ? AND barcode IS NULL')->execute([$barcode, $productId]);
+        $this->audit->log('products', $productId, 'update', ['pack_barcode' => $barcode, 'pack_size' => (int) $row['pack_size']],
+            ['pack_barcode' => null, 'note' => "แก้ใบซื้อเป็นขายแยกชิ้น: บาร์โค้ด {$barcode} ไม่ใช่บาร์โค้ดแพ็ค×{$row['pack_size']}"], $userId, $ip);
+    }
+
+    /**
+     * Promotion state of a product after a purchase line set its price: on promotion, the normal
+     * price is kept aside and the promotion price remembered for the next round; at the normal
+     * price, the promotion ends (its price stays remembered).
+     */
+    private function savePromo(int $productId, bool $promo, float $salePrice, float $regular): void
+    {
+        $this->db->prepare(
+            'UPDATE products SET on_promo = ?, regular_price = ?, promo_price = IF(?, ?, promo_price) WHERE id = ?'
+        )->execute([$promo ? 1 : 0, $promo ? $regular : null, $promo ? 1 : 0, $salePrice, $productId]);
     }
 
     private function pieceBarcodeTaken(string $barcode): bool
@@ -972,6 +1062,7 @@ class PurchaseService
                 'unit_cost' => (float) ($l['unit_cost'] ?? 0), 'pack_size' => $size, 'units' => $units,
                 'piece_cost' => $units > 0 ? round($total / $units, 2) : 0, 'line_total' => $total,
                 'sale_price' => $l['sale_price'] ?? null, 'is_new_product' => empty($l['product_id']) ? 1 : 0,
+                'is_promo' => !empty($l['promo']) ? 1 : 0, 'regular_price' => !empty($l['promo']) ? ($l['regular_price'] ?? null) : null,
             ];
         }, $lines);
     }
@@ -1006,6 +1097,22 @@ class PurchaseService
             $doc['ordered_by_name'] = $by->fetchColumn() ?: null;
         }
         unset($doc['cancelled_items'], $doc['order_items']);
+        if (($doc['status'] ?? 'active') === 'active' && $doc['items']) {
+            // A product counted on or after the receipt date keeps its counted stock when the purchase is edited.
+            $since = (string) ($doc['receipt_date'] ?: substr((string) $doc['created_at'], 0, 10));
+            $counted = $this->db->prepare(
+                "SELECT MAX(sc.count_date) FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                 WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sc.count_date >= ?"
+            );
+            foreach ($doc['items'] as &$it) {
+                $it['counted_on'] = null;
+                if (($it['item_type'] ?? '') === 'stock' && !empty($it['product_id'])) {
+                    $counted->execute([(int) $it['product_id'], $since]);
+                    $it['counted_on'] = $counted->fetchColumn() ?: null;
+                }
+            }
+            unset($it);
+        }
         $doc = $this->withBuyerNames([$doc])[0];
         $doc['images'] = array_map([$this->attachments, 'publicInfo'], $this->attachments->forPurchase($id));
         return $doc;

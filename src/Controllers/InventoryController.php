@@ -38,6 +38,8 @@ class InventoryController
         return $this->json($response, [
             'summary' => $service->summary(),
             'data' => $rows,
+            // Normal / promotion prices can be set (migration 0070).
+            'promo_ready' => Db::hasColumn($db, 'products', 'on_promo'),
         ]);
     }
 
@@ -307,7 +309,14 @@ class InventoryController
                 if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
                     throw new \RuntimeException('เฉพาะผู้ดูแลระบบและผู้จัดการเท่านั้นที่กำหนดราคาขายได้');
                 }
-                $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                if (array_key_exists('promo', $body) && Db::hasColumn($db, 'products', 'on_promo')) {
+                    // promo: sale_price is the promotion price and regular_price the normal one (migration 0070).
+                    $repo->setPricing($id, (float) $body['sale_price'], !empty($body['promo']),
+                        isset($body['regular_price']) ? (float) $body['regular_price'] : null, !empty($body['forget_promo']),
+                        (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                } else {
+                    $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                }
             }
             // A cost found out later for a product booked at cost 0: admins and managers, store goods.
             $known = null;
@@ -332,7 +341,9 @@ class InventoryController
             throw $e;
         }
         $p = $repo->find($id);
-        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'sale_price' => (float) $p['sale_price'], 'pack_barcodes' => $repo->packBarcodes($id), 'known_cost' => $known]]);
+        return $this->json($response, ['data' => ['name' => $p['name'], 'barcode' => $p['barcode'], 'sale_price' => (float) $p['sale_price'],
+            'on_promo' => !empty($p['on_promo']), 'regular_price' => isset($p['regular_price']) ? (float) $p['regular_price'] : null,
+            'promo_price' => isset($p['promo_price']) ? (float) $p['promo_price'] : null, 'pack_barcodes' => $repo->packBarcodes($id), 'known_cost' => $known]]);
     }
 
     /**

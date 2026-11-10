@@ -94,6 +94,41 @@ class ProductRepo
     }
 
     /**
+     * Sets a store product's piece price with its promotion state (migration 0070): on promotion,
+     * $price is the promotion price and $regular the normal price kept aside; off promotion, $price
+     * is the normal price. The latest promotion price stays remembered for the next purchase
+     * unless $forgetPromo.
+     */
+    public function setPricing(int $productId, float $price, bool $promo, ?float $regular, bool $forgetPromo, ?int $userId, ?string $ip): void
+    {
+        $old = $this->find($productId);
+        if (!$old || $old['consignor_id'] !== null) {
+            throw new \RuntimeException('กำหนดราคาขายได้เฉพาะสินค้าของร้าน');
+        }
+        $price = round($price, 2);
+        if ($price <= 0 || $price > 1000000) {
+            throw new \RuntimeException($promo ? 'ราคาโปรโมชันไม่ถูกต้อง' : 'ราคาขายไม่ถูกต้อง');
+        }
+        $regular = $promo ? round((float) $regular, 2) : null;
+        if ($promo && ($regular <= 0 || $regular > 1000000)) {
+            throw new \RuntimeException('ราคาปกติไม่ถูกต้อง');
+        }
+        $promoPrice = $promo ? $price : ($forgetPromo ? null : ($old['promo_price'] !== null ? (float) $old['promo_price'] : null));
+        $before = [
+            'sale_price' => (float) $old['sale_price'], 'on_promo' => (int) $old['on_promo'],
+            'regular_price' => $old['regular_price'] !== null ? (float) $old['regular_price'] : null,
+            'promo_price' => $old['promo_price'] !== null ? (float) $old['promo_price'] : null,
+        ];
+        $after = ['sale_price' => $price, 'on_promo' => $promo ? 1 : 0, 'regular_price' => $regular, 'promo_price' => $promoPrice];
+        if ($before == $after) {
+            return;
+        }
+        $this->db->prepare('UPDATE products SET sale_price = ?, on_promo = ?, regular_price = ?, promo_price = ?, updated_at = NOW() WHERE id = ?')
+            ->execute([$price, $promo ? 1 : 0, $regular, $promoPrice, $productId]);
+        $this->audit->log('products', $productId, 'update', $before, $after, $userId, $ip);
+    }
+
+    /**
      * A store product booked at cost 0 (stock that was on the shelf, cost not known) gets the
      * cost found out later: the product's piece cost, and every past sale line of it still at
      * cost 0 (POS and imported sales alike), so the profit of past days is counted right.

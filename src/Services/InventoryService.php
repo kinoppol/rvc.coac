@@ -26,10 +26,12 @@ class InventoryService
         // Marked as really having no barcode (migration 0065; none marked before it).
         $noBarcode = \App\Support\Db::hasColumn($this->db, 'products', 'no_barcode') ? 'p.no_barcode' : '0';
         $discontinued = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? 'p.discontinued_at' : 'NULL'; // migration 0067
+        // Promotion price selling now, the normal price kept aside, the latest promotion price (migration 0070).
+        $promo = \App\Support\Db::hasColumn($this->db, 'products', 'on_promo') ? 'p.on_promo, p.regular_price, p.promo_price' : '0 AS on_promo, NULL AS regular_price, NULL AS promo_price';
         $sql = "SELECT p.id, p.name, p.barcode, {$noBarcode} AS no_barcode, {$discontinued} AS discontinued_at, p.image_token, p.consignor_id, c.name AS consignor_name,
                        (SELECT a.created_at FROM attachments a WHERE a.token = p.image_token) AS image_at,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
-                       p.cost_price, p.sale_price,
+                       p.cost_price, p.sale_price, {$promo},
                        ROUND(p.qty_stock * p.cost_price, 2) AS stock_cost_value,
                        ROUND(p.qty_stock * p.sale_price, 2) AS stock_retail_value,
                        COALESCE(sl.sales, 0) AS sales_total, COALESCE(sl.cogs, 0) AS cogs_total,

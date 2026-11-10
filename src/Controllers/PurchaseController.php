@@ -73,8 +73,10 @@ class PurchaseController
     public function products(Request $request, Response $response): Response
     {
         $q = trim((string) ($request->getQueryParams()['q'] ?? ''));
+        // Normal and promotion prices (migration 0070), so a pick offers both.
+        $promo = Db::hasColumn(Db::connection(), 'products', 'on_promo') ? 'p.on_promo, p.regular_price, p.promo_price,' : '';
         $stmt = Db::connection()->prepare(
-            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.cost_price, p.sale_price,
+            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.cost_price, p.sale_price, {$promo}
                     (SELECT GROUP_CONCAT(CONCAT(b.barcode, '×', b.pack_size) SEPARATOR ', ') FROM product_pack_barcodes b WHERE b.product_id = p.id) AS packs
              FROM products p
              WHERE p.consignor_id IS NULL AND (? = '' OR p.name LIKE ? OR p.barcode = ?
@@ -93,6 +95,7 @@ class PurchaseController
             }
             $term = mb_substr($term, 0, max(3, $len - max(2, intdiv($len, 4))));
         }
+        $rows = array_map(fn ($r) => array_merge($r, PurchaseService::pricesOf($r)), $rows);
         // 'matched' tells the picker it is showing results for a shorter word.
         return $this->json($response, ['data' => $rows, 'matched' => $rows && $term !== $q ? $term : null]);
     }

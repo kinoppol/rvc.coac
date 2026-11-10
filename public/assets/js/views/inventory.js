@@ -368,6 +368,9 @@ export async function render(container, { navigate, permissions, user }) {
                 origBarcode: p.barcode || '', origPacks: p.pack_barcodes.map((b) => b.barcode).filter(Boolean),
                 consign: false, consignorId: '', consignCost: String(Number(p.cost_price)), salePrice: Number(p.sale_price),
                 priceInput: String(Number(p.sale_price)), costPrice: Number(p.cost_price), knownCost: '',
+                // Manufacturer's promotion: priceInput = the promotion price, regularInput = the normal price kept aside.
+                promo: !!Number(p.on_promo), regularInput: p.regular_price != null ? String(Number(p.regular_price)) : '',
+                promoPrice: p.promo_price != null ? Number(p.promo_price) : null, forgetPromo: false,
                 soldQty: Number(p.qty_sold),
                 // Cost not from a purchase yet: unknown (0) or set by hand, so it can be set / corrected.
                 costByHand: p.consignor_id == null && !p.last_purchase,
@@ -881,7 +884,7 @@ export async function render(container, { navigate, permissions, user }) {
               ? `<div><button type="button" class="btn secondary sm" data-edit="${p.id}" style="margin-top:4px" title="ใส่ต้นทุนที่สืบทราบภายหลัง กำไรย้อนหลังจะคำนวณใหม่">ระบุต้นทุน</button></div>`
               : canSetPrice && p.consignor_id == null && !p.last_purchase
                 ? `<div><button type="button" class="link-btn" data-edit="${p.id}" style="font-size:12px" title="ต้นทุนนี้ระบุเอง (ยังไม่มีใบซื้อ) แก้ได้ กำไรย้อนหลังจะคำนวณใหม่">แก้ต้นทุน</button></div>` : ''}</td>
-          <td class="num">${money(p.sale_price)}</td>
+          <td class="num">${money(p.sale_price)}${Number(p.on_promo) ? `<div><span class="pill promo" title="ขายราคาโปรโมชัน ราคาปกติ ฿${money(p.regular_price)}">โปร · ปกติ ${money(p.regular_price)}</span></div>` : ''}</td>
           <td class="num">${p.margin_percent}%</td>
           <td class="num">${money(p.stock_cost_value)}</td>
           <td class="num">${money(p.profit_total)}</td>
@@ -908,10 +911,7 @@ export async function render(container, { navigate, permissions, user }) {
               <label class="field" style="display:block;margin-bottom:16px">บาร์โค้ดชิ้น (สแกนตอนขาย)
                 <input id="bc-piece" data-barcode autocomplete="off" value="${escapeHtml(e.barcode)}" placeholder="สแกนบาร์โค้ดบนตัวสินค้า 1 ชิ้น" style="width:100%">
               </label>
-              ${canSetPrice && !e.consigned ? `<label class="field" style="display:block;margin-bottom:16px">ราคาขาย/ชิ้น (บาท)
-                <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
-                <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
-              </label>` : ''}
+              ${canSetPrice && !e.consigned ? priceFieldHtml(e) : ''}
               ${canSetPrice && !e.consigned && (!(e.costPrice > 0) || e.costByHand) ? knownCostHtml(e) : ''}
               ${e.consigned ? consignPriceHtml(e) : packsHtml(e)}
               ${canConsign && !e.consigned ? consignHtml(e) : ''}
@@ -1004,6 +1004,30 @@ export async function render(container, { navigate, permissions, user }) {
         if (!(cost > 0)) return base;
         const price = Number(e.priceInput) || e.salePrice;
         return `${base} · ขายไปแล้ว ${count(e.soldQty)} ชิ้น ≈ ต้นทุน ฿${money(e.soldQty * cost)} · กำไร/ชิ้น ฿${money(price - cost)}${price < cost ? ' ⚠️ ต่ำกว่าทุน' : ''}`;
+    }
+
+    /** The piece price, normal or a manufacturer's promotion (normal price kept aside until the promotion ends). */
+    function priceFieldHtml(e) {
+        const ready = !!res?.promo_ready;
+        return `<div style="margin-bottom:16px">
+          <div class="field" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">ราคาขาย/ชิ้น (บาท)
+            ${ready ? `<div class="pc-pmode" role="group" aria-label="ราคาที่ขายตอนนี้" style="margin:0">
+              <button type="button" data-bc-pmode="regular" class="${e.promo ? '' : 'on'}" aria-pressed="${!e.promo}">ราคาปกติ</button>
+              <button type="button" data-bc-pmode="promo" class="promo ${e.promo ? 'on' : ''}" aria-pressed="${e.promo}" title="ผู้ผลิตจัดโปรโมชันลดราคา: ขายราคาโปร เก็บราคาปกติไว้">ราคาโปรโมชัน</button>
+            </div>` : ''}
+          </div>
+          <label class="field" style="display:block">${e.promo ? 'ราคาโปรโมชัน/ชิ้น' : ''}
+            <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
+            <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
+          </label>
+          ${e.promo ? `<label class="field" style="display:block;margin-top:8px">ราคาปกติ/ชิ้น
+            <input id="bc-regular" type="number" min="0" step="0.25" value="${escapeHtml(e.regularInput)}" style="width:180px">
+            <span class="muted" style="font-size:12.5px;margin-left:8px">หน้าซื้อสินค้าเข้าร้านจะให้เลือกกลับเป็นราคานี้ในรอบถัดไป</span>
+          </label>` : ready && e.promoPrice ? `<div class="muted" style="font-size:12.5px;margin-top:6px">
+            ราคาโปรครั้งล่าสุด ฿${money(e.promoPrice)} — หน้าซื้อสินค้าเข้าร้านจะเสนอให้เลือกในรอบถัดไป
+            <label style="display:inline-flex;align-items:center;gap:4px;margin-left:8px"><input type="checkbox" id="bc-forget-promo" ${e.forgetPromo ? 'checked' : ''}> ล้างราคาโปรนี้</label>
+          </div>` : ''}
+        </div>`;
     }
 
     /** Cost and margin next to the piece price being set. */
@@ -1144,6 +1168,23 @@ export async function render(container, { navigate, permissions, user }) {
             e.knownCost = ev.target.value;
             container.querySelector('#bc-known-hint').textContent = knownCostHint(e, Number(ev.target.value));
         });
+        container.querySelectorAll('[data-bc-pmode]').forEach((b) => b.addEventListener('click', () => {
+            const promo = b.dataset.bcPmode === 'promo';
+            if (promo === e.promo) return;
+            if (promo) {
+                // The current price becomes the normal one; the promotion price starts from the last one known.
+                e.regularInput = e.priceInput;
+                e.priceInput = e.promoPrice ? String(e.promoPrice) : '';
+            } else {
+                e.priceInput = e.regularInput || e.priceInput;
+            }
+            e.promo = promo;
+            e.error = null;
+            draw();
+            if (promo && !e.priceInput) container.querySelector('#bc-price')?.focus();
+        }));
+        container.querySelector('#bc-regular')?.addEventListener('input', (ev) => { e.regularInput = ev.target.value; });
+        container.querySelector('#bc-forget-promo')?.addEventListener('change', (ev) => { e.forgetPromo = ev.target.checked; });
         container.querySelector('#bc-price')?.addEventListener('input', (ev) => {
             e.priceInput = ev.target.value;
             if (Number(ev.target.value) > 0) e.salePrice = Number(ev.target.value);
@@ -1196,7 +1237,8 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#bc-save').addEventListener('click', async () => {
             if (!e.name.trim()) { e.error = 'กรุณากรอกชื่อสินค้า'; draw(); return; }
             const setPrice = canSetPrice && !e.consigned;
-            if (setPrice && !(Number(e.priceInput) > 0)) { e.error = 'กรุณาระบุราคาขาย/ชิ้นให้มากกว่า 0'; draw(); return; }
+            if (setPrice && !(Number(e.priceInput) > 0)) { e.error = e.promo ? 'กรุณาระบุราคาโปรโมชัน/ชิ้นให้มากกว่า 0' : 'กรุณาระบุราคาขาย/ชิ้นให้มากกว่า 0'; draw(); return; }
+            if (setPrice && e.promo && !(Number(e.regularInput) > Number(e.priceInput))) { e.error = 'ราคาปกติ/ชิ้นต้องมากกว่าราคาโปรโมชัน'; draw(); return; }
             const p0 = res.data.find((x) => x.id === e.id);
             const cpChanged = e.consigned && (Math.abs(Number(e.cpCost) - Number(p0.cost_price)) >= 0.005 || Math.abs(Number(e.cpPrice) - Number(p0.sale_price)) >= 0.005);
             if (cpChanged && (e.cpCost === '' || !(Number(e.cpPrice) > 0) || !(Number(e.cpCost) >= 0) || Number(e.cpCost) > Number(e.cpPrice))) {
@@ -1204,7 +1246,9 @@ export async function render(container, { navigate, permissions, user }) {
                 draw();
                 return;
             }
-            const priceChanged = setPrice && Math.abs(Number(e.priceInput) - Number(p0.sale_price)) >= 0.005;
+            const promoChanged = setPrice && !!res.promo_ready && (e.promo !== !!Number(p0.on_promo) || e.forgetPromo
+                || (e.promo && Math.abs(Number(e.regularInput) - Number(p0.regular_price)) >= 0.005));
+            const priceChanged = setPrice && (promoChanged || Math.abs(Number(e.priceInput) - Number(p0.sale_price)) >= 0.005);
             const knownCost = setPrice && (!(e.costPrice > 0) || e.costByHand) && e.knownCost !== '' ? Number(e.knownCost) : null;
             if (knownCost !== null && !(knownCost > 0)) { e.error = 'ต้นทุน/ชิ้นต้องมากกว่า 0'; draw(); return; }
             if (knownCost !== null && !await confirmDialog(
@@ -1248,6 +1292,7 @@ export async function render(container, { navigate, permissions, user }) {
                     orig_barcode: e.origBarcode,
                     orig_pack_barcodes: e.origPacks,
                     ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
+                    ...(setPrice && res.promo_ready ? { promo: e.promo, regular_price: e.promo ? Number(e.regularInput) : null, forget_promo: !e.promo && e.forgetPromo } : {}),
                     ...(knownCost !== null ? { known_cost: knownCost } : {}),
                     ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),
                     // A row counts with a barcode, or with a whole-pack price alone (a pack with no barcode).
