@@ -310,7 +310,7 @@ initBarcodeKeys();
         onAuthenticated(data);
     } catch (e) {
         // Scanned a sign-in (or phone-scanner) QR-Code while signed out here: remember it across the sign-in (also via RVC-ONE).
-        if (location.hash.startsWith('#/qr-approve') || location.hash.startsWith('#/scanlink')) {
+        if (location.hash.startsWith('#/qr-approve') || location.hash.startsWith('#/scanlink') || location.hash.startsWith('#/mobileapp')) {
             try { sessionStorage.setItem('qr-approve', location.hash); } catch (err) { /* private mode */ }
         }
         showLogin();

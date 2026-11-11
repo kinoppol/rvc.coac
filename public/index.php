@@ -21,6 +21,7 @@ use App\Controllers\DeviceAdminController;
 use App\Controllers\DeviceController;
 use App\Controllers\InventoryController;
 use App\Controllers\SupplierController;
+use App\Controllers\MobileController;
 use App\Controllers\MigrationsController;
 use App\Controllers\SecurityController;
 use App\Controllers\MyConsignorController;
@@ -44,6 +45,7 @@ use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
 use App\Middleware\DeviceAuthMiddleware;
+use App\Middleware\MobileAuthMiddleware;
 use App\Middleware\ReadOnlyGuard;
 use App\Middleware\CsrfMiddleware;
 use App\Middleware\RoleGuard;
@@ -63,7 +65,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $requestStarted = microtime(true);
 // The Android POS app signs every request with its device token and keeps no cookies:
 // starting a session for it would only leave an empty session file per request.
-$deviceApi = preg_match('#/api/device/#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
+$deviceApi = preg_match('#/api/(device|mobile)/#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
 if (!$deviceApi && session_status() === PHP_SESSION_NONE) {
     // PHP locks the session file while a request holds it open, so one slow request
     // (an AI receipt read, a POS import) would make every other request of that user
@@ -125,6 +127,9 @@ $app->get('/api/portal/{code}/{token}', [PortalController::class, 'show']);
 // ---- Android POS app (docs/android-pos-app.md): the app file is open to download (useless until paired) ----
 $app->get('/api/app/pos.apk', [AppReleaseController::class, 'download']);
 $app->get('/api/app/pos.json', [AppReleaseController::class, 'info']);
+// The mobile app (see below) is downloaded the same way.
+$app->get('/api/app/mobile.apk', [AppReleaseController::class, 'download'])->add(fn ($r, $h) => $h->handle($r->withAttribute('kind', 'mobile')));
+$app->get('/api/app/mobile.json', [AppReleaseController::class, 'info'])->add(fn ($r, $h) => $h->handle($r->withAttribute('kind', 'mobile')));
 // Pairing is open, the rest needs the device token.
 $app->post('/api/device/v1/pair/start', [DeviceController::class, 'pairStart']);
 $app->post('/api/device/v1/pair/status', [DeviceController::class, 'pairStatus']);
@@ -214,6 +219,15 @@ $app->group('/api/device/v1', function ($group) {
         ->add(new RoleGuard('purchase.create'));
 })->add(new ReadOnlyGuard())->add(new DeviceAuthMiddleware());
 
+// ---- Mobile app for everyone who is not selling (docs/android-mobile-app.md): paired by its owner on the web ----
+$app->post('/api/mobile/v1/pair/start', [MobileController::class, 'pairStart']);
+$app->post('/api/mobile/v1/pair/status', [MobileController::class, 'pairStatus']);
+$app->group('/api/mobile/v1', function ($group) {
+    $group->get('/me', [MobileController::class, 'me']);
+    $group->get('/sync', [MobileController::class, 'sync']);
+    $group->post('/unpair', [MobileController::class, 'unpair']);
+})->add(new MobileAuthMiddleware());
+
 // ---- Sign-in through RVC-ONE (SSO) ----
 $app->get('/auth/login', [SsoController::class, 'start']);
 $app->post('/auth/callback', [SsoController::class, 'callback']);
@@ -243,6 +257,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('consignor.portal'));
     $group->post('/my/quote', [ReceiveController::class, 'quote'])
         ->add(new RoleGuard('consignor.portal'));
+    // The mobile app: every signed-in user pairs their own phones and tablets (no permission needed).
+    $group->get('/my/mobile-devices', [MobileController::class, 'myDevices']);
+    $group->post('/my/mobile-devices/pair', [MobileController::class, 'pair']);
+    $group->post('/my/mobile-devices/{id:[0-9]+}/revoke', [MobileController::class, 'revoke']);
 
     $group->get('/dashboard', [DashboardController::class, 'index']);
     $group->get('/dashboard/sales-chart', [DashboardController::class, 'salesChart']);

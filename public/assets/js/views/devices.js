@@ -1,6 +1,7 @@
 import { api, getCsrfToken } from '../api.js';
 import { escapeHtml, fmtDateTime, money } from '../util.js';
 import * as dlg from '../dialog.js';
+import { openMobileUpload } from './mobileapp.js';
 
 // อุปกรณ์ POS (Android): pairs the Android POS app like a TV with a phone — the app shows a
 // 6-character code, the admin types it here and picks the sellers who use the device (each
@@ -77,6 +78,7 @@ export async function render(container, { params = {} } = {}) {
     let error = null;
     let loaded = false; // the pairing form needs the sellers list
     let form = { code: (params.code || '').toUpperCase(), name: '', user_ids: [], sync_level: null };
+    let mobileRelease = null; // the mobile app for everyone who is not selling (views/mobileapp.js)
     let release = null; // the current .apk: {version, size, sha256, note, uploaded_at, uploaded_by}
     let filt = { q: '', status: '', seller: '', version: '', sort: 'seen' };
     // The address the app connects to: this page's, without the hash.
@@ -86,6 +88,7 @@ export async function render(container, { params = {} } = {}) {
 
     async function load() {
         api.get('/app/pos.json').then((r) => { release = r.data; drawApp(); drawList(); }).catch(() => {});
+        api.get('/app/mobile.json').then((r) => { mobileRelease = r.data; drawMobile(); }).catch(() => {});
         try {
             const res = await api.get('/devices');
             devices = res.data;
@@ -242,9 +245,32 @@ export async function render(container, { params = {} } = {}) {
         box.querySelector('[data-open-pair]').addEventListener('click', openPair);
     }
 
+    // The other Android app: for consignors, managers, executives… Each person pairs it themselves on แอปบนมือถือ.
+    function drawMobile() {
+        const box = container.querySelector('#d-mobile');
+        if (!box) return;
+        const url = `${serverUrl}api/app/mobile.apk`;
+        box.innerHTML = `
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
+            <div style="min-width:0">
+              <h2 style="margin:0">แอปบนมือถือ (ผู้ใช้อื่นที่ไม่ใช่พนักงานขาย)</h2>
+              <div class="muted" style="font-size:13px;margin-top:2px">${mobileRelease
+                ? `เวอร์ชันล่าสุด <b>${escapeHtml(mobileRelease.version)}</b> · ${fileSize(mobileRelease.size)} · อัปโหลด ${escapeHtml(fmtDateTime(mobileRelease.uploaded_at))} โดย ${escapeHtml(mobileRelease.uploaded_by || '-')}`
+                : 'ยังไม่มีไฟล์ติดตั้งแอป — กด "อัปโหลดแอปเวอร์ชันใหม่"'}
+                <br>Android 13 ขึ้นไป · ผู้ใช้แต่ละคนจับคู่แอปกับบัญชีของตนเองที่หน้า <a href="#/mobileapp">แอปบนมือถือ</a></div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              ${mobileRelease ? `<a class="btn secondary" href="${escapeHtml(url)}" download>⬇ ดาวน์โหลดแอป (.apk)</a>` : ''}
+              <button type="button" class="btn secondary" data-open-mobile-upload>⬆ อัปโหลดแอปเวอร์ชันใหม่</button>
+            </div>
+          </div>`;
+        box.querySelector('[data-open-mobile-upload]').addEventListener('click', () => openMobileUpload((r) => { mobileRelease = r; drawMobile(); }));
+    }
+
     function draw() {
         container.innerHTML = `
         <section class="card card-pad" id="d-app"></section>
+        <section class="card card-pad" id="d-mobile"></section>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
 
         ${failed.length ? `
@@ -267,6 +293,7 @@ export async function render(container, { params = {} } = {}) {
         </section>`;
 
         drawApp();
+        drawMobile();
         drawList();
 
         const list = container.querySelector('#d-devices');

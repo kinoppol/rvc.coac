@@ -14,6 +14,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 /**
  * The Android POS app file. Anyone may download it (a phone being set up is not signed in,
  * and the app does nothing until an admin pairs it); only devices.manage uploads a new one.
+ * Two apps: the POS (api/app/pos.*) and the mobile app for everyone else (api/app/mobile.*, ?kind=mobile on upload).
  */
 class AppReleaseController
 {
@@ -22,17 +23,19 @@ class AppReleaseController
     /** GET /api/app/pos.json — the current version, for the download page and the app's update check. */
     public function info(Request $request, Response $response): Response
     {
-        $r = (new AppReleaseService())->latest();
-        return $this->json($response, ['data' => $r ? $this->publicInfo($r) : null]);
+        $kind = $this->kind($request);
+        $r = (new AppReleaseService('', $kind))->latest();
+        return $this->json($response, ['data' => $r ? $this->publicInfo($r, $kind) : null]);
     }
 
     /** GET /api/app/pos.apk */
     public function download(Request $request, Response $response): Response
     {
-        $service = new AppReleaseService();
+        $kind = $this->kind($request);
+        $service = new AppReleaseService('', $kind);
         $r = $service->latest();
         if (!$r) {
-            return $this->error($response, 'ยังไม่มีไฟล์ติดตั้งแอป ให้ผู้ดูแลระบบอัปโหลดที่หน้าอุปกรณ์ POS', 404);
+            return $this->error($response, $kind === 'pos' ? 'ยังไม่มีไฟล์ติดตั้งแอป ให้ผู้ดูแลระบบอัปโหลดที่หน้าอุปกรณ์ POS' : 'ยังไม่มีไฟล์ติดตั้งแอป ให้ผู้ดูแลระบบอัปโหลดที่หน้าแอปบนมือถือ', 404);
         }
         $path = $service->path($r);
         $fh = fopen($path, 'rb');
@@ -42,7 +45,7 @@ class AppReleaseController
         $response = $response
             ->withHeader('Content-Type', 'application/vnd.android.package-archive')
             ->withHeader('Content-Length', (string) filesize($path))
-            ->withHeader('Content-Disposition', 'attachment; filename="rvc-coac-pos-' . preg_replace('/[^0-9A-Za-z.\-]/', '-', (string) $r['version']) . '.apk"')
+            ->withHeader('Content-Disposition', 'attachment; filename="rvc-coac-' . $kind . '-' . preg_replace('/[^0-9A-Za-z.\-]/', '-', (string) $r['version']) . '.apk"')
             ->withHeader('Cache-Control', 'no-cache')
             ->withHeader('ETag', '"' . $r['sha256'] . '"')
             ->withHeader('X-Content-Type-Options', 'nosniff');
@@ -59,7 +62,7 @@ class AppReleaseController
     {
         $q = $request->getQueryParams();
         try {
-            $size = (new AppReleaseService())->chunk((string) ($q['id'] ?? ''), (int) ($q['index'] ?? -1), (string) $request->getBody());
+            $size = (new AppReleaseService('', $this->kind($request)))->chunk((string) ($q['id'] ?? ''), (int) ($q['index'] ?? -1), (string) $request->getBody());
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
@@ -72,7 +75,8 @@ class AppReleaseController
         $b = (array) $request->getParsedBody();
         $user = $request->getAttribute('user');
         try {
-            $r = (new AppReleaseService())->finish(
+            $kind = $this->kind($request);
+            $r = (new AppReleaseService('', $kind))->finish(
                 (string) ($b['upload_id'] ?? ''), (int) ($b['size'] ?? 0), (string) ($b['version'] ?? ''),
                 isset($b['version_code']) && is_numeric($b['version_code']) ? (int) $b['version_code'] : null,
                 (string) ($b['note'] ?? ''), (string) $user['full_name']
@@ -80,17 +84,24 @@ class AppReleaseController
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }
-        (new AuditLogger(Db::connection()))->log('app_releases', 0, 'create', null, ['version' => $r['version'], 'file' => $r['file'], 'size' => $r['size'], 'sha256' => $r['sha256']],
+        (new AuditLogger(Db::connection()))->log('app_releases', 0, 'create', null, ['kind' => $kind, 'version' => $r['version'], 'file' => $r['file'], 'size' => $r['size'], 'sha256' => $r['sha256']],
             (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
-        return $this->json($response, ['data' => $this->publicInfo($r)], 201);
+        return $this->json($response, ['data' => $this->publicInfo($r, $kind)], 201);
     }
 
-    private function publicInfo(array $r): array
+    /** The route's 'kind' (pos.json / mobile.json), or ?kind= on upload; the POS by default. */
+    private function kind(Request $request): string
+    {
+        $k = (string) ($request->getAttribute('kind') ?? $request->getQueryParams()['kind'] ?? 'pos');
+        return in_array($k, AppReleaseService::KINDS, true) ? $k : 'pos';
+    }
+
+    private function publicInfo(array $r, string $kind = 'pos'): array
     {
         return [
             'version' => $r['version'], 'version_code' => $r['version_code'] ?? null, 'size' => (int) $r['size'],
             'sha256' => $r['sha256'], 'note' => $r['note'] ?? '', 'uploaded_at' => $r['uploaded_at'],
-            'uploaded_by' => $r['uploaded_by'] ?? '', 'url' => 'api/app/pos.apk',
+            'uploaded_by' => $r['uploaded_by'] ?? '', 'url' => 'api/app/' . $kind . '.apk',
         ];
     }
 }

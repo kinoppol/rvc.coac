@@ -18,7 +18,8 @@ use Slim\Psr7\Factory\ResponseFactory;
 class ReadOnlyGuard implements MiddlewareInterface
 {
     public const ROLE = 'executive';
-    private const ALLOWED = ['#/api/auth/logout$#', '#/api/auth/role$#', '#/api/auth/qr/approve$#'];
+    private const ALLOWED = ['#/api/auth/logout$#', '#/api/auth/role$#', '#/api/auth/qr/approve$#',
+        '#/api/my/mobile-devices/pair$#', '#/api/my/mobile-devices/[0-9]+/revoke$#'];
 
     public function process(Request $request, Handler $handler): Response
     {

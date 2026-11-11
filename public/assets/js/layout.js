@@ -36,6 +36,7 @@ const ICONS = {
     security: svg('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path>'),
     backup: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path>'),
     devices: svg('<rect x="5" y="2" width="14" height="20" rx="2"></rect><path d="M11 18h2"></path><path d="M9 7h6M9 11h6"></path>'),
+    mobileapp: svg('<rect x="6" y="2" width="12" height="20" rx="2.5"></rect><path d="M11 18h2"></path><path d="m9.5 9 2 2 3.5-3.5"></path>'),
     audit: svg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path>'),
 };
 
@@ -74,6 +75,8 @@ const PAGES = [
         { key: 'aiusage', label: 'การใช้งานผู้ช่วย AI', perm: 'ai.usage' },
         { key: 'devices', label: 'อุปกรณ์ POS (Android)', perm: 'devices.manage' },
         { key: 'audit', label: 'ประวัติการแก้ไข', perm: 'audit.view' },
+        // Every signed-in user pairs their own phone (no permission needed).
+        { key: 'mobileapp', label: 'แอปบนมือถือ', perm: null },
     ]},
 ];
 
@@ -111,6 +114,7 @@ const PAGE_TITLES = {
     backup: ['รายงานและระบบ', 'แบ็คอัพและกู้คืนข้อมูล (รูปภาพ ฐานข้อมูล ไฟล์อื่น ๆ)'],
     devices: ['รายงานและระบบ', 'จับคู่และจัดการอุปกรณ์ POS (แอป Android)'],
     audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
+    mobileapp: ['แอปบนมือถือ', 'จับคู่แอป Android กับบัญชีของฉัน'],
 };
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน', executive: 'ผู้บริหาร', consignor: 'ผู้ฝากขาย' };
@@ -188,7 +192,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
         </div>
         <nav id="side-nav">
           ${PAGES.map((g) => {
-              const items = g.items.filter((it) => has(it.perm) && !(readOnly && READ_ONLY_HIDDEN.includes(it.key)));
+              const items = g.items.filter((it) => (it.perm === null || has(it.perm)) && !(readOnly && READ_ONLY_HIDDEN.includes(it.key)));
               if (!items.length) return '';
               return `<div class="group-label">${escapeHtml(g.group)}</div>` + items.map((it) => `
                 <button type="button" class="nav-btn" data-route="${it.key}" title="${escapeHtml(it.label)}">

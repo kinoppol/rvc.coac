@@ -9,6 +9,7 @@ namespace App\Services;
  * and install. Kept in storage/app-releases (closed to the web): the APK files and latest.json
  * describing the current one. The upload comes in chunks so PHP's upload size limit (often a
  * few MB) does not stop a 20–50 MB APK. The two releases before the current one are kept.
+ * $kind 'mobile' is the mobile app for everyone who is not selling, kept apart in storage/app-releases/mobile.
  */
 class AppReleaseService
 {
@@ -17,8 +18,13 @@ class AppReleaseService
     private const MAX_BYTES = 200 * 1048576;
     private const KEEP = 3;
 
-    public function __construct(private string $root = '')
+    public const KINDS = ['pos', 'mobile'];
+
+    public function __construct(private string $root = '', private string $kind = 'pos')
     {
+        if (!in_array($this->kind, self::KINDS, true)) {
+            throw new \RuntimeException('ชนิดแอปไม่ถูกต้อง');
+        }
         $this->root = $root !== '' ? $root : dirname(__DIR__, 2);
     }
 
@@ -86,7 +92,7 @@ class AppReleaseService
             @unlink($part);
             throw $e;
         }
-        $file = 'rvc-coac-pos-' . preg_replace('/[^0-9A-Za-z.\-]/', '-', $version) . '-' . date('YmdHis') . '.apk';
+        $file = 'rvc-coac-' . $this->kind . '-' . preg_replace('/[^0-9A-Za-z.\-]/', '-', $version) . '-' . date('YmdHis') . '.apk';
         if (!rename($part, $this->dir() . '/' . $file)) {
             @unlink($part);
             throw new \RuntimeException('บันทึกไฟล์ไม่ได้');
@@ -128,7 +134,7 @@ class AppReleaseService
     /** Keeps the newest KEEP APKs. */
     private function prune(string $current): void
     {
-        $files = glob($this->dir() . '/rvc-coac-pos-*.apk') ?: [];
+        $files = glob($this->dir() . '/rvc-coac-' . $this->kind . '-*.apk') ?: [];
         usort($files, fn ($a, $b) => filemtime($b) <=> filemtime($a));
         foreach (array_slice($files, self::KEEP) as $old) {
             if (basename($old) !== $current) {
@@ -149,7 +155,7 @@ class AppReleaseService
 
     private function dir(): string
     {
-        $dir = $this->root . '/' . self::DIR;
+        $dir = $this->root . '/' . self::DIR . ($this->kind === 'pos' ? '' : '/' . $this->kind);
         if (!is_dir($dir)) {
             @mkdir($dir, 0775, true);
         }
