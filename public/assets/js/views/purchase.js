@@ -4,6 +4,7 @@ import { uploadImage, uploadTextFile, isTextFile, attachmentUrl, imagesFromClipb
 import { markdown } from '../markdown.js';
 import { printPurchaseDoc } from '../print-slip.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { openSupplierModal, supplierOptions } from '../supplier-modal.js';
 
 /**
  * ซื้อสินค้าเข้าร้าน: store-owned purchases. Receipt photos (one receipt may
@@ -324,7 +325,12 @@ export async function render(container, { user } = {}) {
         <section class="card card-pad">
           <div class="step-title"><span class="step-num">2</span><h2>ข้อมูลใบเสร็จ</h2></div>
           <div class="form-grid">
-            <label class="field" style="grid-column:span 2">ร้าน/ผู้ขาย <input data-h="supplier_name" value="${escapeHtml(header.supplier_name)}" placeholder="เช่น แม็คโคร สาขา..."></label>
+            <div class="field" style="grid-column:span 2"><label for="pc-supplier">ร้าน/ผู้ขาย</label>
+              <div class="ac">
+                <input id="pc-supplier" data-h="supplier_name" value="${escapeHtml(header.supplier_name)}" placeholder="พิมพ์ค้นหาจากร้านที่เคยซื้อ หรือชื่อร้านใหม่" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="pc-supplier-list">
+                <div class="ac-list" id="pc-supplier-list" role="listbox" hidden></div>
+              </div>
+            </div>
             <label class="field">เลขประจำตัวผู้เสียภาษี <input data-h="supplier_tax_id" value="${escapeHtml(header.supplier_tax_id)}"></label>
             <label class="field">เลขที่ใบเสร็จ <input data-h="receipt_no" value="${escapeHtml(header.receipt_no)}"></label>
             <label class="field">${editing?.receive ? 'วันที่รับสินค้า / ในใบเสร็จ' : editing?.ordered || orderDraft ? 'วันที่สั่ง / ในใบสั่งของ' : 'วันที่ในใบเสร็จ'} <input data-h="receipt_date" type="date" value="${escapeHtml(header.receipt_date)}"></label>
@@ -435,7 +441,10 @@ export async function render(container, { user } = {}) {
         </div></div>
         <div class="actions-row" style="justify-content:space-between">
           <h2 style="font-size:15px;margin:0">ใบซื้อ${drafts ? ` <span class="pill muted" title="ร่างใบสั่งซื้อที่ยังไม่ได้สั่ง">ร่าง ${drafts} ใบ</span>` : ''}${waiting ? ` <span class="pill warn" title="ใบสั่งซื้อที่ร้านยังไม่มาส่ง">รอส่งของ ${waiting} ใบ</span>` : ''}</h2>
-          <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
+          <div class="actions-row">
+            <button type="button" class="btn secondary" id="pc-suppliers" title="รายชื่อร้าน/ผู้ขายที่เคยซื้อ รวมชื่อที่บันทึกไว้หลายแบบเป็นรายเดียว และกำหนดชื่อเล่น">รายชื่อร้าน/ผู้ขาย</button>
+            <button type="button" class="btn" id="pc-open">+ ซื้อสินค้าเข้าร้าน</button>
+          </div>
         </div>
         ${filtersHtml()}
         <section class="card">
@@ -874,6 +883,90 @@ export async function render(container, { user } = {}) {
             : 'ซื้อด้วยเงินกำไรของร้าน ไม่นับเพิ่มในงบลงทุน';
     }
 
+    /**
+     * ร้าน/ผู้ขาย box: suggests suppliers bought from before (most recent first), found by their
+     * main name or any alias; picking one fills the main name and, when blank, the tax id.
+     * A name not in the list is saved as typed (a new supplier).
+     */
+    function wireSupplierSearch() {
+        const input = container.querySelector('#pc-supplier');
+        const list = container.querySelector('#pc-supplier-list');
+        if (!input || !list) return;
+        let items = [];
+        let active = -1;
+        let seq = 0;
+        const close = () => {
+            list.hidden = true;
+            input.setAttribute('aria-expanded', 'false');
+            active = -1;
+        };
+        const show = async () => {
+            const s = ++seq;
+            let all;
+            try { all = await supplierOptions(); } catch (e) { return; }
+            if (s !== seq || document.activeElement !== input) return;
+            const term = input.value.trim().toLowerCase();
+            items = (term
+                ? all.filter((o) => o.name.toLowerCase().includes(term) || o.aliases.some((a) => a.toLowerCase().includes(term)))
+                    // An exact name or alias first, then names starting with what was typed.
+                    .sort((a, b) => {
+                        const rank = (o) => (o.name.toLowerCase() === term || o.aliases.some((x) => x.toLowerCase() === term) ? 0
+                            : o.name.toLowerCase().startsWith(term) ? 1 : 2);
+                        return rank(a) - rank(b);
+                    })
+                : all).slice(0, 12);
+            active = -1;
+            const aliasHit = (o) => (term ? o.aliases.filter((a) => a.toLowerCase().includes(term)) : []);
+            list.innerHTML = items.map((o, i) => {
+                const hit = aliasHit(o);
+                const exactAlias = hit.find((a) => a.toLowerCase() === term) && o.name.toLowerCase() !== term;
+                return `<div class="ac-item" role="option" data-i="${i}">
+                  <span>${escapeHtml(o.name)}${exactAlias ? ' <span class="pill warn" style="font-size:11px">ชื่อหลักของชื่อที่พิมพ์</span>' : ''}</span>
+                  <small>${hit.length ? `ชื่อเล่น: ${hit.map(escapeHtml).join(', ')} · ` : o.aliases.length ? `ชื่อเล่น ${o.aliases.length} ชื่อ · ` : ''}${o.tax_id ? `เลขผู้เสียภาษี ${escapeHtml(o.tax_id)} · ` : ''}${o.docs ? `ซื้อ ${o.docs} ใบ` : 'ยังไม่มีใบซื้อ'}${o.last_date ? ` · ล่าสุด ${fmtDate(o.last_date)}` : ''}</small>
+                </div>`;
+            }).join('') || (term ? '<div class="ac-note">ไม่พบในร้านที่เคยซื้อ — บันทึกเป็นร้าน/ผู้ขายใหม่ตามที่พิมพ์</div>' : '');
+            list.hidden = !list.innerHTML;
+            input.setAttribute('aria-expanded', String(!list.hidden));
+        };
+        const pick = (i) => {
+            const o = items[i];
+            close();
+            if (!o) return;
+            input.value = o.name;
+            header.supplier_name = o.name;
+            const tax = container.querySelector('[data-h="supplier_tax_id"]');
+            if (o.tax_id && !header.supplier_tax_id.trim()) {
+                header.supplier_tax_id = o.tax_id;
+                if (tax) tax.value = o.tax_id;
+            }
+            (container.querySelector('[data-h="receipt_no"]') || tax)?.focus();
+        };
+        const highlight = () => list.querySelectorAll('.ac-item').forEach((el, i) => el.classList.toggle('active', i === active));
+        input.addEventListener('focus', show);
+        input.addEventListener('input', show);
+        input.addEventListener('blur', () => setTimeout(close, 150));
+        input.addEventListener('keydown', (e) => {
+            if (list.hidden) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!items.length) return;
+                active = e.key === 'ArrowDown' ? (active + 1) % items.length : (active - 1 + items.length) % items.length;
+                highlight();
+            } else if (e.key === 'Enter' && active >= 0) {
+                e.preventDefault();
+                pick(active);
+            } else if (e.key === 'Escape') {
+                close();
+            }
+        });
+        list.addEventListener('mousedown', (e) => {
+            const el = e.target.closest('.ac-item');
+            if (!el) return;
+            e.preventDefault();
+            pick(Number(el.dataset.i));
+        });
+    }
+
     function bindHeaderInputs(root) {
         root.querySelectorAll('[data-h]').forEach((inp) => inp.addEventListener('input', () => {
             header[inp.dataset.h] = inp.value;
@@ -915,6 +1008,8 @@ export async function render(container, { user } = {}) {
         container.querySelector('#pc-extract')?.addEventListener('click', extract);
 
         bindHeaderInputs(container);
+        wireSupplierSearch();
+        container.querySelector('#pc-suppliers')?.addEventListener('click', () => openSupplierModal({ onChange: reloadList }));
 
         container.querySelectorAll('tr[data-row]').forEach((tr) => {
             const i = Number(tr.dataset.row);

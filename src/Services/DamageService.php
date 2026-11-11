@@ -277,9 +277,12 @@ class DamageService
         );
         $stmt->execute([$from, $to]);
         $boughtSupplier = [];
+        // Names merged under one main name count as one supplier (migration 0074).
+        $suppliers = new SupplierService($this->db);
+        $mainOf = fn ($n) => trim((string) $n) === '' ? '' : $suppliers->mainName((string) $n);
         foreach ($stmt->fetchAll() as $b) {
             $bought[(int) $b['product_id']] = ($bought[(int) $b['product_id']] ?? 0) + (int) $b['units'];
-            $boughtSupplier[(string) $b['supplier_name']] = ($boughtSupplier[(string) $b['supplier_name']] ?? 0) + (int) $b['units'];
+            $boughtSupplier[$mainOf($b['supplier_name'])] = ($boughtSupplier[$mainOf($b['supplier_name'])] ?? 0) + (int) $b['units'];
         }
         $rate = fn (int $lost, int $in) => $in > 0 ? round($lost / $in * 100, 1) : null;
 
@@ -298,7 +301,7 @@ class DamageService
         usort($byProduct, fn ($a, $b) => $b['value'] <=> $a['value'] ?: $b['qty'] <=> $a['qty']);
 
         $bySupplier = [];
-        foreach ($group($active, fn ($r) => (string) ($r['supplier_name'] ?? '')) as $name => $v) {
+        foreach ($group($active, fn ($r) => $mainOf($r['supplier_name'] ?? '')) as $name => $v) {
             unset($v['first']);
             $name = (string) $name;
             $bySupplier[] = [

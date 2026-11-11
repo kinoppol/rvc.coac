@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { printPurchaseList } from '../print-slip.js';
+import { openSupplierModal } from '../supplier-modal.js';
 
 // รายการซื้อสินค้าใกล้หมด: the store's goods at or below the low-stock line (set on the stock
 // page), each with every supplier it was bought from and how far apart their costs per piece
@@ -181,7 +182,8 @@ export async function render(container, { navigate, user }) {
           <div class="hint"><div class="dot">i</div><div>สินค้าของร้านที่คงเหลือไม่เกิน <b>${count(threshold)} ชิ้น</b> (ไม่รวมสินค้าเลิกจำหน่าย) เรียงตามยอดขาย 30 วัน ·
             เกณฑ์ใกล้หมดตั้งได้ที่หน้า <button type="button" class="link-btn" id="ro-inv">สต๊อกสินค้าของร้าน</button> ·
             ราคาผู้ขายแต่ละรายเป็นราคาจากใบซื้อครั้งล่าสุดของร้านนั้น เทียบเป็น<b>ต้นทุนต่อชิ้น</b> (แพ็คหารจำนวนชิ้นแล้ว) ระบบเลือกรายที่ถูกที่สุดไว้ให้ เปลี่ยนได้ ·
-            จำนวนและราคาเริ่มจากใบซื้อครั้งล่าสุดของร้านที่เลือก แก้ได้</div></div>
+            จำนวนและราคาเริ่มจากใบซื้อครั้งล่าสุดของร้านที่เลือก แก้ได้ ·
+            ผู้ขายรายเดียวกันที่บันทึกไว้หลายชื่อ รวมเป็นรายเดียวได้ที่ <button type="button" class="link-btn" id="ro-sup">รายชื่อร้าน/ผู้ขาย</button></div></div>
           <div class="actions-row" style="justify-content:space-between;margin-top:12px">
             <input type="search" id="ro-q" class="search-input" placeholder="🔍 ค้นหาชื่อสินค้า บาร์โค้ด หรือผู้ขาย" value="${escapeHtml(q)}">
             <div class="tabs" role="group" aria-label="กรองรายการ">
@@ -216,6 +218,7 @@ export async function render(container, { navigate, user }) {
             again.setSelectionRange(at, at);
         });
         container.querySelector('#ro-inv').addEventListener('click', () => navigate('inventory'));
+        container.querySelector('#ro-sup').addEventListener('click', () => openSupplierModal({ onChange: load }));
         container.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => { show = b.dataset.show; draw(); }));
         container.querySelector('[data-all]')?.addEventListener('change', (e) => {
             shown.forEach(([l]) => { l.on = e.target.checked; });

@@ -20,6 +20,7 @@ use App\Controllers\DashboardController;
 use App\Controllers\DeviceAdminController;
 use App\Controllers\DeviceController;
 use App\Controllers\InventoryController;
+use App\Controllers\SupplierController;
 use App\Controllers\MigrationsController;
 use App\Controllers\SecurityController;
 use App\Controllers\MyConsignorController;
@@ -497,6 +498,17 @@ $app->group('/api', function ($group) {
     $group->get('/inventory/supplier-options', [InventoryController::class, 'supplierOptions'])
         ->add(new RoleGuard('purchase.create'));
     $group->post('/inventory/purchase-orders', [InventoryController::class, 'createOrders'])
+        ->add(new RoleGuard('purchase.create'));
+    // ร้าน/ผู้ขาย: names merged under one main name, aliases (migration 0074). Admin / manager edit.
+    $group->get('/suppliers', [SupplierController::class, 'index'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->post('/suppliers/merge', [SupplierController::class, 'merge'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->post('/suppliers/aliases', [SupplierController::class, 'addAlias'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->delete('/suppliers/aliases/{id:[0-9]+}', [SupplierController::class, 'removeAlias'])
+        ->add(new RoleGuard('purchase.create'));
+    $group->post('/suppliers/update', [SupplierController::class, 'update'])
         ->add(new RoleGuard('purchase.create'));
     $group->get('/inventory/low-stock', [InventoryController::class, 'lowStock'])
         ->add(new RoleGuard('purchase.create'));

@@ -331,6 +331,71 @@ export async function openProductModal(productId, navigate) {
             </details>`;
     }
 
+    /**
+     * What each supplier charged for this product (store goods): latest cost per piece compared
+     * with the cheapest, lowest / highest / average paid, then every purchase. Names merged as
+     * aliases of one supplier count as that supplier.
+     */
+    function supplierPricesHtml() {
+        const list = d.purchase_prices || [];
+        if (p.consignor_id != null) return '';
+        if (!list.length) {
+            return '<div class="muted" style="font-size:12.5px;margin-top:12px">ราคาซื้อจากผู้ขาย: ยังไม่มีใบซื้อของสินค้านี้</div>';
+        }
+        const by = new Map();
+        list.forEach((r) => { // newest first: the first row of each supplier is its latest price
+            if (!by.has(r.supplier)) by.set(r.supplier, { name: r.supplier, last: r, rows: [], names: new Set() });
+            const g = by.get(r.supplier);
+            g.rows.push(r);
+            if (r.typed_name && r.typed_name !== r.supplier) g.names.add(r.typed_name);
+        });
+        const sups = [...by.values()].map((g) => {
+            const units = g.rows.reduce((t, r) => t + r.units, 0);
+            const paid = g.rows.reduce((t, r) => t + r.units * r.piece_cost, 0);
+            const costs = g.rows.map((r) => r.piece_cost);
+            return { ...g, units, avg: units ? paid / units : 0, min: Math.min(...costs), max: Math.max(...costs) };
+        }).sort((a, b) => a.last.piece_cost - b.last.piece_cost);
+        const cheapest = sups[0].last.piece_cost;
+        const diff = (v) => {
+            const x = Math.round((v - cheapest) * 100) / 100;
+            if (sups.length < 2) return '';
+            if (x < 0.005) return '<span class="pill ok">ถูกสุด</span>';
+            return `<span style="color:var(--bad);font-weight:600;white-space:nowrap">+฿${money(x)}${cheapest > 0 ? ` (+${Math.round((x / cheapest) * 1000) / 10}%)` : ''}</span>`;
+        };
+        const pack = (r) => (r.pack_size > 1 ? `<div class="muted" style="font-size:11.5px">แพ็ค ${count(r.pack_size)} ชิ้น ฿${money(r.unit_cost)}</div>` : '');
+        return `
+            <section style="margin-top:14px">
+              <h3 style="margin:0 0 6px;font-size:14px">ราคาซื้อจากผู้ขายแต่ละราย <span class="muted" style="font-weight:400;font-size:12px">(ต้นทุนต่อชิ้น เรียงจากราคาล่าสุดที่ถูกที่สุด)</span></h3>
+              <div class="table-wrap" style="border:1px solid var(--border);border-radius:10px"><table>
+                <thead><tr><th>ผู้ขาย</th><th class="num">ราคาล่าสุด/ชิ้น</th><th>เทียบรายที่ถูกสุด</th><th class="num">ต่ำสุด</th><th class="num">สูงสุด</th><th class="num">เฉลี่ย</th><th class="num">ซื้อ</th><th>ซื้อล่าสุด</th></tr></thead>
+                <tbody>${sups.map((g) => `<tr>
+                  <td><b>${escapeHtml(g.name)}</b>${g.names.size ? `<div class="muted" style="font-size:11.5px">ในใบเสร็จ: ${[...g.names].map(escapeHtml).join(', ')}</div>` : ''}</td>
+                  <td class="num" style="font-weight:600">฿${money(g.last.piece_cost)}${pack(g.last)}</td>
+                  <td>${diff(g.last.piece_cost)}</td>
+                  <td class="num">${money(g.min)}</td>
+                  <td class="num">${money(g.max)}</td>
+                  <td class="num">${money(g.avg)}</td>
+                  <td class="num" style="white-space:nowrap">${count(g.rows.length)} ครั้ง<div class="muted" style="font-size:11.5px">${count(g.units)} ชิ้น</div></td>
+                  <td style="white-space:nowrap">${escapeHtml(fmtDate(g.last.date))}<div><button type="button" class="prod-link" data-doc="purchase|${escapeHtml(g.last.doc_no)}" style="font-size:11.5px">${escapeHtml(g.last.doc_no)}</button></div></td>
+                </tr>`).join('')}</tbody>
+              </table></div>
+              <details style="margin-top:8px">
+                <summary style="cursor:pointer;font-size:13px">ประวัติการซื้อทั้งหมด (${count(list.length)})</summary>
+                <div class="table-wrap" style="margin-top:6px;max-height:300px;border:1px solid var(--border);border-radius:10px"><table>
+                  <thead><tr><th>วันที่</th><th>เลขที่</th><th>ผู้ขาย</th><th class="num">จำนวน</th><th class="num">ทุน/หน่วยซื้อ</th><th class="num">ทุน/ชิ้น</th></tr></thead>
+                  <tbody>${list.map((r) => `<tr>
+                    <td style="white-space:nowrap">${escapeHtml(fmtDate(r.date))}</td>
+                    <td><button type="button" class="prod-link" data-doc="purchase|${escapeHtml(r.doc_no)}">${escapeHtml(r.doc_no)}</button></td>
+                    <td>${escapeHtml(r.supplier)}${r.typed_name && r.typed_name !== r.supplier ? `<div class="muted" style="font-size:11.5px">ในใบเสร็จ: ${escapeHtml(r.typed_name)}</div>` : ''}</td>
+                    <td class="num">${count(r.qty)}${r.pack_size > 1 ? ` × ${count(r.pack_size)}` : ''}</td>
+                    <td class="num">${money(r.unit_cost)}</td>
+                    <td class="num">${money(r.piece_cost)}</td>
+                  </tr>`).join('')}</tbody>
+                </table></div>
+              </details>
+            </section>`;
+    }
+
     /** When the shelf price changed; bills sold before keep the price they were sold at. */
     function priceChangesHtml() {
         const list = d.price_changes || [];
@@ -371,6 +436,7 @@ export async function openProductModal(productId, navigate) {
               </div>
             </div>
             ${photoBackupsHtml()}
+            ${supplierPricesHtml()}
             ${summaryHtml()}
             ${trendHtml()}
             ${priceChangesHtml()}

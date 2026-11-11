@@ -312,8 +312,11 @@ class PurchaseService
     /** The supplier's latest draft order, to add more items to instead of starting another. */
     public function draftFor(string $supplierName): ?int
     {
-        $stmt = $this->db->prepare("SELECT id FROM purchase_documents WHERE status = 'draft' AND supplier_name = ? ORDER BY id DESC LIMIT 1");
-        $stmt->execute([trim($supplierName)]);
+        // Any name the supplier goes by (its main name and aliases, migration 0074).
+        $names = (new SupplierService($this->db))->namesOf($supplierName);
+        $in = implode(',', array_fill(0, count($names), '?'));
+        $stmt = $this->db->prepare("SELECT id FROM purchase_documents WHERE status = 'draft' AND supplier_name IN ($in) ORDER BY id DESC LIMIT 1");
+        $stmt->execute($names);
         $id = $stmt->fetchColumn();
         return $id === false ? null : (int) $id;
     }
@@ -993,6 +996,14 @@ class PurchaseService
                            WHERE pi.purchase_document_id = pd.id AND (pi.receipt_name LIKE ? OR p.name LIKE ? OR pi.barcode = ?)))";
             $like = '%' . $q . '%';
             array_push($params, $like, $like, $like, $like, $like, $like, $q);
+            // A supplier found by any of its names finds purchases typed with its other names too.
+            if ((new SupplierService($this->db))->ready()) {
+                $where[count($where) - 1] = substr($where[count($where) - 1], 0, -1)
+                    . " OR pd.supplier_name IN (SELECT a.alias FROM supplier_aliases a JOIN suppliers s ON s.id = a.supplier_id
+                                                 WHERE s.name LIKE ? OR EXISTS (SELECT 1 FROM supplier_aliases a2 WHERE a2.supplier_id = s.id AND a2.alias LIKE ?)
+                                                 UNION SELECT s.name FROM suppliers s JOIN supplier_aliases a ON a.supplier_id = s.id WHERE a.alias LIKE ?))";
+                array_push($params, $like, $like, $like);
+            }
         }
         $base = $where ? 'WHERE ' . implode(' AND ', $where) : '';
         // Counts per status for the filter chips (same search and dates).

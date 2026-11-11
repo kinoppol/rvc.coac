@@ -284,7 +284,30 @@ class InventoryService
             'totals' => $totals,
             'movements' => $rows,
             'price_changes' => $this->priceChanges($productId),
+            'purchase_prices' => $p['consignor_id'] === null ? $this->purchasePrices($productId) : [],
         ];
+    }
+
+    /**
+     * Every purchase of a store product (cancelled, drafts and orders not delivered left out),
+     * newest first, under the supplier's main name, for comparing what each supplier charged.
+     */
+    public function purchasePrices(int $productId): array
+    {
+        [$join, $main] = (new SupplierService($this->db))->sql('pd.supplier_name', 'pd.supplier_tax_id');
+        $stmt = $this->db->prepare(
+            "SELECT pd.doc_no, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS date, {$main} AS supplier, pd.supplier_name AS typed_name,
+                    pi.qty, pi.pack_size, pi.units, pi.unit_cost, pi.piece_cost
+             FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id {$join}
+             WHERE pi.product_id = ? AND pi.item_type = 'stock' AND pd.status = 'active'
+             ORDER BY date DESC, pi.id DESC"
+        );
+        $stmt->execute([$productId]);
+        return array_map(fn ($r) => [
+            'doc_no' => $r['doc_no'], 'date' => $r['date'], 'supplier' => (string) $r['supplier'], 'typed_name' => (string) $r['typed_name'],
+            'qty' => (int) $r['qty'], 'pack_size' => (int) $r['pack_size'], 'units' => (int) $r['units'],
+            'unit_cost' => (float) $r['unit_cost'], 'piece_cost' => (float) $r['piece_cost'],
+        ], $stmt->fetchAll());
     }
 
     /**
@@ -438,15 +461,18 @@ class InventoryService
             $products[(int) $p['id']] = $p + ['suppliers' => [], 'pending' => []];
         }
 
+        // One supplier per main name: names merged as aliases count as the same supplier (migration 0074).
+        $suppliers = new SupplierService($this->db);
+        [$join, $main, $tax] = $suppliers->sql('pd.supplier_name', 'pd.supplier_tax_id');
         $stmt = $this->db->prepare(
             "SELECT * FROM (
-                SELECT pi.product_id, pd.supplier_name, pd.supplier_tax_id, pi.receipt_name, pi.barcode, pi.qty, pi.pack_size,
+                SELECT pi.product_id, {$main} AS supplier_name, {$tax} AS supplier_tax_id, pi.receipt_name, pi.barcode, pi.qty, pi.pack_size,
                        pi.unit_cost, pi.piece_cost, pd.doc_no, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS last_date,
-                       COUNT(*) OVER (PARTITION BY pi.product_id, pd.supplier_name) AS times,
-                       MIN(pi.piece_cost) OVER (PARTITION BY pi.product_id, pd.supplier_name) AS min_piece_cost,
-                       ROW_NUMBER() OVER (PARTITION BY pi.product_id, pd.supplier_name
+                       COUNT(*) OVER (PARTITION BY pi.product_id, {$main}) AS times,
+                       MIN(pi.piece_cost) OVER (PARTITION BY pi.product_id, {$main}) AS min_piece_cost,
+                       ROW_NUMBER() OVER (PARTITION BY pi.product_id, {$main}
                                           ORDER BY COALESCE(pd.receipt_date, DATE(pd.created_at)) DESC, pi.id DESC) AS rn
-                FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+                FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id {$join}
                 WHERE pi.product_id IN ($in) AND pi.item_type = 'stock' AND pd.status = 'active' AND pi.piece_cost > 0
              ) x WHERE rn = 1 ORDER BY product_id, piece_cost ASC, last_date DESC"
         );
@@ -474,7 +500,7 @@ class InventoryService
             foreach ((array) (json_decode((string) $o['order_items'], true) ?: []) as $line) {
                 $pid = (int) ($line['product_id'] ?? 0);
                 if (isset($products[$pid])) {
-                    $products[$pid]['pending'][] = ['doc_no' => $o['doc_no'], 'supplier_name' => $o['supplier_name'], 'status' => $o['status']];
+                    $products[$pid]['pending'][] = ['doc_no' => $o['doc_no'], 'supplier_name' => $suppliers->mainName((string) $o['supplier_name']), 'status' => $o['status']];
                 }
             }
         }
