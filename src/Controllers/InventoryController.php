@@ -40,6 +40,7 @@ class InventoryController
             'data' => $rows,
             // Normal / promotion prices can be set (migration 0070).
             'promo_ready' => Db::hasColumn($db, 'products', 'on_promo'),
+            'low_stock_threshold' => (new SettingsService($db))->lowStockThreshold(),
         ]);
     }
 
@@ -191,6 +192,33 @@ class InventoryController
     {
         $ids = explode(',', (string) ($request->getQueryParams()['ids'] ?? ''));
         return $this->json($response, ['data' => (new InventoryService(Db::connection()))->supplierOptions(array_slice($ids, 0, 300))]);
+    }
+
+    /** Store products running low with each supplier's cost, for the purchase list page. */
+    public function lowStock(Request $request, Response $response): Response
+    {
+        $db = Db::connection();
+        $threshold = (new SettingsService($db))->lowStockThreshold();
+        return $this->json($response, [
+            'threshold' => $threshold,
+            'data' => (new InventoryService($db))->lowStock($threshold),
+        ]);
+    }
+
+    /** Admin / manager: how many pieces or fewer count as running low (body: threshold). */
+    public function setLowStockThreshold(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบและผู้จัดการร้านเท่านั้น', 403);
+        }
+        $raw = ((array) $request->getParsedBody())['threshold'] ?? null;
+        if (!is_numeric($raw) || (int) $raw != $raw || (int) $raw < 0 || (int) $raw > 100000) {
+            return $this->error($response, 'จำนวนชิ้นต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป', 422);
+        }
+        $settings = new SettingsService(Db::connection());
+        $settings->update(['low_stock_threshold' => (string) (int) $raw], (int) $user['id']);
+        return $this->json($response, ['threshold' => $settings->lowStockThreshold()]);
     }
 
     /**

@@ -19,6 +19,7 @@ class SettingsService
         'free_listings' => '5',
         'waive_qty' => '20',
         'purchase_markup_percent' => '20',
+        'low_stock_threshold' => '10', // store products with this many pieces or fewer count as running low (stock page / purchase list)
         'ai_cost_general' => '1',
         'ai_cost_markdown' => '3',
         'ai_cost_receipt' => '5',
@@ -220,6 +221,12 @@ class SettingsService
 
     /** RVC-ONE client_secret, stored encrypted; never returned by all() or the settings API. */
     private const OA_SECRET_KEY = 'oa_client_secret_enc';
+
+    /** Store products with this many pieces or fewer are running low (set on the stock page). */
+    public function lowStockThreshold(): int
+    {
+        return max(0, (int) $this->get('low_stock_threshold'));
+    }
 
     public function __construct(private PDO $db)
     {

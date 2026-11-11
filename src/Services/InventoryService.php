@@ -443,6 +443,7 @@ class InventoryService
                 SELECT pi.product_id, pd.supplier_name, pd.supplier_tax_id, pi.receipt_name, pi.barcode, pi.qty, pi.pack_size,
                        pi.unit_cost, pi.piece_cost, pd.doc_no, COALESCE(pd.receipt_date, DATE(pd.created_at)) AS last_date,
                        COUNT(*) OVER (PARTITION BY pi.product_id, pd.supplier_name) AS times,
+                       MIN(pi.piece_cost) OVER (PARTITION BY pi.product_id, pd.supplier_name) AS min_piece_cost,
                        ROW_NUMBER() OVER (PARTITION BY pi.product_id, pd.supplier_name
                                           ORDER BY COALESCE(pd.receipt_date, DATE(pd.created_at)) DESC, pi.id DESC) AS rn
                 FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
@@ -458,6 +459,7 @@ class InventoryService
                     'barcode' => $s['barcode'], 'qty' => (int) $s['qty'], 'pack_size' => (int) $s['pack_size'],
                     'unit_cost' => (float) $s['unit_cost'], 'piece_cost' => (float) $s['piece_cost'],
                     'doc_no' => $s['doc_no'], 'last_date' => $s['last_date'], 'times' => (int) $s['times'],
+                    'min_piece_cost' => (float) $s['min_piece_cost'],
                 ];
             }
         }
@@ -477,6 +479,39 @@ class InventoryService
             }
         }
         return array_values($products);
+    }
+
+    /**
+     * Store products running low (this many pieces or fewer, not discontinued), each with the
+     * suppliers it was bought from (cheapest per piece first, see supplierOptions), what sold in
+     * the last 30 days and orders already waiting for it — for the purchase list page.
+     */
+    public function lowStock(int $threshold): array
+    {
+        $discontinued = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? ' AND p.discontinued_at IS NULL' : ''; // migration 0067
+        $stmt = $this->db->prepare(
+            "SELECT p.id,
+                    (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
+                      WHERE si.product_id = p.id AND s.business_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)) AS sold_30d,
+                    (SELECT MAX(s.business_date) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id) AS last_sold
+             FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= ?{$discontinued}"
+        );
+        $stmt->execute([$threshold]);
+        $extra = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $extra[(int) $r['id']] = ['sold_30d' => (float) $r['sold_30d'], 'last_sold' => $r['last_sold']];
+        }
+        if (!$extra) {
+            return [];
+        }
+        $rows = $this->supplierOptions(array_keys($extra));
+        foreach ($rows as &$r) {
+            $r += $extra[(int) $r['id']];
+        }
+        unset($r);
+        // Selling fastest first, then the emptiest.
+        usort($rows, fn ($a, $b) => [$b['sold_30d'], (float) $a['qty_stock'], $a['name']] <=> [$a['sold_30d'], (float) $b['qty_stock'], $b['name']]);
+        return $rows;
     }
 
     /**

@@ -37,6 +37,8 @@ const FILTERS = [
     ['barcodeless', 'สินค้าไม่มีบาร์โค้ด', (p) => !(p.barcode || '').trim() && !!Number(p.no_barcode)],
     ['nopic', 'ไม่มีรูป', (p) => !p.image_token],
     ['consign', 'สินค้าฝากขาย', (p) => p.consignor_id != null],
+    // Store goods at or below the low-stock line set on this page (the test needs it: set in render).
+    ['low', 'ใกล้หมด', null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
     ['discontinued', 'เลิกจำหน่าย', (p) => !!p.discontinued_at],
     ['nocost', 'ไม่ทราบต้นทุน', (p) => p.consignor_id == null && !(Number(p.cost_price) > 0)],
@@ -47,6 +49,7 @@ const FILTER_TIPS = {
     discontinued: 'สินค้าที่ตั้งเลิกจำหน่ายแล้ว ไม่แสดงในรายการหน้าขาย (POS) แต่สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ ไม่แสดงในแท็บอื่นเมื่อไม่มีคงเหลือ',
     nobarcode: 'สินค้าที่ยังไม่ได้เก็บบาร์โค้ดชิ้น (ตัวสินค้ามีบาร์โค้ดแต่ยังไม่ได้บันทึก) — ถ้าสินค้าไม่มีบาร์โค้ดจริง กด "ไม่มีบาร์โค้ด" ในคอลัมน์บาร์โค้ดชิ้น',
     barcodeless: 'สินค้าที่ทำเครื่องหมายว่าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด',
+    low: 'สินค้าของร้านที่คงเหลือไม่เกินเกณฑ์ใกล้หมด (ไม่รวมสินค้าเลิกจำหน่าย) — ตั้งเกณฑ์ได้ใต้แท็บนี้',
     dup: 'ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)',
 };
 const thCollator =new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
@@ -80,6 +83,10 @@ export async function render(container, { navigate, permissions, user }) {
     // Admin / manager: set the piece sale price of the store's goods in the editor.
     const canSetPrice = canEdit && ['admin', 'manager'].includes(user?.role);
     let zeroCost = [];
+    // Store goods with this many pieces or fewer are running low (setting low_stock_threshold).
+    const lowAt = () => Number(res?.low_stock_threshold ?? 10);
+    const isLow = (p) => p.consignor_id == null && !p.discontinued_at && Number(p.qty_stock) <= lowAt();
+    let lowBusy = false;
     let consignors = null; // loaded the first time an admin opens the editor
     const picked = new Set(); // products ticked: store goods for a purchase order; any (admin) to merge
     /** Ticked store goods (consigned goods are never bought from suppliers). */
@@ -137,6 +144,7 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     function filterFn(key) {
+        if (key === 'low') return isLow;
         return key === 'dup' ? (p) => dupsOf(p).length > 1 : FILTERS.find(([k]) => k === key)[2];
     }
 
@@ -215,12 +223,14 @@ export async function render(container, { navigate, permissions, user }) {
               ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
               ${canBuy ? `<button type="button" class="btn secondary" id="make-po" ${pickedStore().length ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง แล้วสร้างใบสั่งซื้อแยกตามร้านค้าที่เคยซื้อ (เฉพาะสินค้าของร้าน)">สร้างใบรายการสั่งซื้อ (${pickedStore().length})</button>` : ''}
+              ${canBuy ? `<button type="button" class="btn secondary" id="go-reorder" title="รวบรวมสินค้าของร้านที่ใกล้หมด เปรียบเทียบต้นทุนของผู้ขายแต่ละราย แล้วพิมพ์ใบรายการซื้อสินค้า">📋 รายการซื้อสินค้าใกล้หมด</button>` : ''}
               ${canBuy ? `<button type="button" class="btn" id="go-buy">ซื้อสินค้าเข้าร้าน</button>` : ''}
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${l} (${count(listedUnder(k).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${k === 'low' ? `${l} (≤ ${count(lowAt())})` : l} (${count(listedUnder(k).length)})</button>`).join('')}
           </div>
+          ${lowLineHtml()}
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ — ค้นหาชื่อ/บาร์โค้ดจะพบล็อตที่หมดหรือคืนผู้ฝากแล้วด้วย (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
         </section>
         <section class="card">
@@ -355,6 +365,9 @@ export async function render(container, { navigate, permissions, user }) {
             navigate,
             onDone: () => { picked.clear(); draw(); },
         }));
+        container.querySelector('#go-reorder')?.addEventListener('click', () => navigate('reorder'));
+        container.querySelector('#low-save')?.addEventListener('click', saveLowAt);
+        container.querySelector('#low-at')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveLowAt(); });
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', async () => {
@@ -854,9 +867,42 @@ export async function render(container, { navigate, permissions, user }) {
         }
     }
 
+    /** The low-stock line: admin / manager change it here; others see it. */
+    function lowLineHtml() {
+        const n = count(lowAt());
+        return `<div class="actions-row" style="margin-top:10px;font-size:13px;gap:8px">
+          ${canSetPrice
+              ? `<label for="low-at">เกณฑ์สินค้าใกล้หมด: คงเหลือไม่เกิน</label>
+                 <input type="number" id="low-at" min="0" step="1" value="${lowAt()}" class="num" style="width:80px" aria-label="จำนวนชิ้นที่ถือว่าใกล้หมด">
+                 <span>ชิ้น</span>
+                 <button type="button" class="btn secondary sm" id="low-save" ${lowBusy ? 'disabled' : ''}>${lowBusy ? 'กำลังบันทึก...' : 'บันทึก'}</button>`
+              : `<span>เกณฑ์สินค้าใกล้หมด: คงเหลือไม่เกิน <b>${n}</b> ชิ้น</span>`}
+          <span class="muted" style="font-size:12px">ใช้กับแท็บใกล้หมด หน้ารายการซื้อสินค้าใกล้หมด และการแจ้งเตือนที่แดชบอร์ด (เฉพาะสินค้าของร้าน)</span>
+        </div>`;
+    }
+
+    async function saveLowAt() {
+        const input = container.querySelector('#low-at');
+        const v = input?.value.trim() ?? '';
+        if (!/^\d+$/.test(v)) {
+            alertDialog('ใส่จำนวนชิ้นเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป', { tone: 'error' });
+            return;
+        }
+        if (Number(v) === lowAt() || lowBusy) return;
+        lowBusy = true;
+        draw();
+        try {
+            res.low_stock_threshold = (await api.put('/inventory/low-stock-threshold', { threshold: Number(v) })).threshold;
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+        lowBusy = false;
+        draw();
+    }
+
     function row(p) {
         const dups = canConsign ? dupsOf(p) : [];
-        const low = Number(p.qty_stock) <= 3;
+        const low = p.consignor_id == null ? isLow(p) : Number(p.qty_stock) <= 3;
         // Only the store's own goods are bought from suppliers.
         const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canConsign
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';

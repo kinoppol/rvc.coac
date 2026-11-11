@@ -196,6 +196,109 @@ export function printPurchaseDoc(d) {
     printHtml(html);
 }
 
+/**
+ * Prints a purchase list (ใบรายการซื้อสินค้า) from the low-stock page on A4: one section per
+ * supplier (optionally one page each) with what to buy, the price expected, a box to tick off
+ * when bought, and the other suppliers' cost per piece for comparing.
+ * groups: [{ supplier_name, supplier_tax_id, known, lines: [{ name, receipt_name, barcode, qty_stock,
+ *           sold_30d, qty, pack_size, unit_cost, piece_cost, total, cheapest, others: [{name, piece_cost}] }] }]
+ */
+export function printPurchaseList({ groups, threshold, splitPages = true, preparedBy = '' }) {
+    const sum = (ls) => ls.reduce((t, l) => t + Number(l.total || 0), 0);
+    const grand = groups.reduce((t, g) => t + sum(g.lines), 0);
+    const items = groups.reduce((t, g) => t + g.lines.length, 0);
+    const last = groups.length - 1;
+    const head = (g, i) => `
+  <div class="head">
+    <div><h1>ใบรายการซื้อสินค้า</h1><div class="sub">ร้านค้าสหการ · สินค้าใกล้หมด (คงเหลือไม่เกิน ${escapeHtml(String(threshold))} ชิ้น)</div></div>
+    <div class="meta">${splitPages && groups.length > 1 ? `ผู้ขาย ${i + 1} / ${groups.length}<br>` : ''}วันที่ ${escapeHtml(fmtNow({ dateStyle: 'medium' }))}</div>
+  </div>`;
+    const supplierBox = (g) => `
+  <div class="box">
+    <div>ร้าน/ผู้ขาย: <b>${escapeHtml(g.supplier_name)}</b></div>
+    <div>เลขประจำตัวผู้เสียภาษี: ${escapeHtml(g.supplier_tax_id || '-')}</div>
+  </div>`;
+    const other = (o, l) => {
+        const d = l.piece_cost > 0 ? ` (${o.piece_cost >= l.piece_cost ? '+' : '−'}${money(Math.abs(o.piece_cost - l.piece_cost))})` : '';
+        return `${escapeHtml(o.name)} ${money(o.piece_cost)}${d}`;
+    };
+    const line = (l, k) => `
+      <tr>
+        <td class="c">${k + 1}</td>
+        <td>${escapeHtml(l.name)}${l.receipt_name ? `<div class="small">ชื่อในใบเสร็จ: ${escapeHtml(l.receipt_name)}</div>` : ''}${l.barcode ? `<div class="small">บาร์โค้ด${l.pack_size > 1 ? 'แพ็ค' : ''}: ${escapeHtml(l.barcode)}</div>` : ''}</td>
+        <td class="num">${escapeHtml(String(l.qty_stock))}</td>
+        <td class="num">${escapeHtml(String(l.sold_30d))}</td>
+        <td class="num">${escapeHtml(String(l.qty))} ${l.pack_size > 1 ? `แพ็ค<div class="small">× ${escapeHtml(String(l.pack_size))} = ${escapeHtml(String(l.qty * l.pack_size))} ชิ้น</div>` : 'ชิ้น'}</td>
+        <td class="num">${l.unit_cost > 0 ? money(l.unit_cost) : '-'}</td>
+        <td class="num">${l.piece_cost > 0 ? money(l.piece_cost) : '-'}${l.cheapest ? '<div class="small">ถูกสุด</div>' : ''}</td>
+        <td class="num">${l.total > 0 ? money(l.total) : '-'}</td>
+        <td class="small">${l.others.length ? l.others.map((o) => other(o, l)).join('<br>') : '-'}</td>
+        <td class="c"><span class="tick"></span></td>
+      </tr>`;
+    const signs = `
+  <div class="sign">
+    <div><div class="line">(${escapeHtml(preparedBy || '.................................................')})</div>ผู้จัดทำรายการ<br>วันที่ ........../........../..........</div>
+    <div><div class="line">(.................................................)</div>ผู้อนุมัติการซื้อ<br>วันที่ ........../........../..........</div>
+  </div>
+  <div class="foot">พิมพ์เมื่อ ${escapeHtml(fmtNow())} · ราคาจากใบซื้อครั้งล่าสุดของผู้ขายแต่ละราย ราคาจริงอาจเปลี่ยนแปลง</div>`;
+    const section = (g, i) => `
+  <section class="${splitPages && i > 0 ? 'page' : ''}">
+  ${splitPages || i === 0 ? head(g, i) : ''}
+  ${splitPages ? supplierBox(g) : `<h2>ร้าน/ผู้ขาย: ${escapeHtml(g.supplier_name)}${g.supplier_tax_id ? ` <span class="small">(เลขผู้เสียภาษี ${escapeHtml(g.supplier_tax_id)})</span>` : ''}</h2>`}
+  <table>
+    <thead><tr>
+      <th class="c" style="width:28px">ที่</th><th>สินค้า</th><th class="num">คงเหลือ</th><th class="num">ขาย 30 วัน</th>
+      <th class="num">จำนวนซื้อ</th><th class="num">ราคา/หน่วย</th><th class="num">ทุน/ชิ้น</th><th class="num">รวม</th>
+      <th>ราคาผู้ขายอื่น (ต่อชิ้น)</th><th class="c" style="width:34px">✓</th>
+    </tr></thead>
+    <tbody>${g.lines.map(line).join('')}
+    </tbody>
+    <tfoot><tr><td colspan="7" class="num">รวม ${g.lines.length} รายการ${g.known ? '' : ' (ราคาประมาณจากทุนเฉลี่ย)'}</td><td class="num">${money(sum(g.lines))}</td><td colspan="2"></td></tr></tfoot>
+  </table>
+  ${groups.length > 1 && i === last ? `<div class="grand">รวมทุกผู้ขาย ${groups.length} ราย ${items} รายการ ประมาณ ${money(grand)} บาท</div>` : ''}
+  ${splitPages || i === last ? signs : ''}
+  </section>`;
+
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>ใบรายการซื้อสินค้า</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: 'THSarabun'; font-weight: 400; src: local('TH Sarabun New'), local('THSarabunNew'), local('TH SarabunPSK'), local('THSarabunPSK'); }
+  @font-face { font-family: 'THSarabun'; font-weight: 700; src: local('TH Sarabun New Bold'), local('THSarabunNew-Bold'), local('TH SarabunPSK Bold'), local('THSarabunPSK-Bold'); }
+  @page { size: A4; margin: 12mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #111; background: #fff; font-size: 15pt; line-height: 1.15; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .page { page-break-before: always; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 10px; }
+  h1 { font-size: 24pt; margin: 0; line-height: 1.1; }
+  h2 { font-size: 17pt; margin: 16px 0 6px; page-break-after: avoid; }
+  .sub { color: #444; font-size: 15pt; }
+  .meta { text-align: right; font-size: 15pt; }
+  .box { border: 1px solid #999; border-radius: 6px; padding: 6px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14pt; }
+  th, td { border: 1px solid #999; padding: 2px 5px; vertical-align: top; }
+  th { background: #eee; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  tfoot td { font-weight: 700; }
+  .num { text-align: right; white-space: nowrap; }
+  .c { text-align: center; white-space: nowrap; }
+  .small { font-size: 12pt; color: #444; }
+  .tick { display: inline-block; width: 14px; height: 14px; border: 1.5px solid #111; margin-top: 3px; }
+  .grand { margin-top: 10px; text-align: right; font-weight: 700; font-size: 17pt; }
+  .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 36px; text-align: center; page-break-inside: avoid; }
+  .sign .line { border-top: 1px dotted #111; margin: 0 20px 2px; padding-top: 2px; }
+  .foot { margin-top: 16px; font-size: 12pt; color: #777; text-align: right; }
+</style></head><body>
+${groups.map(section).join('')}
+</body></html>`;
+    printHtml(html);
+}
+
 const LEDGER_CODE = { open: 'ยกมา', sale: 'ขาย', fee: 'ค่าฝาก', listing_fee: 'ค่าทำข้อมูล', listing_fee_refund: 'คืนค่าข้อมูล', withdrawal: 'เบิกเงิน', hold_release: 'รับเงินที่พัก' };
 
 /** dd/mm/yy in the Buddhist year, like a bank passbook line. */

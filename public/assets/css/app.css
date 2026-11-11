@@ -905,6 +905,16 @@ div.pos-row.out { cursor: not-allowed; }
 .po-table td { vertical-align: top; }
 .po-table tr.po-off td { opacity: .55; }
 .po-summary { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; }
+/* รายการซื้อสินค้าใกล้หมด: one option per supplier, compared by cost per piece. */
+.ro-sups { display: flex; flex-direction: column; gap: 4px; }
+.ro-sup { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "r n c" ". m m"; gap: 0 8px; align-items: center;
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; cursor: pointer; font-size: 13px; }
+.ro-sup input { grid-area: r; margin: 0; }
+.ro-sup-name { grid-area: n; font-weight: 600; }
+.ro-sup-cost { grid-area: c; white-space: nowrap; text-align: right; }
+.ro-sup-meta { grid-area: m; font-size: 11.5px; }
+.ro-sup.on { border-color: var(--pri); background: var(--soft); }
+.po-off .ro-sup.on { background: transparent; }
 
 /* Purchase list: filters and pages */
 .pc-filters .search-input { flex: 1 1 280px; }
