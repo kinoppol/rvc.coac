@@ -45,7 +45,8 @@ class MobileSyncService
         if ($can('passbook.view')) {
             $sections['consignor_entries'] = $this->entriesSince($from);
         }
-        if ($can('reports.view')) {
+        // Those who count stock need the products too (the web's ตรวจนับ page looks them up the same way).
+        if ($can('reports.view') || $can('stockcount.create')) {
             $sections['inventory'] = $this->inventory();
         }
         if ($can('withdraw.create')) {
