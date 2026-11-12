@@ -410,7 +410,9 @@ export async function openProductModal(productId, navigate) {
                   <td>${pair(c.old_price, c.new_price, true) || '<span class="muted">-</span>'}${c.promo ? `<div><span class="pill promo">ราคาโปร${c.regular_price ? ` · ปกติ ฿${money(c.regular_price)}` : ''}</span></div>` : ''}</td>
                   <td>${pair(c.old_cost, c.new_cost) || '<span class="muted">-</span>'}</td>
                   <td style="font-size:12.5px">${escapeHtml(c.user_name || '-')}</td>
-                  <td style="font-size:12.5px;max-width:260px">${c.source ? `<b>${escapeHtml(c.source)}</b>` : '<span class="muted">ไม่ทราบ (บันทึกก่อนมีการเก็บสาเหตุ)</span>'}${c.reason ? `<div class="muted">${escapeHtml(c.reason)}</div>` : ''}</td></tr>`).join('')}</tbody>
+                  <td style="font-size:12.5px;max-width:260px">${c.doc_no
+                    ? `<b>${escapeHtml(String(c.source || '').replace(c.doc_no, '').trim())}</b> <button type="button" class="prod-link" data-doc="${escapeHtml(c.doc_kind)}|${escapeHtml(c.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(c.doc_no)}</button>`
+                    : c.source ? `<b>${escapeHtml(c.source)}</b>` : '<span class="muted">ไม่ทราบ (บันทึกก่อนมีการเก็บสาเหตุ)</span>'}${c.reason ? `<div class="muted">${escapeHtml(c.reason)}</div>` : ''}</td></tr>`).join('')}</tbody>
               </table></div>
               <div class="muted" style="font-size:12px;margin-top:6px">บิลที่ขายก่อนปรับราคายังคงราคาที่ขายจริง (ดูได้ในรายการขายด้านล่าง)</div>
             </details>`;

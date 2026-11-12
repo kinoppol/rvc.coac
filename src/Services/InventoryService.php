@@ -324,14 +324,6 @@ class InventoryService
              ORDER BY a.id DESC LIMIT 50"
         );
         $stmt->execute([$productId]);
-        // Changes recorded before the cause was kept: the purchase / receiving document saved by the
-        // same person right after (its own log follows the product's in the same save).
-        $doc = $this->db->prepare(
-            "SELECT table_name, new_data FROM audit_logs
-             WHERE id > ? AND id < ? + 500 AND table_name IN ('purchase_documents', 'receive_documents')
-               AND user_id <=> ? AND created_at BETWEEN ? AND ? + INTERVAL 60 SECOND
-             ORDER BY id ASC LIMIT 1"
-        );
         $out = [];
         foreach ($stmt->fetchAll() as $r) {
             $old = (array) json_decode((string) $r['old_data'], true);
@@ -345,41 +337,70 @@ class InventoryService
                 'reason' => isset($new['reason']) ? (string) $new['reason'] : (isset($new['note']) ? (string) $new['note'] : null),
                 'promo' => isset($new['on_promo']) && (int) $new['on_promo'] === 1,
                 'regular_price' => !empty($new['on_promo']) ? $num($new, 'regular_price') : null,
+                // The document behind the change, opened from the history (kind as /inventory/document takes it).
+                'doc_kind' => null, 'doc_no' => null,
             ];
             $moved = fn ($a, $b) => $a !== null && $b !== null && abs($a - $b) >= 0.005;
             if (!$moved($change['old_price'], $change['new_price']) && !$moved($change['old_cost'], $change['new_cost'])) {
                 continue;
             }
-            if ($change['source'] === null) {
-                $change['source'] = $this->guessPriceSource($doc, $r, $old, $new);
-            }
-            $out[] = $change;
+            $out[] = $this->priceSource($change, $r, $old, $new, $productId);
         }
         return $out;
     }
 
-    /** Where a price change recorded without its cause came from, as far as the log tells. */
-    private function guessPriceSource(\PDOStatement $doc, array $r, array $old, array $new): ?string
+    /**
+     * Where a price change came from: the cause kept with it, or (changes recorded before the cause
+     * was kept) what the log tells — a purchase with this product saved in the same moment, the
+     * stock page's price box, a merge or a split.
+     */
+    private function priceSource(array $c, array $r, array $old, array $new, int $productId): array
     {
-        if (isset($new['merged_from'])) {
-            return 'รวมสินค้าซ้ำ';
+        $note = (string) ($new['note'] ?? '');
+        if (preg_match('/^ใบซื้อ\s+(\S+)/u', (string) $c['source'], $m)) {
+            return ['doc_kind' => 'purchase', 'doc_no' => $m[1]] + $c;
         }
-        if (str_starts_with((string) ($new['note'] ?? ''), 'แยกสินค้า')) {
-            return 'แยกสินค้า';
+        if ($c['source'] !== null) {
+            return $c;
+        }
+        if (isset($new['merged_from'])) {
+            return ['source' => 'รวมสินค้าซ้ำ'] + $c;
+        }
+        if (preg_match('/^แยกสินค้า\s+(\S+?):/u', $note, $m)) {
+            return ['source' => 'แยกสินค้า ' . $m[1], 'doc_kind' => 'split', 'doc_no' => $m[1]] + $c;
         }
         // Only the price was logged: the price box of the stock page (or a consigned product's prices).
         if (!isset($old['qty_stock']) && (array_keys($old) === ['sale_price'] || isset($old['fee_per_unit']))) {
-            return isset($old['fee_per_unit']) ? 'แก้ราคาสินค้าฝากขาย' : 'แก้ราคาในหน้าจัดการสต๊อก';
+            return ['source' => isset($old['fee_per_unit']) ? 'แก้ราคาสินค้าฝากขาย' : 'แก้ราคาในหน้าจัดการสต๊อก'] + $c;
         }
-        $doc->execute([(int) $r['id'], (int) $r['id'], $r['user_id'], $r['created_at'], $r['created_at']]);
-        $d = $doc->fetch();
-        if ($d) {
+        // A purchase holding this product, saved (created, edited or received) right after: its log follows the product's.
+        $stmt = $this->db->prepare(
+            "SELECT pd.doc_no, pa.action, pa.new_data FROM audit_logs pa JOIN purchase_documents pd ON pd.id = pa.record_id
+             WHERE pa.table_name = 'purchase_documents' AND pa.id > ? AND pa.action IN ('create', 'update')
+               AND pa.created_at BETWEEN ? AND ? + INTERVAL 300 SECOND
+               AND (EXISTS (SELECT 1 FROM purchase_items pi WHERE pi.purchase_document_id = pd.id AND pi.product_id = ?)
+                    OR pd.cancelled_items LIKE ? OR pd.cancelled_items LIKE ?)
+             ORDER BY pa.id ASC LIMIT 1"
+        );
+        $stmt->execute([(int) $r['id'], $r['created_at'], $r['created_at'], $productId, "%\"product_id\":{$productId},%", "%\"product_id\":\"{$productId}\"%"]);
+        if ($d = $stmt->fetch()) {
             $data = (array) json_decode((string) $d['new_data'], true);
-            $no = (string) ($data['doc_no'] ?? '');
-            $label = $d['table_name'] === 'purchase_documents' ? 'ใบซื้อ' : 'ใบรับฝาก';
-            return $no !== '' ? "{$label} {$no}" : $label;
+            $what = $d['action'] === 'create' ? 'บันทึกใบซื้อ'
+                : (($data['status'] ?? '') === 'active' ? 'รับสินค้าตามใบสั่งซื้อ' : 'แก้ไขใบซื้อ (ใช้ราคาขายตามใบซื้อนั้น)');
+            return ['source' => 'ใบซื้อ ' . $d['doc_no'], 'doc_kind' => 'purchase', 'doc_no' => $d['doc_no'], 'reason' => $c['reason'] ?? $what] + $c;
         }
-        return null;
+        // Consigned goods: a receiving document saved by the same person right after.
+        $stmt = $this->db->prepare(
+            "SELECT new_data FROM audit_logs
+             WHERE id > ? AND table_name = 'receive_documents' AND action = 'create'
+               AND user_id <=> ? AND created_at BETWEEN ? AND ? + INTERVAL 300 SECOND
+             ORDER BY id ASC LIMIT 1"
+        );
+        $stmt->execute([(int) $r['id'], $r['user_id'], $r['created_at'], $r['created_at']]);
+        if (($row = $stmt->fetchColumn()) !== false && ($no = (string) (json_decode((string) $row, true)['doc_no'] ?? '')) !== '') {
+            return ['source' => 'ใบรับฝาก ' . $no, 'doc_kind' => 'receive', 'doc_no' => $no] + $c;
+        }
+        return $c;
     }
 
     /**

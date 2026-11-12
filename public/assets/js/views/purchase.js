@@ -180,6 +180,8 @@ export async function render(container, { user } = {}) {
                 line_total: Number(it.line_total), sale_price: Number(it.sale_price) || 0, priceTouched: it.item_type === 'stock',
                 promo: it.item_type === 'stock' && Number(it.is_promo) === 1, regular_price: Number(it.regular_price) || 0,
                 packFixed: true, orig: it, // the saved line: compared on save (review of the changes)
+                // Price as saved on this purchase: saving the edit leaves the product's current price alone unless changed here.
+                keepPrice: it.item_type === 'stock',
             };
         });
         if (!items.length) items = [emptyItem()];
@@ -518,6 +520,7 @@ export async function render(container, { user } = {}) {
     /** Switches a line between the normal and the promotion price. */
     function setPriceMode(it, promo) {
         if (it.promo === promo) return;
+        it.keepPrice = false;
         const reg = it.match ? normalPrice(it.match) : 0;
         if (promo) {
             it.regular_price = Number(it.regular_price) || reg || Number(it.sale_price) || Number(it.suggested) || 0;
@@ -554,6 +557,9 @@ export async function render(container, { user } = {}) {
         const dir = priceDir(it);
         if (!dir) return '';
         const old = Number(it.match.sale_price) || 0;
+        if (it.keepPrice && dir !== 'same') {
+            return `<div class="pc-price-tag same" title="ราคาขายตามใบซื้อนี้ บันทึกแล้วสินค้ายังขายราคาปัจจุบัน ฿${money(old)} (แก้ราคาในช่องนี้ถ้าต้องการเปลี่ยน)">ขายตอนนี้ ${money(old)} ไม่เปลี่ยน</div>`;
+        }
         if (it.match.on_promo) {
             // Selling at the last round's promotion price: this round goes back to normal unless picked again.
             const cur = Number(it.sale_price) || old;
@@ -1148,6 +1154,9 @@ export async function render(container, { user } = {}) {
             tr.querySelector('[data-f="unit_cost"]').value = it.unit_cost;
         } else if (field === 'sale_price') {
             it.priceTouched = value !== '';
+            it.keepPrice = false;
+        } else if (field === 'regular_price') {
+            it.keepPrice = false;
         } else if (field === 'pack_size') {
             it.pack_size = Math.max(1, Math.round(Number(value) || 1));
             it.packFixed = true; // set by hand: not guessed again from the name or a pack barcode
@@ -1442,7 +1451,7 @@ export async function render(container, { user } = {}) {
                 header: { ...header },
                 items: rows.map((it) => ({
                     name: (it.receipt_name || it.name).trim(), product_name: it.name.trim(), pack_size: Math.max(1, Number(it.pack_size) || 1),
-                    pack_fixed: !!it.packFixed,
+                    pack_fixed: !!it.packFixed, keep_price: it.item_type === 'stock' && !!it.keepPrice,
                     item_type: it.item_type, product_id: chosenProductId(it), new_product: it.item_type === 'stock' && it.forceNew,
                     barcode: it.barcode.trim(), qty: Number(it.qty), unit_cost: Number(it.unit_cost),
                     line_total: Number(it.line_total), sale_price: Number(it.sale_price) || null,

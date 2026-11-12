@@ -176,6 +176,9 @@ class PurchaseService
             // Line total already reflects per-line discounts.
             'piece_cost' => $units > 0 ? round($lineTotal / $units, 2) : 0.0,
             'sale_price' => $salePrice,
+            // An edited purchase line whose price was not touched: the product keeps the price it sells at
+            // now (a later purchase or the stock page may have changed it); the line keeps its own.
+            'keep_price' => !empty($item['keep_price']),
             'promo' => $promo,
             // The normal price while this round sells at the promotion price (null = the product's own).
             'regular_price' => $promo && isset($item['regular_price']) && (float) $item['regular_price'] > 0 ? round((float) $item['regular_price'], 2) : null,
@@ -885,8 +888,8 @@ class PurchaseService
                     'UPDATE products SET cost_price = ?, sale_price = ?, barcode = COALESCE(barcode, ?), updated_at = NOW()
                      WHERE id = ?'
                 );
-                $upd->execute([$avgCost, $salePrice, $pieceBarcode, $productId]);
-                if ($promoReady) {
+                $upd->execute([$avgCost, $l['keep_price'] ? (float) $match['sale_price'] : $salePrice, $pieceBarcode, $productId]);
+                if ($promoReady && !$l['keep_price']) {
                     $this->savePromo($productId, $promo, $salePrice, $regular);
                 }
                 $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId) + ['source' => $source], $userId, $ip);
