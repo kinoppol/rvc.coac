@@ -341,9 +341,9 @@ class InventoryController
                     // promo: sale_price is the promotion price and regular_price the normal one (migration 0070).
                     $repo->setPricing($id, (float) $body['sale_price'], !empty($body['promo']),
                         isset($body['regular_price']) ? (float) $body['regular_price'] : null, !empty($body['forget_promo']),
-                        (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                        (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, (string) ($body['price_reason'] ?? ''));
                 } else {
-                    $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                    $repo->setSalePrice($id, (float) $body['sale_price'], (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, (string) ($body['price_reason'] ?? ''));
                 }
             }
             // A cost found out later for a product booked at cost 0: admins and managers, store goods.
@@ -358,7 +358,7 @@ class InventoryController
             if ($consigned && isset($body['cost_price'], $body['sale_price'])) {
                 $cost = (float) $body['cost_price'];
                 $repo->setConsignPrice($id, $cost, (float) $body['sale_price'], (new FeeCalculator(new SettingsService($db)))->priceFor($cost),
-                    (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+                    (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, 'แก้ราคาสินค้าฝากขายในหน้าจัดการสต๊อก', (string) ($body['price_reason'] ?? ''));
             }
             $db->commit();
         } catch (\Throwable $e) {

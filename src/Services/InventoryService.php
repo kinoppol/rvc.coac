@@ -318,12 +318,20 @@ class InventoryService
     private function priceChanges(int $productId): array
     {
         $stmt = $this->db->prepare(
-            "SELECT a.created_at, a.old_data, a.new_data, u.full_name
+            "SELECT a.id, a.user_id, a.created_at, a.old_data, a.new_data, u.full_name
              FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
              WHERE a.table_name = 'products' AND a.record_id = ? AND a.action = 'update' AND a.new_data LIKE '%price%'
              ORDER BY a.id DESC LIMIT 50"
         );
         $stmt->execute([$productId]);
+        // Changes recorded before the cause was kept: the purchase / receiving document saved by the
+        // same person right after (its own log follows the product's in the same save).
+        $doc = $this->db->prepare(
+            "SELECT table_name, new_data FROM audit_logs
+             WHERE id > ? AND id < ? + 500 AND table_name IN ('purchase_documents', 'receive_documents')
+               AND user_id <=> ? AND created_at BETWEEN ? AND ? + INTERVAL 60 SECOND
+             ORDER BY id ASC LIMIT 1"
+        );
         $out = [];
         foreach ($stmt->fetchAll() as $r) {
             $old = (array) json_decode((string) $r['old_data'], true);
@@ -333,13 +341,45 @@ class InventoryService
                 'at' => $r['created_at'], 'user_name' => $r['full_name'],
                 'old_price' => $num($old, 'sale_price'), 'new_price' => $num($new, 'sale_price'),
                 'old_cost' => $num($old, 'cost_price'), 'new_cost' => $num($new, 'cost_price'),
+                'source' => isset($new['source']) ? (string) $new['source'] : null,
+                'reason' => isset($new['reason']) ? (string) $new['reason'] : (isset($new['note']) ? (string) $new['note'] : null),
+                'promo' => isset($new['on_promo']) && (int) $new['on_promo'] === 1,
+                'regular_price' => !empty($new['on_promo']) ? $num($new, 'regular_price') : null,
             ];
             $moved = fn ($a, $b) => $a !== null && $b !== null && abs($a - $b) >= 0.005;
-            if ($moved($change['old_price'], $change['new_price']) || $moved($change['old_cost'], $change['new_cost'])) {
-                $out[] = $change;
+            if (!$moved($change['old_price'], $change['new_price']) && !$moved($change['old_cost'], $change['new_cost'])) {
+                continue;
             }
+            if ($change['source'] === null) {
+                $change['source'] = $this->guessPriceSource($doc, $r, $old, $new);
+            }
+            $out[] = $change;
         }
         return $out;
+    }
+
+    /** Where a price change recorded without its cause came from, as far as the log tells. */
+    private function guessPriceSource(\PDOStatement $doc, array $r, array $old, array $new): ?string
+    {
+        if (isset($new['merged_from'])) {
+            return 'รวมสินค้าซ้ำ';
+        }
+        if (str_starts_with((string) ($new['note'] ?? ''), 'แยกสินค้า')) {
+            return 'แยกสินค้า';
+        }
+        // Only the price was logged: the price box of the stock page (or a consigned product's prices).
+        if (!isset($old['qty_stock']) && (array_keys($old) === ['sale_price'] || isset($old['fee_per_unit']))) {
+            return isset($old['fee_per_unit']) ? 'แก้ราคาสินค้าฝากขาย' : 'แก้ราคาในหน้าจัดการสต๊อก';
+        }
+        $doc->execute([(int) $r['id'], (int) $r['id'], $r['user_id'], $r['created_at'], $r['created_at']]);
+        $d = $doc->fetch();
+        if ($d) {
+            $data = (array) json_decode((string) $d['new_data'], true);
+            $no = (string) ($data['doc_no'] ?? '');
+            $label = $d['table_name'] === 'purchase_documents' ? 'ใบซื้อ' : 'ใบรับฝาก';
+            return $no !== '' ? "{$label} {$no}" : $label;
+        }
+        return null;
     }
 
     /**

@@ -832,6 +832,10 @@ class PurchaseService
     private function applyLines(int $docId, array $lines, array $createdHere, int $userId, ?string $ip): array
     {
         $promoReady = $this->promoReady();
+        // The price history names the purchase that set a product's price.
+        $docNo = $this->db->prepare('SELECT doc_no FROM purchase_documents WHERE id = ?');
+        $docNo->execute([$docId]);
+        $source = 'ใบซื้อ ' . (string) $docNo->fetchColumn();
         $insItem = $this->db->prepare(
             'INSERT INTO purchase_items
                 (purchase_document_id, product_id, item_type, receipt_name, barcode, qty, unit_cost, pack_size, units, piece_cost, line_total, sale_price, is_new_product'
@@ -885,7 +889,7 @@ class PurchaseService
                 if ($promoReady) {
                     $this->savePromo($productId, $promo, $salePrice, $regular);
                 }
-                $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId), $userId, $ip);
+                $this->audit->log('products', $productId, 'update', $old, $this->products->find($productId) + ['source' => $source], $userId, $ip);
                 $isNew = isset($createdHere[$productId]);
             } else {
                 $salePrice = $l['sale_price'] ?? $this->suggestedPrice($l['piece_cost']);

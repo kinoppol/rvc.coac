@@ -1066,6 +1066,9 @@ export async function render(container, { navigate, permissions, user }) {
             <input id="bc-price" type="number" min="0" step="0.25" value="${escapeHtml(e.priceInput)}" style="width:180px">
             <span class="muted" id="bc-price-hint" style="font-size:12.5px;margin-left:8px">${priceHint(e)}</span>
           </label>
+          <label class="field" style="display:block;margin-top:8px">เหตุผลที่ปรับราคา <span class="muted" style="font-weight:400;font-size:12px">(ต้องระบุเมื่อเปลี่ยนราคา · แสดงในประวัติการปรับราคา)</span>
+            <input id="bc-price-reason" value="${escapeHtml(e.priceReason || '')}" maxlength="255" placeholder="เช่น ผู้ผลิตปรับราคา, ราคาตามป้ายใหม่" style="width:100%">
+          </label>
           ${e.promo ? `<label class="field" style="display:block;margin-top:8px">ราคาปกติ/ชิ้น
             <input id="bc-regular" type="number" min="0" step="0.25" value="${escapeHtml(e.regularInput)}" style="width:180px">
             <span class="muted" style="font-size:12.5px;margin-left:8px">หน้าซื้อสินค้าเข้าร้านจะให้เลือกกลับเป็นราคานี้ในรอบถัดไป</span>
@@ -1230,6 +1233,7 @@ export async function render(container, { navigate, permissions, user }) {
             if (promo && !e.priceInput) container.querySelector('#bc-price')?.focus();
         }));
         container.querySelector('#bc-regular')?.addEventListener('input', (ev) => { e.regularInput = ev.target.value; });
+        container.querySelector('#bc-price-reason')?.addEventListener('input', (ev) => { e.priceReason = ev.target.value; });
         container.querySelector('#bc-forget-promo')?.addEventListener('change', (ev) => { e.forgetPromo = ev.target.checked; });
         container.querySelector('#bc-price')?.addEventListener('input', (ev) => {
             e.priceInput = ev.target.value;
@@ -1302,6 +1306,7 @@ export async function render(container, { navigate, permissions, user }) {
                     ? `แก้ต้นทุน «${e.name.trim()}» จาก ฿${money(e.costPrice)} เป็น ฿${money(knownCost)}/ชิ้น และปรับยอดขายย้อนหลังที่คิดต้นทุนเดิม (หรือ 0) เป็นต้นทุนใหม่ — กำไรย้อนหลังจะคำนวณใหม่`
                     : `ตั้งต้นทุน «${e.name.trim()}» เป็น ฿${money(knownCost)}/ชิ้น และคิดต้นทุนนี้ให้ยอดขายย้อนหลังทุกรายการที่ต้นทุนเป็น 0 — กำไรย้อนหลังจะลดลงตามต้นทุน`,
                 { title: 'ระบุต้นทุนย้อนหลัง?', okText: 'บันทึกต้นทุน' })) return;
+            if (priceChanged && !(e.priceReason || '').trim()) { e.error = 'กรุณาระบุเหตุผลที่ปรับราคา'; draw(); container.querySelector('#bc-price-reason')?.focus(); return; }
             if (priceChanged && Number(e.priceInput) < e.costPrice
                 && !await confirmDialog(`ราคาขาย ฿${money(e.priceInput)} ต่ำกว่าต้นทุน ฿${money(e.costPrice)} ต่อชิ้น ต้องการบันทึกหรือไม่?`, { title: 'ราคาขายต่ำกว่าทุน', okText: 'บันทึก' })) return;
             let consignor = null;
@@ -1337,7 +1342,7 @@ export async function render(container, { navigate, permissions, user }) {
                     barcode: e.barcode.trim(),
                     orig_barcode: e.origBarcode,
                     orig_pack_barcodes: e.origPacks,
-                    ...(setPrice ? { sale_price: Number(e.priceInput) } : {}),
+                    ...(setPrice ? { sale_price: Number(e.priceInput), price_reason: (e.priceReason || '').trim() } : {}),
                     ...(setPrice && res.promo_ready ? { promo: e.promo, regular_price: e.promo ? Number(e.regularInput) : null, forget_promo: !e.promo && e.forgetPromo } : {}),
                     ...(knownCost !== null ? { known_cost: knownCost } : {}),
                     ...(cpChanged ? { cost_price: Number(e.cpCost), sale_price: Number(e.cpPrice) } : {}),

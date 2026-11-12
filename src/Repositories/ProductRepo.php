@@ -76,7 +76,7 @@ class ProductRepo
      * With $allowConsigned a consignment product may be edited too, piece barcode only.
      */
     /** Sets the piece sale price of a store product (admin / manager, from the inventory editor). */
-    public function setSalePrice(int $productId, float $price, ?int $userId, ?string $ip): void
+    public function setSalePrice(int $productId, float $price, ?int $userId, ?string $ip, ?string $reason = null): void
     {
         $old = $this->find($productId);
         if (!$old || $old['consignor_id'] !== null) {
@@ -90,7 +90,8 @@ class ProductRepo
             return;
         }
         $this->db->prepare('UPDATE products SET sale_price = ?, updated_at = NOW() WHERE id = ?')->execute([$price, $productId]);
-        $this->audit->log('products', $productId, 'update', ['sale_price' => (float) $old['sale_price']], ['sale_price' => $price], $userId, $ip);
+        $this->audit->log('products', $productId, 'update', ['sale_price' => (float) $old['sale_price']],
+            ['sale_price' => $price, 'source' => 'แก้ราคาในหน้าจัดการสต๊อก'] + ($reason !== null && trim($reason) !== '' ? ['reason' => mb_substr(trim($reason), 0, 255)] : []), $userId, $ip);
     }
 
     /**
@@ -99,7 +100,7 @@ class ProductRepo
      * is the normal price. The latest promotion price stays remembered for the next purchase
      * unless $forgetPromo.
      */
-    public function setPricing(int $productId, float $price, bool $promo, ?float $regular, bool $forgetPromo, ?int $userId, ?string $ip): void
+    public function setPricing(int $productId, float $price, bool $promo, ?float $regular, bool $forgetPromo, ?int $userId, ?string $ip, ?string $reason = null): void
     {
         $old = $this->find($productId);
         if (!$old || $old['consignor_id'] !== null) {
@@ -125,7 +126,8 @@ class ProductRepo
         }
         $this->db->prepare('UPDATE products SET sale_price = ?, on_promo = ?, regular_price = ?, promo_price = ?, updated_at = NOW() WHERE id = ?')
             ->execute([$price, $promo ? 1 : 0, $regular, $promoPrice, $productId]);
-        $this->audit->log('products', $productId, 'update', $before, $after, $userId, $ip);
+        $this->audit->log('products', $productId, 'update', $before, $after + ['source' => 'แก้ราคาในหน้าจัดการสต๊อก']
+            + ($reason !== null && trim($reason) !== '' ? ['reason' => mb_substr(trim($reason), 0, 255)] : []), $userId, $ip);
     }
 
     /**
@@ -192,7 +194,7 @@ class ProductRepo
      * consignor exactly $cost per piece; past sales and ledger entries are left as they were.
      * $calc is FeeCalculator::priceFor($cost), kept as is when the shelf price matches it.
      */
-    public function setConsignPrice(int $productId, float $cost, float $price, array $calc, ?int $userId, ?string $ip): void
+    public function setConsignPrice(int $productId, float $cost, float $price, array $calc, ?int $userId, ?string $ip, ?string $source = null, ?string $reason = null): void
     {
         $old = $this->find($productId);
         if (!$old || $old['consignor_id'] === null) {
@@ -218,7 +220,9 @@ class ProductRepo
             ->execute([$cost, $price, $fee, $round, $productId]);
         $this->audit->log('products', $productId, 'update',
             ['cost_price' => (float) $old['cost_price'], 'sale_price' => (float) $old['sale_price'], 'fee_per_unit' => (float) $old['fee_per_unit'], 'round_per_unit' => (float) $old['round_per_unit']],
-            ['cost_price' => $cost, 'sale_price' => $price, 'fee_per_unit' => $fee, 'round_per_unit' => $round], $userId, $ip);
+            ['cost_price' => $cost, 'sale_price' => $price, 'fee_per_unit' => $fee, 'round_per_unit' => $round]
+                + ($source !== null ? ['source' => $source] : []) + ($reason !== null && trim($reason) !== '' ? ['reason' => mb_substr(trim($reason), 0, 255)] : []),
+            $userId, $ip);
     }
 
     /**
@@ -581,6 +585,7 @@ class ProductRepo
         $this->db->prepare("UPDATE products SET $set WHERE id = ?")->execute([...array_values($price), $keepId]);
 
         $this->audit->log('products', $keepId, 'update', $keep, $this->find($keepId) + [
+            'source' => 'รวมสินค้าซ้ำ',
             'merged_from' => $dupIds,
             'cost_from' => (int) $latest['id'],
             'held_barcodes' => array_map('strval', array_keys($held)),

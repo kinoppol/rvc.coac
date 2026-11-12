@@ -405,10 +405,12 @@ export async function openProductModal(productId, navigate) {
             <details style="margin-top:12px">
               <summary style="cursor:pointer;font-weight:600;font-size:14px">ประวัติการปรับราคา (${count(list.length)})</summary>
               <div class="table-wrap" style="margin-top:8px"><table>
-                <thead><tr><th>เมื่อ</th><th>ราคาขาย</th><th>${p.consignor_id != null ? 'ผู้ฝากได้' : 'ต้นทุน'}</th><th>โดย</th></tr></thead>
+                <thead><tr><th>เมื่อ</th><th>ราคาขาย</th><th>${p.consignor_id != null ? 'ผู้ฝากได้' : 'ต้นทุน'}</th><th>โดย</th><th>สาเหตุ</th></tr></thead>
                 <tbody>${list.map((c) => `<tr><td style="font-size:12.5px;white-space:nowrap">${escapeHtml(fmtDateTime(c.at))}</td>
-                  <td>${pair(c.old_price, c.new_price, true) || '<span class="muted">-</span>'}</td><td>${pair(c.old_cost, c.new_cost) || '<span class="muted">-</span>'}</td>
-                  <td style="font-size:12.5px">${escapeHtml(c.user_name || '-')}</td></tr>`).join('')}</tbody>
+                  <td>${pair(c.old_price, c.new_price, true) || '<span class="muted">-</span>'}${c.promo ? `<div><span class="pill promo">ราคาโปร${c.regular_price ? ` · ปกติ ฿${money(c.regular_price)}` : ''}</span></div>` : ''}</td>
+                  <td>${pair(c.old_cost, c.new_cost) || '<span class="muted">-</span>'}</td>
+                  <td style="font-size:12.5px">${escapeHtml(c.user_name || '-')}</td>
+                  <td style="font-size:12.5px;max-width:260px">${c.source ? `<b>${escapeHtml(c.source)}</b>` : '<span class="muted">ไม่ทราบ (บันทึกก่อนมีการเก็บสาเหตุ)</span>'}${c.reason ? `<div class="muted">${escapeHtml(c.reason)}</div>` : ''}</td></tr>`).join('')}</tbody>
               </table></div>
               <div class="muted" style="font-size:12px;margin-top:6px">บิลที่ขายก่อนปรับราคายังคงราคาที่ขายจริง (ดูได้ในรายการขายด้านล่าง)</div>
             </details>`;
