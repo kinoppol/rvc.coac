@@ -874,6 +874,9 @@ div.pos-row.out { cursor: not-allowed; }
 .pm-late { font-size: 11.5px; color: var(--warn); font-weight: 600; }
 .pm-causes { margin: 4px 0 0; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
 .pm-causes li { margin: 1px 0; }
+.pm-fix { margin-top: 4px; font-size: 11.5px; color: var(--ok); }
+.pm-fix-actions { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.pm-radio { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 13px; cursor: pointer; }
 .pm-in { color: var(--ok); }
 .pm-out { color: var(--bad); }
 @media (max-width: 600px) { .pm-top { flex-direction: column; } .pm-photo { width: 88px; height: 88px; } }

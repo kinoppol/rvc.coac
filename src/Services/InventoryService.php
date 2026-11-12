@@ -140,6 +140,7 @@ class InventoryService
                 WHERE sci.product_id IN (%1\$s) AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
               %4\$s
               %5\$s
+              %6\$s
              ) m ORDER BY product_id, date ASC, ord ASC, at ASC, rid ASC",
             $productId === null ? 'SELECT id FROM products WHERE consignor_id IS NULL' : '?',
             // Cancelled receive / return documents (migration 0050) moved nothing.
@@ -166,7 +167,14 @@ class InventoryService
                        u.full_name, -dg.qty, dg.unit_cost, -ROUND(dg.qty * dg.unit_cost, 2), NULL, NULL, NULL, 2, dg.id
                 FROM damaged_goods dg
                 LEFT JOIN users u ON u.id = dg.user_id
-                WHERE dg.product_id IN ($in) AND dg.cancelled_at IS NULL" : ''
+                WHERE dg.product_id IN ($in) AND dg.cancelled_at IS NULL" : '',
+            // Corrections of the card's adjustments (migration 0076), right after the count they correct.
+            StockAdjustmentService::available($this->db) ? "UNION ALL
+                SELECT sa.product_id, sa.created_at, sa.adjust_date, 'adjfix', sa.doc_no, NULL, u.full_name, sa.qty,
+                       NULL, NULL, NULL, NULL, NULL, 4, sa.id
+                FROM stock_adjustments sa
+                LEFT JOIN users u ON u.id = sa.user_id
+                WHERE sa.product_id IN ($in) AND sa.cancelled_at IS NULL" : ''
         ));
         $stmt->execute($productId === null ? [] : array_fill(0, substr_count($sql, '?'), $productId));
         return $stmt->fetchAll();
@@ -221,6 +229,16 @@ class InventoryService
             ]);
         }
         $cancelled = $this->cancelledEvents($productId);
+        $fixes = (new StockAdjustmentService($this->db, new DocumentNumberService($this->db), new AuditLogger($this->db)))->forProduct($productId);
+        // The correction made to an adjustment row (one per count and cause), if any.
+        $fixOf = function (?string $countDoc, string $cause) use ($fixes): ?array {
+            foreach ($fixes as $f) {
+                if ($f['cause'] === $cause && $cause !== 'unknown' && $f['count_doc_no'] === $countDoc) {
+                    return $f;
+                }
+            }
+            return null;
+        };
         foreach ($events as $i => $e) {
             // A count sets the balance; its movement is whatever it takes to get there.
             $qty = $e['kind'] === 'count' ? (int) $e['counted_qty'] - $balance : (int) $e['qty'];
@@ -237,11 +255,12 @@ class InventoryService
                 'user_name' => $e['user_name'], 'qty' => $qty, 'unit_cost' => $unit,
                 'value' => $e['value'] !== null ? (float) $e['value'] : round($qty * $unit, 2),
                 'sale_price' => $e['sale_price'], 'balance' => $balance, 'note' => $note,
-            ]);
+            ] + ($e['kind'] === 'adjfix' ? ['fix' => $fixes[(int) $e['rid']] ?? null] : []));
             if ($e['kind'] === 'count') {
                 foreach ($this->countAdjustments($events, $i, $cancelled) as $a) {
                     $balance += $a['qty'];
-                    $rows[] = $row($a + ['unit_cost' => $cost, 'value' => round($a['qty'] * $cost, 2), 'balance' => $balance]);
+                    $rows[] = $row($a + ['unit_cost' => $cost, 'value' => round($a['qty'] * $cost, 2), 'balance' => $balance,
+                        'fix' => $fixOf($a['doc_no'], $a['reason'])]);
                 }
             }
         }
@@ -258,7 +277,7 @@ class InventoryService
             $r['qty_in'] = max($r['qty'], 0);
             $r['qty_out'] = max(-$r['qty'], 0);
             // Keyed in on a later day than the document's own date.
-            $r['late'] = $r['at'] !== null && !in_array($r['kind'], ['opening', 'adjust'], true)
+            $r['late'] = $r['at'] !== null && !in_array($r['kind'], ['opening', 'adjust', 'adjfix'], true)
                 && substr((string) $r['at'], 0, 10) > (string) $r['date'];
         }
         unset($r);
@@ -269,7 +288,7 @@ class InventoryService
             $totals[$k] = ['qty' => 0, 'value' => 0.0];
         }
         $bucket = ['opening' => 'opening', 'purchase' => 'received', 'receive' => 'received', 'sale' => 'sold', 'pos' => 'sold',
-                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted', 'split' => 'split', 'damage' => 'damaged'];
+                   'return' => 'returned', 'count' => 'adjusted', 'adjust' => 'adjusted', 'adjfix' => 'adjusted', 'split' => 'split', 'damage' => 'damaged'];
         foreach ($rows as $r) {
             $k = $bucket[$r['kind']];
             $sign = in_array($k, ['sold', 'returned', 'damaged'], true) ? -1 : 1;

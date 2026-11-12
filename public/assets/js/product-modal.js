@@ -1,6 +1,6 @@
 import { api } from './api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO, compact, niceScale } from './util.js';
-import { alertDialog } from './dialog.js';
+import { alertDialog, promptDialog } from './dialog.js';
 import { skBlock } from './skeleton.js';
 import { openDetailModal } from './detail-modal.js';
 
@@ -16,6 +16,7 @@ const KIND = {
     return: ['คืนผู้ฝาก', 'warn'],
     count: ['ตรวจนับ', 'warn'],
     adjust: ['ปรับยอด', 'muted'],
+    adjfix: ['แก้การปรับยอด', 'warn'],
     split: ['แยกสินค้า', 'warn'],
     damage: ['สินค้าเสียหาย', 'bad'],
 };
@@ -23,7 +24,7 @@ const GROUPS = [
     ['all', 'ทั้งหมด', () => true],
     ['in', 'รับเข้า', (r) => ['purchase', 'receive', 'opening'].includes(r.kind)],
     ['out', 'ขาย / คืน', (r) => ['sale', 'pos', 'return'].includes(r.kind)],
-    ['count', 'ตรวจนับ / ปรับยอด', (r) => ['count', 'adjust'].includes(r.kind)],
+    ['count', 'ตรวจนับ / ปรับยอด', (r) => ['count', 'adjust', 'adjfix'].includes(r.kind)],
     ['split', 'แยกสินค้า', (r) => r.kind === 'split'],
     ['damage', 'สินค้าเสียหาย', (r) => r.kind === 'damage'],
 ];
@@ -76,6 +77,13 @@ export function dailySeries(d) {
     });
     return out;
 }
+
+const ADJ_CAUSE = {
+    late: 'เอกสารบันทึกหลังอนุมัติตรวจนับ',
+    early: 'เอกสารบันทึกก่อนอนุมัติตรวจนับ',
+    cancelled: 'เอกสารยกเลิกหลังอนุมัติตรวจนับ',
+    unknown: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง',
+};
 
 /** Documents behind an adjustment: kind, number (opens it), dates, who keyed / cancelled it, qty. */
 function adjustCauses(r) {
@@ -141,7 +149,14 @@ export async function openProductModal(productId, navigate) {
           <tbody>${rows.map((r) => {
               const [label, tone] = KIND[r.kind] || [r.kind, 'muted'];
               const adjust = r.kind === 'adjust';
-              const detail = [r.party, r.note].filter(Boolean).map(escapeHtml).join('<br>') + (adjust ? adjustCauses(r) : '');
+              const i = d.movements.indexOf(r);
+              let detail = [r.party, r.note].filter(Boolean).map(escapeHtml).join('<br>') + (adjust ? adjustCauses(r) : '');
+              if (adjust && r.fix) {
+                  detail += `<div class="pm-fix">แก้แล้วที่ <b>${escapeHtml(r.fix.doc_no)}</b> คงเหลือ ${r.fix.qty > 0 ? '+' : ''}${count(r.fix.qty)} ชิ้น (แถวถัดไป)</div>`;
+              } else if (adjust && d.can_adjust) {
+                  detail += `<div class="pm-fix-actions"><button type="button" class="btn secondary sm" data-adj-new="${i}">แก้ไข / ยกเลิกการปรับยอด</button></div>`;
+              }
+              if (r.kind === 'adjfix') detail = fixDetail(r, i);
               const when = adjust
                   ? (r.at ? `<div class="muted" style="font-size:11.5px">เกิดเมื่อ ${escapeHtml(fmtDateTime(r.at))}<br>(ตอนอนุมัติตรวจนับ)</div>`
                       : '<div class="pm-late">ไม่ทราบเวลาที่เกิด</div>')
@@ -154,7 +169,8 @@ export async function openProductModal(productId, navigate) {
                 <td style="white-space:nowrap">${r.date ? escapeHtml(fmtDate(r.date)) : '<span class="muted">-</span>'}
                   ${when}</td>
                 <td><span class="pill ${tone}">${label}</span></td>
-                <td style="white-space:nowrap">${r.doc_no ? `<button type="button" class="prod-link" data-doc="${escapeHtml(r.doc_kind || r.kind)}|${escapeHtml(r.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(r.doc_no)}</button>` : '<span class="muted">-</span>'}
+                <td style="white-space:nowrap">${r.kind === 'adjfix' ? `<b>${escapeHtml(r.doc_no)}</b>`
+                    : r.doc_no ? `<button type="button" class="prod-link" data-doc="${escapeHtml(r.doc_kind || r.kind)}|${escapeHtml(r.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(r.doc_no)}</button>` : '<span class="muted">-</span>'}
                   ${who}</td>
                 <td style="font-size:12.5px">${detail || '<span class="muted">-</span>'}</td>
                 <td class="num pm-in">${r.qty_in ? count(r.qty_in) : ''}</td>
@@ -164,6 +180,115 @@ export async function openProductModal(productId, navigate) {
                 <td class="num">${money(Math.abs(r.value))}</td>
               </tr>`;
           }).join('')}</tbody></table></div>`;
+    }
+
+    /** A correction (SA-...) of an adjustment row: why, what it corrected, edits, and its buttons. */
+    function fixDetail(r, i) {
+        const f = r.fix || {};
+        const what = f.count_doc_no
+            ? `แก้การปรับยอดหลังตรวจนับ ${escapeHtml(f.count_doc_no)} (${escapeHtml(ADJ_CAUSE[f.cause] || f.cause)}) เดิมปรับ ${f.original_qty > 0 ? '+' : ''}${count(f.original_qty)} ชิ้น`
+            : `แก้ส่วนต่างที่ไม่มีเอกสารอ้างอิง (เดิม ${f.original_qty > 0 ? '+' : ''}${count(f.original_qty)} ชิ้น)`;
+        return `<div><b>เหตุผล:</b> ${escapeHtml(f.note || '')}</div>
+          <div class="muted" style="font-size:11.5px">${what}</div>
+          ${f.edited ? `<div class="muted" style="font-size:11.5px">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(f.updated_at))}${f.updated_by_name ? ` โดย ${escapeHtml(f.updated_by_name)}` : ''}</div>` : ''}
+          ${d.can_adjust && f.id ? `<div class="pm-fix-actions">
+            <button type="button" class="btn secondary sm" data-adj-edit="${i}">แก้ไข</button>
+            <button type="button" class="btn secondary sm" data-adj-cancel="${i}">ยกเลิก</button></div>` : ''}`;
+    }
+
+    /** Small form: [mode radios], qty, reason. Resolves to { mode, qty, note } or null. */
+    function adjustForm({ title, intro, modes, qtyLabel, qty, note = '', preview }) {
+        return new Promise((resolve) => {
+            const el = document.createElement('div');
+            el.className = 'modal-backdrop';
+            el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="width:520px">
+              <div class="modal-head"><h2>${escapeHtml(title)}</h2><button type="button" class="modal-close" data-c aria-label="ปิด">✕</button></div>
+              <div class="modal-body" style="padding-top:12px">
+                <div style="font-size:13px;margin-bottom:10px">${intro}</div>
+                ${modes ? modes.map((m, k) => `<label class="pm-radio"><input type="radio" name="adj-mode" value="${m.key}" ${k === 0 ? 'checked' : ''}> ${escapeHtml(m.label)}</label>`).join('') : ''}
+                <label class="field" data-qty-wrap style="margin-top:8px${modes ? ';display:none' : ''}"><span>${escapeHtml(qtyLabel)}</span>
+                  <input type="number" step="1" data-qty value="${escapeHtml(String(qty))}"></label>
+                <div class="muted" data-preview style="font-size:12.5px;margin:6px 0 10px"></div>
+                <label class="field"><span>เหตุผล (จำเป็น)</span>
+                  <textarea rows="3" data-note maxlength="255" placeholder="เช่น นับจริงวันที่ 8 พ.ย. หลังขายไปแล้ว ยอดที่นับถูกต้อง">${escapeHtml(note)}</textarea></label>
+                <div class="app-dialog-error" data-err hidden></div>
+              </div>
+              <div class="modal-foot"><button type="button" class="btn secondary" data-c>ยกเลิก</button><button type="button" class="btn" data-ok>บันทึก</button></div></div>`;
+            document.body.appendChild(el);
+            const $ = (s) => el.querySelector(s);
+            const mode = () => (modes ? el.querySelector('input[name="adj-mode"]:checked').value : 'edit');
+            const refresh = () => {
+                if (modes) $('[data-qty-wrap]').style.display = mode() !== 'edit' ? 'none' : '';
+                $('[data-preview]').textContent = preview(mode(), Number($('[data-qty]').value));
+            };
+            const done = (v) => { el.remove(); document.removeEventListener('keydown', onEsc, true); resolve(v); };
+            const onEsc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+            document.addEventListener('keydown', onEsc, true);
+            el.addEventListener('input', () => { $('[data-err]').hidden = true; refresh(); });
+            el.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => done(null)));
+            $('[data-ok]').addEventListener('click', () => {
+                const n = $('[data-qty]').value.trim();
+                const err = (m) => { $('[data-err]').textContent = m; $('[data-err]').hidden = false; };
+                if (mode() === 'edit' && (n === '' || !Number.isInteger(Number(n)))) return err('กรุณาใส่จำนวนเป็นจำนวนเต็ม');
+                if (!$('[data-note]').value.trim()) return err('กรุณาระบุเหตุผล');
+                done({ mode: mode(), qty: Number(n), note: $('[data-note]').value.trim() });
+            });
+            refresh();
+            $('[data-note]').focus();
+        });
+    }
+
+    const signed = (n) => `${n > 0 ? '+' : ''}${count(n)}`;
+    const reopen = () => { close(); openProductModal(productId, navigate); };
+
+    /** A worked-out adjustment row: undo it, or say how much it should have been. */
+    async function newFix(r) {
+        const now = p.qty_stock;
+        const v = await adjustForm({
+            title: 'แก้ไข / ยกเลิกการปรับยอด',
+            intro: `${r.doc_no ? `หลังตรวจนับ <b>${escapeHtml(r.doc_no)}</b> ระบบ` : 'ระบบ'}ปรับคงเหลือ <b>${signed(r.qty)}</b> ชิ้น (${escapeHtml(ADJ_CAUSE[r.reason] || '')})
+              <br><span class="muted">การแก้จะบันทึกเป็นเอกสารแก้การปรับยอด (SA) ปรับคงเหลือในระบบตามนั้น แก้ไขหรือยกเลิกได้ภายหลัง</span>`,
+            modes: [{ key: 'undo', label: `ยกเลิกการปรับยอดนี้ (คืนคงเหลือ ${signed(-r.qty)} ชิ้น)` }, { key: 'edit', label: 'แก้จำนวนที่ควรปรับ' }],
+            qtyLabel: 'ควรปรับคงเหลือ (ชิ้น, ติดลบ = ลด)', qty: r.qty,
+            preview: (m, n) => {
+                const delta = m === 'undo' ? -r.qty : n - r.qty;
+                return `คงเหลือในระบบ ${count(now)} → ${count(now + (Number.isFinite(delta) ? delta : 0))} ชิ้น (${signed(Number.isFinite(delta) ? delta : 0)})`;
+            },
+        });
+        if (!v) return;
+        const qty = v.mode === 'undo' ? -r.qty : v.qty - r.qty;
+        if (!qty) return alertDialog('จำนวนเท่าเดิม ไม่มีอะไรต้องแก้');
+        try {
+            await api.post(`/inventory/${p.id}/stock-adjustments`, { cause: r.reason, count_doc_no: r.doc_no || null, original_qty: r.qty, qty, note: v.note });
+            reopen();
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+    }
+
+    async function editFix(r) {
+        const f = r.fix;
+        const v = await adjustForm({
+            title: `แก้ไข ${f.doc_no}`,
+            intro: `ตอนนี้ปรับคงเหลือ <b>${signed(f.qty)}</b> ชิ้น${f.count_doc_no ? ` (การปรับยอดเดิมหลังตรวจนับ ${escapeHtml(f.count_doc_no)} คือ ${signed(f.original_qty)})` : ''}`,
+            qtyLabel: 'ปรับคงเหลือ (ชิ้น, ติดลบ = ลด)', qty: f.qty, note: f.note,
+            preview: (m, n) => `คงเหลือในระบบ ${count(p.qty_stock)} → ${count(p.qty_stock + (Number.isFinite(n) ? n - f.qty : 0))} ชิ้น`,
+        });
+        if (!v) return;
+        try {
+            await api.put(`/inventory/stock-adjustments/${f.id}`, { qty: v.qty, note: v.note });
+            reopen();
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+    }
+
+    async function cancelFix(r) {
+        const f = r.fix;
+        const reason = await promptDialog(`ยกเลิก ${f.doc_no}: คงเหลือในระบบจะเปลี่ยน ${count(p.qty_stock)} → ${count(p.qty_stock - f.qty)} ชิ้น (${signed(-f.qty)}) และการปรับยอดเดิมกลับมาเหมือนก่อนแก้`, {
+            title: 'ยกเลิกการแก้การปรับยอด', okText: 'ยกเลิกรายการ', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true, placeholder: 'เหตุผลที่ยกเลิก',
+        });
+        if (reason === null) return;
+        try {
+            await api.post(`/inventory/stock-adjustments/${f.id}/cancel`, { reason });
+            reopen();
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
     }
 
     /** Opening + received − sold − returned ± adjustments = closing, in pieces and at cost. */
@@ -499,6 +624,9 @@ export async function openProductModal(productId, navigate) {
             );
         }));
         box.querySelector('[data-order]').addEventListener('click', () => { newestFirst = !newestFirst; draw(); });
+        box.querySelectorAll('[data-adj-new]').forEach((b) => b.addEventListener('click', () => newFix(d.movements[+b.dataset.adjNew])));
+        box.querySelectorAll('[data-adj-edit]').forEach((b) => b.addEventListener('click', () => editFix(d.movements[+b.dataset.adjEdit])));
+        box.querySelectorAll('[data-adj-cancel]').forEach((b) => b.addEventListener('click', () => cancelFix(d.movements[+b.dataset.adjCancel])));
         box.querySelectorAll('[data-restore-photo]').forEach((b) => b.addEventListener('click', async () => {
             b.disabled = true;
             try {

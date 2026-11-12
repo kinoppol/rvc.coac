@@ -31,6 +31,7 @@ use App\Controllers\PortalController;
 use App\Controllers\PosImportController;
 use App\Controllers\ProductSplitController;
 use App\Controllers\DamageController;
+use App\Controllers\StockAdjustmentController;
 use App\Controllers\PurchaseController;
 use App\Controllers\ReceiveController;
 use App\Controllers\ReportsController;
@@ -572,6 +573,13 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('purchase.create'));
     $group->get('/inventory/damages/report', [DamageController::class, 'report'])
         ->add(new RoleGuard('reports.view'));
+    // Corrections of the stock card's "ปรับยอด" rows (migration 0076): same right as approving a count.
+    $group->post('/inventory/{id:[0-9]+}/stock-adjustments', [StockAdjustmentController::class, 'create'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->put('/inventory/stock-adjustments/{id:[0-9]+}', [StockAdjustmentController::class, 'update'])
+        ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/inventory/stock-adjustments/{id:[0-9]+}/cancel', [StockAdjustmentController::class, 'cancel'])
+        ->add(new RoleGuard('stockcount.approve'));
     $group->post('/inventory/{id:[0-9]+}/claim-sales', [InventoryController::class, 'claimStoreSales'])
         ->add(new RoleGuard('purchase.create'));
     $group->get('/consignors/{id:[0-9]+}/unclaimed-sales', [InventoryController::class, 'unclaimedSales']);

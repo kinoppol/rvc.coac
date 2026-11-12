@@ -156,6 +156,11 @@ class InventoryController
             return $this->error($response, 'ไม่พบสินค้า', 404);
         }
         $data['photo_backups'] = (new ProductRepo($db, new AuditLogger($db)))->photoBackups((int) $args['id']);
+        // May correct the card's "ปรับยอด" rows: same right as approving a stock count (migration 0076).
+        $user = $request->getAttribute('user');
+        $data['adjust_ready'] = \App\Services\StockAdjustmentService::available($db);
+        $data['can_adjust'] = $user && ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
+            && (new \App\Repositories\UserRepo($db))->hasPermission($user['role'], 'stockcount.approve');
         return $this->json($response, ['data' => $data]);
     }
 
