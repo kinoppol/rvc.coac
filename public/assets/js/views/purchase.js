@@ -787,6 +787,25 @@ export async function render(container, { user } = {}) {
         refreshPreview();
     }
 
+    /** Who created, edited, received or cancelled the purchase, and what changed. */
+    function historyHtml(d) {
+        const list = d.history || [];
+        if (!list.length) return '';
+        const edits = list.filter((h) => h.action !== 'create').length;
+        return `<details style="margin-top:14px">
+          <summary style="cursor:pointer;font-weight:600;font-size:14px">ประวัติการแก้ไข (${list.length})${edits ? ` <span class="pill warn" style="font-size:11px">แก้ไข/เปลี่ยนแปลง ${edits} ครั้ง</span>` : ''}</summary>
+          <div class="table-wrap" style="margin-top:8px;border:1px solid var(--border);border-radius:10px"><table>
+            <thead><tr><th>เมื่อ</th><th>โดย</th><th>รายการ</th><th>รายละเอียด</th></tr></thead>
+            <tbody>${list.map((h) => `<tr>
+              <td style="font-size:12.5px;white-space:nowrap">${escapeHtml(fmtDateTime(h.at))}</td>
+              <td style="font-size:12.5px">${escapeHtml(h.user_name || '-')}</td>
+              <td style="font-size:12.5px"><span class="pill ${h.action === 'cancel' ? 'bad' : h.action === 'create' ? 'ok' : 'muted'}">${escapeHtml(h.label)}</span></td>
+              <td style="font-size:12.5px">${h.details.length ? `<ul style="margin:0;padding-left:16px">${h.details.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : '<span class="muted">-</span>'}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </details>`;
+    }
+
     function viewHtml(d) {
         return `
         <div class="modal-backdrop">
@@ -819,6 +838,7 @@ export async function render(container, { user } = {}) {
                       <td>${it.item_type === 'supply' ? '<span class="pill muted">ใช้ในกิจการ</span>' : isDraft(d) ? '<span class="pill muted">ร่าง</span>' : isOrdered(d) ? '<span class="pill warn">รอส่งของ</span>' : Number(it.is_new_product) ? '<span class="pill warn">สินค้าใหม่</span>' : '<span class="pill ok">เติมสต๊อก</span>'}</td></tr>`).join('')}
                 </tbody></table></div>
               ${evidenceHtml(d)}
+              ${historyHtml(d)}
               <p class="muted" style="font-size:12.5px;margin:12px 0 0">${d.buyer_name ? `ผู้ซื้อ <b>${escapeHtml(d.buyer_name)}</b> · ` : ''}บันทึกโดย ${escapeHtml(d.user_name || '-')} · ${fmtDateTime(d.created_at)}${d.note ? ` · ${escapeHtml(d.note)}` : ''}</p>
             </div>
             <div class="modal-foot">${isCancelled(d) ? '<span></span>' : `<button type="button" class="btn secondary pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิกใบซื้อนี้</button>`}<div class="actions-row">

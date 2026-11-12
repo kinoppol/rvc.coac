@@ -53,10 +53,13 @@ class PurchaseController
 
     public function show(Request $request, Response $response, array $args): Response
     {
-        $doc = self::service()->find((int) $args['id']);
+        $service = self::service();
+        $doc = $service->find((int) $args['id']);
         if (!$doc) {
             return $this->error($response, 'ไม่พบใบซื้อ', 404);
         }
+        // Who created, edited, received or cancelled it and when (the view's edit history).
+        $doc['history'] = $service->history((int) $args['id']);
         return $this->json($response, ['data' => $doc]);
     }
 

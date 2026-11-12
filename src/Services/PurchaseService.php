@@ -307,8 +307,9 @@ class PurchaseService
         $this->saveBuyer((int) $doc['id'], $h['buyer_id']);
         $this->relinkAttachments((int) $doc['id'], $keepTokens, $newAttachments);
         $this->audit->log('purchase_documents', (int) $doc['id'], 'update',
-            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => (float) $doc['total']],
-            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => $h['total'], 'items' => count($items)], $userId, $ip);
+            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => (float) $doc['total'],
+                'lines' => self::linesForLog(json_decode((string) ($doc['order_items'] ?? ''), true) ?: [])],
+            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => $h['total'], 'items' => count($items), 'lines' => self::linesForLog($items)], $userId, $ip);
         return ['id' => (int) $doc['id'], 'doc_no' => $doc['doc_no'], 'ordered' => true, 'status' => $doc['status'], 'total' => $h['total'], 'items' => count($items), 'total_qty' => $h['total_qty']];
     }
 
@@ -478,7 +479,9 @@ class PurchaseService
                 'supplier_name' => $d['supplier_name'], 'receipt_no' => $d['receipt_no'], 'receipt_date' => $d['receipt_date'],
                 'discount' => (float) $d['discount'], 'total' => (float) $d['total'], 'items' => $n,
             ];
-            $this->audit->log('purchase_documents', $id, 'update', $summary($doc, count($old['items'])), $summary($h, count($lines)), $userId, $ip);
+            $this->audit->log('purchase_documents', $id, 'update',
+                $summary($doc, count($old['items'])) + ['lines' => self::linesForLog($old['items'])],
+                $summary($h, count($lines)) + ['lines' => self::linesForLog($lines)], $userId, $ip);
 
             $this->db->commit();
             return ['id' => $id, 'doc_no' => $doc['doc_no'], 'subtotal' => $h['subtotal'], 'supply_total' => $this->supplyTotal($lines), 'total' => $h['total'], 'items' => $result];
@@ -1083,6 +1086,133 @@ class PurchaseService
                 'is_promo' => !empty($l['promo']) ? 1 : 0, 'regular_price' => !empty($l['promo']) ? ($l['regular_price'] ?? null) : null,
             ];
         }, $lines);
+    }
+
+    /**
+     * Purchase lines in a short form for the edit history: saved rows (purchase_items / find()),
+     * normalised lines (line()) or lines as the form sent them all come out the same.
+     */
+    private static function linesForLog(array $items): array
+    {
+        return array_values(array_map(function ($l) {
+            $name = (string) (($l['product_name'] ?? '') ?: ($l['receipt_name'] ?? '') ?: ($l['name'] ?? ''));
+            $supply = ($l['item_type'] ?? 'stock') === 'supply';
+            return [
+                'name' => $name, 'type' => $supply ? 'supply' : 'stock',
+                'qty' => (int) ($l['qty'] ?? 0), 'pack' => max(1, (int) ($l['pack_size'] ?? 1)),
+                'total' => round((float) ($l['line_total'] ?? 0), 2),
+                'sale' => $supply || !isset($l['sale_price']) || $l['sale_price'] === null ? null : round((float) $l['sale_price'], 2),
+            ];
+        }, $items));
+    }
+
+    /**
+     * Who did what to a purchase and when, oldest first: created, edited (with the fields and
+     * lines that changed, when the edit kept them), order placed / received, drawer, evidence, cancelled.
+     */
+    public function history(int $id): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT a.action, a.old_data, a.new_data, a.created_at, u.full_name FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+             WHERE a.table_name = 'purchase_documents' AND a.record_id = ? ORDER BY a.id ASC"
+        );
+        $stmt->execute([$id]);
+        $money = fn ($v) => number_format((float) $v, 2);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $old = (array) json_decode((string) $r['old_data'], true);
+            $new = (array) json_decode((string) $r['new_data'], true);
+            $details = [];
+            if ($r['action'] === 'create') {
+                $label = match ($new['status'] ?? 'active') { 'draft' => 'สร้างร่างใบสั่งซื้อ', 'ordered' => 'สร้างใบสั่งซื้อ', default => 'บันทึกใบซื้อ' };
+                $details[] = ($new['items'] ?? 0) . ' รายการ · ยอด ฿' . $money($new['total'] ?? 0) . (($new['source'] ?? '') === 'ai' ? ' · อ่านจากใบเสร็จด้วย AI' : '');
+            } elseif ($r['action'] === 'cancel') {
+                $label = 'ยกเลิกใบซื้อ';
+                $details[] = 'เหตุผล: ' . ($new['reason'] ?? '-');
+            } elseif (array_key_exists('from_drawer', $new)) {
+                $label = 'จ่ายจากเงินในลิ้นชัก';
+                $details[] = ($new['from_drawer'] ? 'ใช้เงินในลิ้นชัก' : 'ไม่ได้ใช้เงินในลิ้นชัก') . (isset($new['closing_date']) ? ' (สรุปบัญชีวันที่ ' . $new['closing_date'] . ')' : '');
+            } elseif (array_key_exists('attachments', $new)) {
+                $label = 'เปลี่ยนหลักฐานใบเสร็จ';
+                $details[] = ($old['attachments'] ?? 0) . ' → ' . $new['attachments'] . ' ไฟล์';
+            } else {
+                $label = (string) ($new['note'] ?? '') ?: 'แก้ไขใบซื้อ';
+                $fields = ['supplier_name' => 'ร้าน/ผู้ขาย', 'receipt_no' => 'เลขที่ใบเสร็จ', 'receipt_date' => 'วันที่ในใบเสร็จ', 'discount' => 'ส่วนลด', 'total' => 'ยอดสุทธิ', 'items' => 'จำนวนรายการ'];
+                foreach ($fields as $k => $name) {
+                    if (!array_key_exists($k, $old) || !array_key_exists($k, $new)) {
+                        continue;
+                    }
+                    $a = $old[$k];
+                    $b = $new[$k];
+                    $num = in_array($k, ['discount', 'total'], true);
+                    if ($num ? abs((float) $a - (float) $b) >= 0.005 : (string) $a !== (string) $b) {
+                        $details[] = "{$name}: " . ($num ? $money($a) : ($a ?: '-')) . ' → ' . ($num ? $money($b) : ($b ?: '-'));
+                    }
+                }
+                if (isset($old['lines'], $new['lines'])) {
+                    array_push($details, ...$this->lineChanges((array) $old['lines'], (array) $new['lines']));
+                } elseif (!isset($new['note'])) {
+                    $details[] = 'ไม่มีรายละเอียดรายการสินค้า (แก้ไขก่อนระบบเก็บรายละเอียด)';
+                }
+                if (!$details && !isset($new['note'])) {
+                    $details[] = 'บันทึกโดยไม่มีการเปลี่ยนแปลง';
+                }
+            }
+            $out[] = ['at' => $r['created_at'], 'user_name' => $r['full_name'], 'action' => $r['action'], 'label' => $label, 'details' => $details];
+        }
+        return $out;
+    }
+
+    /** What changed between two linesForLog() lists, matched by name (then by order among same names). */
+    private function lineChanges(array $before, array $after): array
+    {
+        $money = fn ($v) => number_format((float) $v, 2);
+        $key = function (array $lines): array {
+            $seen = [];
+            $out = [];
+            foreach ($lines as $l) {
+                $n = (string) ($l['name'] ?? '');
+                $seen[$n] = ($seen[$n] ?? 0) + 1;
+                $out[$n . '#' . $seen[$n]] = $l;
+            }
+            return $out;
+        };
+        $b = $key($before);
+        $a = $key($after);
+        $qty = fn ($l) => $l['qty'] . ((int) $l['pack'] > 1 ? ' × ' . $l['pack'] : '');
+        $out = [];
+        foreach ($a as $k => $l) {
+            if (!isset($b[$k])) {
+                $out[] = "เพิ่ม {$l['name']} · {$qty($l)} · ฿" . $money($l['total']);
+                continue;
+            }
+            $o = $b[$k];
+            $ch = [];
+            if ((int) $o['qty'] !== (int) $l['qty']) {
+                $ch[] = "จำนวน {$o['qty']} → {$l['qty']}";
+            }
+            if ((int) $o['pack'] !== (int) $l['pack']) {
+                $ch[] = "ชิ้น/แพ็ค {$o['pack']} → {$l['pack']}";
+            }
+            if (abs((float) $o['total'] - (float) $l['total']) >= 0.005) {
+                $ch[] = 'รวม ฿' . $money($o['total']) . ' → ฿' . $money($l['total']);
+            }
+            if ($o['sale'] !== null && $l['sale'] !== null && abs((float) $o['sale'] - (float) $l['sale']) >= 0.005) {
+                $ch[] = 'ราคาขาย ฿' . $money($o['sale']) . ' → ฿' . $money($l['sale']);
+            }
+            if (($o['type'] ?? 'stock') !== ($l['type'] ?? 'stock')) {
+                $ch[] = $l['type'] === 'supply' ? 'เปลี่ยนเป็นใช้ในกิจการ' : 'เปลี่ยนเป็นเพื่อขาย';
+            }
+            if ($ch) {
+                $out[] = "{$l['name']}: " . implode(' · ', $ch);
+            }
+        }
+        foreach ($b as $k => $o) {
+            if (!isset($a[$k])) {
+                $out[] = "ลบ {$o['name']} · {$qty($o)} · ฿" . $money($o['total']);
+            }
+        }
+        return $out;
     }
 
     public function find(int $id): ?array
