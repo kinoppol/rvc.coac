@@ -220,7 +220,8 @@ class InventoryService
                 'note' => 'รับเข้าตอนสร้างสินค้า ไม่มีเอกสารรับเข้า (เช่น สินค้าที่สร้างจากการนำเข้ายอดขาย POS)',
             ]);
         }
-        foreach ($events as $e) {
+        $cancelled = $this->cancelledEvents($productId);
+        foreach ($events as $i => $e) {
             // A count sets the balance; its movement is whatever it takes to get there.
             $qty = $e['kind'] === 'count' ? (int) $e['counted_qty'] - $balance : (int) $e['qty'];
             $balance += $qty;
@@ -237,20 +238,28 @@ class InventoryService
                 'value' => $e['value'] !== null ? (float) $e['value'] : round($qty * $unit, 2),
                 'sale_price' => $e['sale_price'], 'balance' => $balance, 'note' => $note,
             ]);
+            if ($e['kind'] === 'count') {
+                foreach ($this->countAdjustments($events, $i, $cancelled) as $a) {
+                    $balance += $a['qty'];
+                    $rows[] = $row($a + ['unit_cost' => $cost, 'value' => round($a['qty'] * $cost, 2), 'balance' => $balance]);
+                }
+            }
         }
         $gap = (int) $p['qty_stock'] - $balance;
         if ($gap !== 0) {
             $balance += $gap;
             $rows[] = $row([
-                'date' => date('Y-m-d'), 'kind' => 'adjust', 'qty' => $gap, 'unit_cost' => $cost, 'value' => round($gap * $cost, 2),
-                'balance' => $balance, 'note' => 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง ปรับให้ตรงกับยอดคงเหลือในระบบ',
+                'date' => date('Y-m-d'), 'kind' => 'adjust', 'reason' => 'unknown', 'qty' => $gap, 'unit_cost' => $cost, 'value' => round($gap * $cost, 2),
+                'balance' => $balance, 'note' => 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง ปรับให้ตรงกับยอดคงเหลือในระบบ — ไม่ทราบว่าเกิดเมื่อไหร่และใครทำ'
+                    . ' (ไม่พบเอกสารที่อธิบายได้ เช่น ยอดที่เปลี่ยนก่อนมีการบันทึกประวัติ) แก้ให้ตรงของจริงด้วยการตรวจนับ',
             ]);
         }
         foreach ($rows as &$r) {
             $r['qty_in'] = max($r['qty'], 0);
             $r['qty_out'] = max(-$r['qty'], 0);
             // Keyed in on a later day than the document's own date.
-            $r['late'] = $r['at'] !== null && $r['kind'] !== 'opening' && substr((string) $r['at'], 0, 10) > (string) $r['date'];
+            $r['late'] = $r['at'] !== null && !in_array($r['kind'], ['opening', 'adjust'], true)
+                && substr((string) $r['at'], 0, 10) > (string) $r['date'];
         }
         unset($r);
 
@@ -286,6 +295,137 @@ class InventoryService
             'price_changes' => $this->priceChanges($productId),
             'purchase_prices' => $p['consignor_id'] === null ? $this->purchasePrices($productId) : [],
         ];
+    }
+
+    /**
+     * Why the stock card needs adjusting right after the count at $events[$i]. The card puts a count
+     * on its own document date, but the system set the stock to the counted figure when the count
+     * was approved. So, against the moment of approval:
+     *  - late: documents dated on/before the count day but keyed in after approval moved the stock
+     *    after it (the card lets the count swallow them). Purchases are left out: one dated on or
+     *    before a count keeps the counted stock (PurchaseService::keepCountedStock);
+     *  - early: documents dated after the count day but keyed in before approval had already moved
+     *    the stock that approval then overwrote (the card would take them off a second time);
+     *  - cancelled: documents keyed in before approval and cancelled after it (the card shows neither).
+     * Each comes back as an adjust row: when (approval), who approved, why, and the documents behind it.
+     */
+    private function countAdjustments(array $events, int $i, array $cancelled): array
+    {
+        $c = $events[$i];
+        if ($c['at'] === null) {
+            return [];
+        }
+        $at = (string) $c['at'];
+        $cause = fn (array $e) => [
+            'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'date' => $e['date'], 'at' => $e['at'],
+            'user_name' => $e['user_name'], 'qty' => (int) $e['qty'],
+        ];
+        $late = $early = [];
+        foreach ($events as $j => $e) {
+            if ($e['kind'] === 'count' || $e['at'] === null) {
+                continue;
+            }
+            if ($j < $i && (string) $e['at'] > $at && $e['kind'] !== 'purchase') {
+                $late[] = $cause($e);
+            } elseif ($j > $i && (string) $e['at'] < $at) {
+                $early[] = $cause($e);
+            }
+        }
+        $undone = array_values(array_filter($cancelled, fn ($e) => (string) $e['at'] < $at && (string) $e['cancelled_at'] > $at));
+
+        $base = [
+            'at' => $c['at'], 'date' => $c['date'], 'kind' => 'adjust', 'doc_no' => $c['doc_no'], 'doc_kind' => 'count',
+            'user_name' => $c['user_name'], 'count_date' => $c['date'],
+        ];
+        $out = [];
+        $sum = fn (array $list) => array_sum(array_column($list, 'qty'));
+        if ($late && ($q = $sum($late)) !== 0) {
+            $out[] = $base + ['reason' => 'late', 'qty' => $q, 'causes' => $late,
+                'note' => 'มีเอกสารลงวันที่ก่อนหรือวันเดียวกับวันนับ แต่บันทึกเข้าระบบหลังอนุมัติตรวจนับ: ยอดที่นับได้ยังไม่รวมรายการเหล่านี้ ระบบจึงปรับคงเหลือต่อจากยอดที่นับ'];
+        }
+        if ($early && ($q = -$sum($early)) !== 0) {
+            $out[] = $base + ['reason' => 'early', 'qty' => $q, 'causes' => $early,
+                'note' => 'มีเอกสารลงวันที่หลังวันนับ แต่บันทึกเข้าระบบก่อนอนุมัติตรวจนับ: ตอนอนุมัติระบบตั้งคงเหลือเป็นยอดที่นับได้ ทับรายการเหล่านี้ไปแล้ว จึงไม่นับซ้ำ'];
+        }
+        if ($undone && ($q = -$sum($undone)) !== 0) {
+            $out[] = $base + ['reason' => 'cancelled', 'qty' => $q, 'causes' => $undone,
+                'note' => 'มีเอกสารที่บันทึกก่อนอนุมัติตรวจนับแต่ถูกยกเลิกหลังอนุมัติ: ยอดที่นับได้รวมผลของเอกสารนั้นแล้ว การยกเลิกจึงปรับคงเหลือหลังนับ'];
+        }
+        return $out;
+    }
+
+    /**
+     * Cancelled documents of one product that once moved its stock: when they were keyed in and
+     * cancelled, by whom, why, and what they had done to the stock (qty, +in / -out).
+     * Purchases are left out (cancelling one dated on or before a count keeps the counted stock).
+     */
+    private function cancelledEvents(int $productId): array
+    {
+        $has = fn (string $t, string $c) => \App\Support\Db::hasColumn($this->db, $t, $c);
+        $parts = [];
+        $params = [];
+        if ($has('pos_imports', 'cancelled_items')) {
+            $stmt = $this->db->prepare(
+                "SELECT pi.cancelled_doc_no AS doc_no, pi.sale_date AS date, pi.created_at AS at, pi.cancelled_at, pi.cancel_reason,
+                        pi.cancelled_items, u.full_name AS user_name, cu.full_name AS cancelled_by
+                 FROM pos_imports pi LEFT JOIN users u ON u.id = pi.user_id LEFT JOIN users cu ON cu.id = pi.cancelled_by
+                 WHERE pi.status = 'cancelled' AND pi.cancelled_at IS NOT NULL AND (pi.cancelled_items LIKE ? OR pi.cancelled_items LIKE ?)"
+            );
+            $stmt->execute(["%\"product_id\":{$productId},%", "%\"product_id\":\"{$productId}\"%"]);
+            foreach ($stmt->fetchAll() as $r) {
+                $qty = 0;
+                foreach ((array) json_decode((string) $r['cancelled_items'], true) as $it) {
+                    if ((int) ($it['product_id'] ?? 0) === $productId) {
+                        $qty += (int) ($it['qty'] ?? 0);
+                    }
+                }
+                if ($qty !== 0) {
+                    $parts[] = ['kind' => 'pos', 'doc_no' => $r['doc_no'], 'date' => $r['date'], 'at' => $r['at'], 'user_name' => $r['user_name'],
+                        'qty' => -$qty, 'cancelled_at' => $r['cancelled_at'], 'cancelled_by' => $r['cancelled_by'], 'cancel_reason' => $r['cancel_reason']];
+                }
+            }
+        }
+        $sql = [];
+        if ($has('receive_documents', 'cancelled_at')) {
+            $sql[] = "SELECT 'receive' AS kind, rd.doc_no, DATE(rd.created_at) AS date, rd.created_at AS at, u.full_name AS user_name, ri.qty,
+                             rd.cancelled_at, cu.full_name AS cancelled_by, rd.cancel_reason
+                      FROM receive_items ri JOIN receive_documents rd ON rd.id = ri.receive_document_id
+                      LEFT JOIN users u ON u.id = rd.user_id LEFT JOIN users cu ON cu.id = rd.cancelled_by
+                      WHERE ri.product_id = ? AND rd.cancelled_at IS NOT NULL";
+            $params[] = $productId;
+        }
+        if ($has('return_documents', 'cancelled_at')) {
+            $sql[] = "SELECT 'return', rd.doc_no, DATE(rd.created_at), rd.created_at, u.full_name, -ri.qty, rd.cancelled_at, cu.full_name, rd.cancel_reason
+                      FROM return_items ri JOIN return_documents rd ON rd.id = ri.return_document_id
+                      LEFT JOIN users u ON u.id = rd.user_id LEFT JOIN users cu ON cu.id = rd.cancelled_by
+                      WHERE ri.product_id = ? AND rd.cancelled_at IS NOT NULL";
+            $params[] = $productId;
+        }
+        if (\App\Services\ProductSplitService::available($this->db)) {
+            $sql[] = "SELECT 'split', sp.doc_no, DATE(sp.created_at), sp.created_at, u.full_name, -sp.qty, sp.cancelled_at, cu.full_name, sp.cancel_reason
+                      FROM product_splits sp LEFT JOIN users u ON u.id = sp.user_id LEFT JOIN users cu ON cu.id = sp.cancelled_by
+                      WHERE sp.source_product_id = ? AND sp.cancelled_at IS NOT NULL";
+            $sql[] = "SELECT 'split', sp.doc_no, DATE(sp.created_at), sp.created_at, u.full_name, spi.qty, sp.cancelled_at, cu.full_name, sp.cancel_reason
+                      FROM product_split_items spi JOIN product_splits sp ON sp.id = spi.split_id
+                      LEFT JOIN users u ON u.id = sp.user_id LEFT JOIN users cu ON cu.id = sp.cancelled_by
+                      WHERE spi.product_id = ? AND sp.cancelled_at IS NOT NULL";
+            array_push($params, $productId, $productId);
+        }
+        if (\App\Services\DamageService::available($this->db)) {
+            $sql[] = "SELECT 'damage', dg.doc_no, dg.damage_date, dg.created_at, u.full_name, -dg.qty, dg.cancelled_at, cu.full_name, dg.cancel_reason
+                      FROM damaged_goods dg LEFT JOIN users u ON u.id = dg.user_id LEFT JOIN users cu ON cu.id = dg.cancelled_by
+                      WHERE dg.product_id = ? AND dg.cancelled_at IS NOT NULL";
+            $params[] = $productId;
+        }
+        if ($sql) {
+            $stmt = $this->db->prepare(implode(' UNION ALL ', $sql));
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll() as $r) {
+                $parts[] = ['kind' => $r['kind'], 'doc_no' => $r['doc_no'], 'date' => $r['date'], 'at' => $r['at'], 'user_name' => $r['user_name'],
+                    'qty' => (int) $r['qty'], 'cancelled_at' => $r['cancelled_at'], 'cancelled_by' => $r['cancelled_by'], 'cancel_reason' => $r['cancel_reason']];
+            }
+        }
+        return $parts;
     }
 
     /**

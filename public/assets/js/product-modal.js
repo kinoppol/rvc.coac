@@ -77,6 +77,32 @@ export function dailySeries(d) {
     return out;
 }
 
+/** Documents behind an adjustment: kind, number (opens it), dates, who keyed / cancelled it, qty. */
+function adjustCauses(r) {
+    const list = r.causes || [];
+    if (!list.length) return '';
+    const MAX = 8;
+    const line = (c) => {
+        const [label] = KIND[c.kind] || [c.kind];
+        const doc = c.doc_no
+            ? `<button type="button" class="prod-link" data-doc="${escapeHtml(c.kind)}|${escapeHtml(c.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(c.doc_no)}</button>`
+            : '';
+        const parts = [
+            `ลงวันที่ ${escapeHtml(fmtDate(c.date))}`,
+            `บันทึก ${escapeHtml(fmtDateTime(c.at))}${c.user_name ? ` โดย ${escapeHtml(c.user_name)}` : ''}`,
+        ];
+        if (c.cancelled_at) {
+            parts.push(`ยกเลิก ${escapeHtml(fmtDateTime(c.cancelled_at))}${c.cancelled_by ? ` โดย ${escapeHtml(c.cancelled_by)}` : ''}`
+                + (c.cancel_reason ? ` (${escapeHtml(c.cancel_reason)})` : ''));
+        }
+        const q = Number(c.qty);
+        return `<li>${escapeHtml(label)} ${doc} <span class="${q < 0 ? 'pm-out' : 'pm-in'}">${q > 0 ? '+' : ''}${count(q)}</span>
+          <span class="muted">· ${parts.join(' · ')}</span></li>`;
+    };
+    const more = list.length - MAX;
+    return `<ul class="pm-causes">${list.slice(0, MAX).map(line).join('')}${more > 0 ? `<li class="muted">และอีก ${count(more)} รายการ</li>` : ''}</ul>`;
+}
+
 function info(label, value) {
     return `<div class="pm-info"><div class="muted">${escapeHtml(label)}</div><div>${value}</div></div>`;
 }
@@ -114,14 +140,22 @@ export async function openProductModal(productId, navigate) {
             <th class="num">รับ</th><th class="num">จ่าย</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">มูลค่าทุน</th></tr></thead>
           <tbody>${rows.map((r) => {
               const [label, tone] = KIND[r.kind] || [r.kind, 'muted'];
-              const detail = [r.party, r.note].filter(Boolean).map(escapeHtml).join('<br>');
+              const adjust = r.kind === 'adjust';
+              const detail = [r.party, r.note].filter(Boolean).map(escapeHtml).join('<br>') + (adjust ? adjustCauses(r) : '');
+              const when = adjust
+                  ? (r.at ? `<div class="muted" style="font-size:11.5px">เกิดเมื่อ ${escapeHtml(fmtDateTime(r.at))}<br>(ตอนอนุมัติตรวจนับ)</div>`
+                      : '<div class="pm-late">ไม่ทราบเวลาที่เกิด</div>')
+                  : r.late ? `<div class="pm-late" title="บันทึกเข้าระบบหลังวันที่ในเอกสาร">บันทึกล่าช้า ${escapeHtml(fmtDateTime(r.at))}</div>`
+                  : r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : '';
+              const who = r.user_name
+                  ? `<div class="muted" style="font-size:11.5px">${adjust ? 'อนุมัติโดย ' : ''}${escapeHtml(r.user_name)}</div>`
+                  : adjust && !r.at ? '<div class="muted" style="font-size:11.5px">ไม่ทราบผู้ทำ</div>' : '';
               return `<tr>
                 <td style="white-space:nowrap">${r.date ? escapeHtml(fmtDate(r.date)) : '<span class="muted">-</span>'}
-                  ${r.late ? `<div class="pm-late" title="บันทึกเข้าระบบหลังวันที่ในเอกสาร">บันทึกล่าช้า ${escapeHtml(fmtDateTime(r.at))}</div>`
-                      : r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : ''}</td>
+                  ${when}</td>
                 <td><span class="pill ${tone}">${label}</span></td>
-                <td style="white-space:nowrap">${r.doc_no ? `<button type="button" class="prod-link" data-doc="${escapeHtml(r.kind)}|${escapeHtml(r.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(r.doc_no)}</button>` : '<span class="muted">-</span>'}
-                  ${r.user_name ? `<div class="muted" style="font-size:11.5px">${escapeHtml(r.user_name)}</div>` : ''}</td>
+                <td style="white-space:nowrap">${r.doc_no ? `<button type="button" class="prod-link" data-doc="${escapeHtml(r.doc_kind || r.kind)}|${escapeHtml(r.doc_no)}" title="เปิดดูเอกสาร">${escapeHtml(r.doc_no)}</button>` : '<span class="muted">-</span>'}
+                  ${who}</td>
                 <td style="font-size:12.5px">${detail || '<span class="muted">-</span>'}</td>
                 <td class="num pm-in">${r.qty_in ? count(r.qty_in) : ''}</td>
                 <td class="num pm-out">${r.qty_out ? count(r.qty_out) : ''}</td>
