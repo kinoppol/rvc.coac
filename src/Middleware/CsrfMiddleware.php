@@ -16,7 +16,8 @@ class CsrfMiddleware implements MiddlewareInterface
 
     public function process(Request $request, Handler $handler): Response
     {
-        if (in_array($request->getMethod(), self::SAFE_METHODS, true)) {
+        // Signed in by the mobile app's device token (AuthMiddleware), not by a cookie a page could ride on.
+        if (in_array($request->getMethod(), self::SAFE_METHODS, true) || $request->getAttribute('via_device') === true) {
             return $handler->handle($request);
         }
 

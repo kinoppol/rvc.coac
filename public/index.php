@@ -66,7 +66,9 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $requestStarted = microtime(true);
 // The Android POS app signs every request with its device token and keeps no cookies:
 // starting a session for it would only leave an empty session file per request.
-$deviceApi = preg_match('#/api/(device|mobile)/#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1;
+$deviceApi = preg_match('#/api/(device|mobile)/#', (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH)) === 1
+    // The mobile app's native screens call the web's own endpoints with the device token (AuthMiddleware).
+    || trim((string) ($_SERVER['HTTP_X_DEVICE_TOKEN'] ?? '')) !== '';
 if (!$deviceApi && session_status() === PHP_SESSION_NONE) {
     // PHP locks the session file while a request holds it open, so one slow request
     // (an AI receipt read, a POS import) would make every other request of that user

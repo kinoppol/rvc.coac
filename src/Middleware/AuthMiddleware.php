@@ -16,6 +16,20 @@ class AuthMiddleware implements MiddlewareInterface
 {
     public function process(Request $request, Handler $handler): Response
     {
+        // The mobile app's native screens: its device token signs the request in as the device's owner
+        // (MobileAuthMiddleware), with the role it picks in X-App-Role. No cookie, so no CSRF to check.
+        if (empty($_SESSION['user_id']) && trim($request->getHeaderLine('X-Device-Token')) !== '') {
+            $resolved = MobileAuthMiddleware::resolve($request);
+            if ($resolved instanceof Response) {
+                return $resolved;
+            }
+            $user = $resolved->getAttribute('user');
+            if ($user['role'] === UserRepo::CONSIGNOR && !preg_match('#/api/(auth|my)/#', $request->getUri()->getPath())) {
+                return $this->deny(403, 'ไม่มีสิทธิ์เข้าถึงส่วนนี้');
+            }
+            return $handler->handle($resolved->withAttribute('via_device', true));
+        }
+
         if (empty($_SESSION['user_id'])) {
             return $this->deny(401, 'กรุณาเข้าสู่ระบบ');
         }
