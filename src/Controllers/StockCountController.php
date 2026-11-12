@@ -37,7 +37,12 @@ class StockCountController
         return $this->json($response, ['data' => ['open' => $this->service()->hasOpenRound()]]);
     }
 
-    /** Count one product now (no round open): sets its stock at once and keeps a one-line approved count. */
+    /**
+     * POST /products/{id}/quick-count {counted_qty, photo?, place?, method?, note?, reason?, reason_detail?}
+     * Count one product with no round open (migration 0077). A difference from the system needs a
+     * reason (StockCountService::DIFF_REASONS) and reason_detail, else 422 with need_reason. Up to
+     * ITEM_APPROVAL_OVER pieces off the stock is set at once; more waits for a manager (pending).
+     */
     public function quickCount(Request $request, Response $response, array $args): Response
     {
         $user = $request->getAttribute('user');
@@ -45,21 +50,89 @@ class StockCountController
         if (!isset($body['counted_qty']) || !is_numeric($body['counted_qty']) || (int) $body['counted_qty'] != $body['counted_qty']) {
             return $this->error($response, 'กรุณาระบุจำนวนที่นับเป็นจำนวนเต็ม', 422);
         }
+        $detail = [
+            'place' => $body['place'] ?? null,
+            'method' => $body['method'] ?? $body['photo_note'] ?? null,
+            'note' => $body['note'] ?? null,
+            'reason' => $body['reason'] ?? null,
+            'reason_detail' => $body['reason_detail'] ?? null,
+        ];
         try {
-            $result = $this->service()->quickCount((int) $args['id'], (int) $body['counted_qty'], trim((string) ($body['note'] ?? '')), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null,
-                isset($body['photo']) ? (string) $body['photo'] : null);
+            $result = $this->service()->itemCount((int) $args['id'], (int) $body['counted_qty'], $detail, (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null, isset($body['photo']) ? (string) $body['photo'] : null);
         } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
+            $db = Db::connection();
+            $product = (new ProductRepo($db, new AuditLogger($db)))->find((int) $args['id']);
+            // need_reason: a difference with no (or too short an) explanation; system_qty is what it is compared with.
+            $response->getBody()->write((string) json_encode([
+                'error' => $e->getMessage(), 'need_reason' => $e->getCode() === 1,
+                'system_qty' => $product ? (int) $product['qty_stock'] : null,
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withStatus(422)->withHeader('Content-Type', 'application/json');
         }
         $db = Db::connection();
         $product = (new ProductRepo($db, new AuditLogger($db)))->find((int) $args['id']);
         return $this->json($response, ['data' => $result + ['qty_stock' => (int) $product['qty_stock']]]);
     }
 
+    /**
+     * GET /stockcounts/items[?product_id=] — item counts waiting for a manager and the latest ones,
+     * with all that was recorded about them, plus the reasons to choose from and the threshold.
+     */
+    public function itemCounts(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        $pid = (int) ($request->getQueryParams()['product_id'] ?? 0);
+        $db = Db::connection();
+        $data = $this->service()->itemCounts($pid > 0 ? $pid : null);
+        $data['reasons'] = StockCountService::DIFF_REASONS;
+        $data['approval_over'] = StockCountService::ITEM_APPROVAL_OVER;
+        $data['detail_min'] = StockCountService::DIFF_DETAIL_MIN;
+        $data['open_round'] = $this->service()->hasOpenRound();
+        $data['can_approve'] = ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
+            && (new UserRepo($db))->hasPermission($user['role'], 'stockcount.approve');
+        $data['user_id'] = (int) $user['id'];
+        return $this->json($response, ['data' => $data]);
+    }
+
+    /** POST /stockcounts/items/{id}/approve {note?} — a manager certifies an item count that differs by more than the threshold. */
+    public function approveItem(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        try {
+            $result = $this->service()->approveItem((int) $args['id'], (int) $user['id'], (string) ($user['role'] ?? ''),
+                isset($body['note']) ? (string) $body['note'] : null, $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    /** POST /stockcounts/items/{id}/reject {reason} — a manager turns it down, or whoever counted it withdraws it. */
+    public function rejectItem(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        $approver = ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
+            && (new UserRepo(Db::connection()))->hasPermission($user['role'], 'stockcount.approve');
+        try {
+            $result = $this->service()->rejectItem((int) $args['id'], (int) $user['id'], $approver,
+                isset($body['reason']) ? (string) $body['reason'] : null, $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
     public function start(Request $request, Response $response): Response
     {
         $user = $request->getAttribute('user');
-        $id = $this->service()->start((int) $user['id']);
+        try {
+            $id = $this->service()->start((int) $user['id']);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['id' => $id, 'stock_count' => $this->service()->get($id)]], 201);
     }
 

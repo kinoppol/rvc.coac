@@ -76,8 +76,8 @@ export async function render(container, { navigate, permissions, user }) {
     }
     const canEdit = permissions.includes('purchase.create');
     const canConsign = canEdit && user?.role === 'admin';
-    // Counting on the phone with no round open sets stock at once: approvers only.
-    const canCount = permissions.includes('stockcount.approve');
+    // Counting one product at a time with no round open (นับรายการ): over 10 pieces off waits for a manager.
+    const canCount = permissions.includes('stockcount.create');
     // Admin / manager: sales booked with no cost (sold before the first purchase) that can now be costed.
     const canFixCost = ['admin', 'manager'].includes(user?.role);
     // Admin / manager: set the piece sale price of the store's goods in the editor.
@@ -199,7 +199,7 @@ export async function render(container, { navigate, permissions, user }) {
         <div id="inv-page" hidden></div>
         <div class="actions-row" style="margin-bottom:12px">
           <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด และถ่ายรูปสินค้า">📱 เก็บข้อมูลด้วยมือถือ</button>
-          ${canCount ? '<button type="button" class="btn secondary" id="quick-count" title="ใช้ตัวนับแบบเดียวกับรอบตรวจนับ บันทึกแล้วปรับสต๊อกทีละรายการทันที (เมื่อไม่มีรอบตรวจนับเปิดอยู่)">🔢 นับสต๊อกด้วยมือถือ</button>' : ''}
+          ${canCount ? '<button type="button" class="btn secondary" id="quick-count" title="นับสินค้าทีละรายการโดยไม่ต้องเปิดรอบตรวจนับ: ถ่ายรูป ระบุที่นับ ยอดต่างจากระบบต้องระบุสาเหตุ ต่างเกิน 10 ชิ้นต้องให้ผู้จัดการรับรองก่อนจึงปรับสต๊อก (เมื่อไม่มีรอบตรวจนับเปิดอยู่)">🔢 นับรายการ</button>' : ''}
         </div>
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">มูลค่าสต๊อก (ต้นทุน)</div><div class="val">฿ ${money(s.stock_cost_value)}</div>

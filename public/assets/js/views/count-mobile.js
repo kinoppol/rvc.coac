@@ -46,12 +46,15 @@ function beep(kind = 'scan') {
  * the counted quantity on a large keypad. Saves each product immediately.
  */
 export function openMobileCount({ stockCount, items, onClose, quick = false }) {
-    // quick: no round open — each save sets the product's stock at once (its own one-line count).
+    // quick: no round open — each product is counted on its own (นับรายการ). Each save records where
+    // and how it was counted; a difference needs a reason, and more than meta.approval_over pieces
+    // off waits for a manager to certify it before the stock changes.
     const ep = quick ? {
-        lookup: (code) => api.get(`/inventory/lookup?code=${encodeURIComponent(code)}`),
-        search: (q) => api.get(`/inventory/search?q=${encodeURIComponent(q)}`),
-        count: (b) => api.post(`/products/${b.product_id}/quick-count`, { counted_qty: b.counted_qty, photo: b.photo, note: b.photo_note }),
-        barcode: (b) => api.post(`/inventory/${b.product_id}/assign-barcode`, { barcode: b.barcode, pack_size: b.pack_size, replace: !!b.replace }),
+        // Round 0 = no round: the product alone, with no line.
+        lookup: (code) => api.get(`/stockcounts/0/lookup?code=${encodeURIComponent(code)}`),
+        search: (q) => api.get(`/stockcounts/0/search?q=${encodeURIComponent(q)}`),
+        count: (b) => api.post(`/products/${b.product_id}/quick-count`, b),
+        barcode: (b) => api.post('/stockcounts/0/barcode', b),
     } : {
         lookup: (code) => api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`),
         search: (q) => api.get(`/stockcounts/${stockCount.id}/search?q=${encodeURIComponent(q)}`),
@@ -75,13 +78,22 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
     let lastScan = { code: '', at: 0 };
     let photoCache = 0;
     const log = [];
+    // Item counts: reasons to choose from, the threshold, and products waiting for a manager.
+    const meta = { reasons: {}, approval_over: 10, detail_min: 5, pending: new Set() };
+    if (quick) {
+        api.get('/stockcounts/items').then((res) => {
+            Object.assign(meta, { reasons: res.data.reasons, approval_over: res.data.approval_over, detail_min: res.data.detail_min });
+            meta.pending = new Set(res.data.pending.map((p) => Number(p.product_id)));
+            draw();
+        }).catch(() => { /* defaults */ });
+    }
 
     const root = document.createElement('div');
     root.className = 'mc';
     root.innerHTML = `
       <header class="mc-head">
         <button type="button" class="mc-icon" data-act="close" aria-label="ปิด">✕</button>
-        <div class="mc-title"><b>${quick ? 'นับสต๊อกทันที' : escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
+        <div class="mc-title"><b>${quick ? 'นับรายการ (ไม่เปิดรอบ)' : escapeHtml(stockCount.doc_no)}</b><span data-el="progress"></span></div>
         <button type="button" class="mc-scan" data-act="scan">📷 สแกน</button>
         ${document.fullscreenEnabled ? '<button type="button" class="mc-icon" data-act="fullscreen" aria-label="เต็มหน้าจอ">⛶</button>' : ''}
         <button type="button" class="mc-icon snd-btn" data-act="sound" aria-label="ระดับเสียง" title="ระดับเสียง">${soundButtonLabel()}</button>
@@ -172,7 +184,9 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
     }
 
     function draw() {
-        $('progress').textContent = quick ? `ปรับสต๊อกทันที · นับแล้ว ${countedN()} รายการ` : `นับแล้ว ${countedN()}/${total}`;
+        $('progress').textContent = quick
+            ? `นับแล้ว ${countedN()} รายการ${meta.pending.size ? ` · รอผู้จัดการรับรอง ${meta.pending.size}` : ''}`
+            : `นับแล้ว ${countedN()}/${total}`;
         const cam = $('cam');
         const scan = root.querySelector('.mc-scan');
         scan.classList.toggle('on', !cam.hidden);
@@ -191,7 +205,7 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
                 </button>
                 <div class="mc-info">
                   <div class="mc-name">${escapeHtml(product.name)}</div>
-                  <div class="mc-sub">${escapeHtml(product.consignor_name)}${product.item || quick ? '' : ' · <b>ไม่อยู่ในรอบนับ (จะเพิ่มให้)</b>'}</div>
+                  <div class="mc-sub">${escapeHtml(product.consignor_name)}${product.item || quick ? '' : ' · <b>ไม่อยู่ในรอบนับ (จะเพิ่มให้)</b>'}${quick && meta.pending.has(Number(product.id)) ? ' · <b>มีการนับรอผู้จัดการรับรอง</b>' : ''}</div>
                   <div class="mc-nums">
                     <span>ในระบบ <b>${sys}</b></span>
                     <span>นับแล้ว <b>${got ?? '–'}</b></span>
@@ -331,12 +345,37 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
             draw();
             return;
         }
+        const photoNote = addTo ? `บวกเพิ่ม ${how}${pieces} → ${value}` : `${how}${value}`;
         try {
-            const sys = product.item ? Number(product.item.system_qty) : Number(product.qty_stock);
-            const res = await ep.count({
-                product_id: product.id, counted_qty: value, photo,
-                photo_note: addTo ? `บวกเพิ่ม ${how}${pieces} → ${value}` : `${how}${value}`,
-            });
+            let sys = product.item ? Number(product.item.system_qty) : Number(product.qty_stock);
+            let res;
+            if (quick) {
+                // How it was counted, in words, for the record.
+                const method = (unit === 'piece' ? `นับเป็นชิ้น ${pieces}`
+                    : `${Number(q.packs || 0)} แพ็ค × ${q.size}${unit === 'mix' && q.pieces ? ` + ${Number(q.pieces)} ชิ้น` : ''} = ${pieces}`)
+                    + (addTo ? ` · บวกเพิ่มจากที่นับไว้ ${prev} → ${value}` : '');
+                let ask = { sys, error: null };
+                for (;;) {
+                    const detail = await askDetails(product, value, ask.sys, method, ask.error);
+                    if (!detail) {
+                        message = { kind: 'info', text: `ยังไม่ได้บันทึก ${product.name} — กดบันทึกอีกครั้งเมื่อพร้อม` };
+                        return;
+                    }
+                    try {
+                        res = await ep.count({ product_id: product.id, counted_qty: value, photo, method, ...detail });
+                        sys = res.data.system_qty;
+                        break;
+                    } catch (e) {
+                        // The stock changed since it was shown (a sale): explain against the system now.
+                        if (!e.data?.need_reason) throw e;
+                        beep('warn');
+                        ask = { sys: e.data.system_qty ?? ask.sys, error: e.message };
+                        product = { ...product, qty_stock: ask.sys };
+                    }
+                }
+            } else {
+                res = await ep.count({ product_id: product.id, counted_qty: value, photo, photo_note: photoNote });
+            }
             if (!counted.has(Number(product.id))) total++;
             counted.set(Number(product.id), value);
             log.unshift({ name: product.name, qty: how + (addTo ? `${prev} + ${pieces} = ${value}` : value) });
@@ -345,9 +384,13 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
             mode = 'code';
             input = '';
             resetQty();
-            message = { kind: 'ok', text: quick
-                ? `บันทึก ${product.name} = ${value} ชิ้น${value !== sys ? ` (${value > sys ? 'เกิน' : 'ขาด'} ${Math.abs(value - sys)}) ปรับสต๊อกแล้ว` : ' ตรงกับในระบบ'} · ${res.data.doc_no}`
-                : `บันทึก ${product.name} = ${value} ชิ้น` };
+            if (quick && res.data.pending) meta.pending.add(Number(product.id));
+            const d = value - sys;
+            message = { kind: quick && res.data.pending ? 'info' : 'ok', text: !quick
+                ? `บันทึก ${product.name} = ${value} ชิ้น`
+                : res.data.pending
+                    ? `บันทึก ${product.name} = ${value} ชิ้น (${d > 0 ? 'เกิน' : 'ขาด'} ${Math.abs(d)}) ต่างเกิน ${meta.approval_over} ชิ้น — ส่งให้ผู้จัดการรับรองแล้ว สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · ${res.data.doc_no}`
+                    : `บันทึก ${product.name} = ${value} ชิ้น${d ? ` (${d > 0 ? 'เกิน' : 'ขาด'} ${Math.abs(d)}) ปรับสต๊อกแล้ว` : ' ตรงกับในระบบ'} · ${res.data.doc_no}` };
         } catch (e) {
             beep('error');
             message = { kind: 'bad', text: e.message };
@@ -355,6 +398,94 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
             busy = false;
             draw();
         }
+    }
+
+    // Where the counter last counted, offered first next time (per device).
+    const PLACE_KEY = 'count.place';
+    const PLACES = ['หน้าร้าน / ชั้นวางขาย', 'คลัง / หลังร้าน', 'ตู้แช่', 'หน้าร้านและคลังรวมกัน'];
+
+    /**
+     * Item count: the details recorded with it — where it was counted, a note, and with any
+     * difference from the system the reason and an explanation (both required). Resolves to
+     * {place, note, reason, reason_detail}, or null when the counter goes back.
+     */
+    function askDetails(p, value, sys, method, error) {
+        const diff = value - sys;
+        const big = Math.abs(diff) > meta.approval_over;
+        let place = '';
+        try { place = localStorage.getItem(PLACE_KEY) || ''; } catch { /* private mode */ }
+        let reason = '';
+        return new Promise((resolve) => {
+            showSheet(`
+              <div class="mc-sheet-box">
+                <div class="mc-sheet-head">${backBtn}<b>รายละเอียดการนับ</b></div>
+                <div style="font-size:16px;font-weight:700">${escapeHtml(p.name)}</div>
+                <div class="mc-det-nums">
+                  <span>ในระบบ <b>${sys}</b></span><span>นับได้ <b>${value}</b></span>
+                  <span class="${diff ? 'bad' : 'ok'}">${diff ? `${diff > 0 ? 'เกิน' : 'ขาด'} ${Math.abs(diff)} ชิ้น` : 'ตรงกับระบบ'}</span>
+                </div>
+                <div class="muted" style="font-size:13px;margin-top:4px">วิธีนับ: ${escapeHtml(method)} · มีรูปถ่ายประกอบ</div>
+                ${error ? `<div class="mc-msg bad" style="margin-top:8px">${escapeHtml(error)}</div>` : ''}
+                ${big ? `<div class="mc-msg bad" style="margin-top:8px">ยอดต่างจากระบบเกิน ${meta.approval_over} ชิ้น — ต้องให้ผู้จัดการรับรองก่อน สต๊อกจึงจะเปลี่ยน</div>` : ''}
+                <div class="mc-det-lbl">นับที่ไหน</div>
+                <div class="mc-det-chips">${PLACES.map((x) => `<button type="button" class="mc-chip${place === x ? ' on' : ''}" data-place="${escapeHtml(x)}">${escapeHtml(x)}</button>`).join('')}</div>
+                <input type="text" class="mc-det-text" data-det="place" maxlength="100" placeholder="หรือพิมพ์ที่นับ เช่น ชั้นที่ 3 ฝั่งขนม" value="${PLACES.includes(place) ? '' : escapeHtml(place)}" style="margin-top:6px">
+                ${diff ? `
+                  <div class="mc-det-lbl">สาเหตุที่ยอดต่างจากระบบ <small>(ต้องเลือก)</small></div>
+                  <div class="mc-det-reasons">${Object.entries(meta.reasons).map(([k, l]) => `<button type="button" class="mc-chip" data-reason="${k}">${escapeHtml(l)}</button>`).join('')}</div>
+                  <div class="mc-det-lbl">รายละเอียด <small>(ต้องระบุ อย่างน้อย ${meta.detail_min} ตัวอักษร — เกิดอะไรขึ้น ตรวจสอบอะไรแล้ว)</small></div>
+                  <textarea class="mc-det-text" data-det="detail" maxlength="500" placeholder="เช่น พบกล่องแตก 2 ชิ้นทิ้งไปเมื่อวาน ยังไม่ได้บันทึกสินค้าเสียหาย"></textarea>` : ''}
+                <div class="mc-det-lbl">หมายเหตุ <small>(ถ้ามี)</small></div>
+                <input type="text" class="mc-det-text" data-det="note" maxlength="255" placeholder="เช่น นับซ้ำ 2 รอบ ยอดตรงกัน">
+                <div class="mc-msg bad" data-det="err" style="margin-top:10px" hidden></div>
+                <button type="button" class="mc-btn wide" data-det="save" style="margin-top:14px">${big ? 'บันทึกและส่งให้ผู้จัดการรับรอง' : diff ? 'บันทึกและปรับสต๊อก' : 'บันทึก'}</button>
+              </div>`);
+            const box = sheet.querySelector('.mc-sheet-box');
+            const placeInput = box.querySelector('[data-det="place"]');
+            const err = box.querySelector('[data-det="err"]');
+            let done = false;
+            const finish = (v) => {
+                if (done) return;
+                done = true;
+                onSheetClose = null;
+                if (!sheet.hidden) closeSheet();
+                resolve(v);
+            };
+            onSheetClose = () => finish(null);
+            box.addEventListener('click', (e) => {
+                const pl = e.target.closest('[data-place]');
+                if (pl) {
+                    place = pl.dataset.place;
+                    placeInput.value = '';
+                    box.querySelectorAll('[data-place]').forEach((b) => b.classList.toggle('on', b === pl));
+                    return;
+                }
+                const rs = e.target.closest('[data-reason]');
+                if (rs) {
+                    reason = rs.dataset.reason;
+                    box.querySelectorAll('[data-reason]').forEach((b) => b.classList.toggle('on', b === rs));
+                    return;
+                }
+                if (!e.target.closest('[data-det="save"]')) return;
+                const typed = placeInput.value.trim();
+                const where = typed || place;
+                const detail = box.querySelector('[data-det="detail"]')?.value.trim() || '';
+                const problem = !where ? 'กรุณาระบุว่านับที่ไหน'
+                    : diff && !reason ? 'กรุณาเลือกสาเหตุที่ยอดต่างจากระบบ'
+                        : diff && detail.length < meta.detail_min ? `กรุณาระบุรายละเอียดอย่างน้อย ${meta.detail_min} ตัวอักษร` : '';
+                if (problem) {
+                    err.textContent = problem;
+                    err.hidden = false;
+                    beep('warn');
+                    return;
+                }
+                try { localStorage.setItem(PLACE_KEY, where); } catch { /* private mode */ }
+                finish({ place: where, note: box.querySelector('[data-det="note"]').value.trim(), reason: diff ? reason : '', reason_detail: diff ? detail : '' });
+            });
+            placeInput.addEventListener('input', () => {
+                if (placeInput.value.trim()) box.querySelectorAll('[data-place]').forEach((b) => b.classList.remove('on'));
+            });
+        });
     }
 
     /** Links `code` to product p; asks piece vs pack first unless size is given. */
@@ -398,6 +529,7 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
     // (one layer, scrolls as a whole) rather than sliding over it. ----
     const sheet = $('sheet');
     let redrawResults = null;   // re-renders the open search list (after a photo is added)
+    let onSheetClose = null;    // the details page waits for its answer; going back answers null
     function showSheet(html) {
         stopCamera();   // reopens on return to the barcode screen
         sheet.hidden = false;
@@ -410,6 +542,9 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
         sheet.innerHTML = '';
         redrawResults = null;
         root.classList.remove('sheet-open');
+        const waiting = onSheetClose;
+        onSheetClose = null;
+        waiting?.();
         draw();
     }
     const backBtn = '<button type="button" class="mc-back" data-sheet="close">← กลับ</button>';

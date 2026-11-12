@@ -209,9 +209,16 @@ $app->group('/api/device/v1', function ($group) {
         ->add(new RoleGuard('stockcount.approve'));
     $group->post('/stockcounts/{id:[0-9]+}/reopen', [StockCountController::class, 'reopen'])
         ->add(new RoleGuard('stockcount.approve'));
-    // Counting one product with no round open (sets its stock at once), as on the web's inventory page.
+    // Counting one product with no round open (migration 0077): a difference needs a reason; more than
+    // 10 pieces off waits for a manager. Same as on the web.
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/items', [StockCountController::class, 'itemCounts'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/items/{id:[0-9]+}/approve', [StockCountController::class, 'approveItem'])
         ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/stockcounts/items/{id:[0-9]+}/reject', [StockCountController::class, 'rejectItem'])
+        ->add(new RoleGuard('stockcount.create'));
     $group->get('/inventory/lookup', [InventoryController::class, 'lookup'])
         ->add(new RoleGuard('stockcount.approve'));
     $group->get('/inventory/search', [InventoryController::class, 'search'])
@@ -449,8 +456,15 @@ $app->group('/api', function ($group) {
     $group->post('/products/{id:[0-9]+}/discontinued', [StockCountController::class, 'setDiscontinued']);
     $group->post('/products/{id:[0-9]+}/return-all', [ReturnController::class, 'returnAll']);
     $group->get('/stockcounts/{id:[0-9]+}', [StockCountController::class, 'show']);
+    // Counting one product with no round open; a difference over 10 pieces waits for a manager (migration 0077).
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/items', [StockCountController::class, 'itemCounts'])
+        ->add(new RoleGuard('stockcount.create'));
+    $group->post('/stockcounts/items/{id:[0-9]+}/approve', [StockCountController::class, 'approveItem'])
         ->add(new RoleGuard('stockcount.approve'));
+    $group->post('/stockcounts/items/{id:[0-9]+}/reject', [StockCountController::class, 'rejectItem'])
+        ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/start', [StockCountController::class, 'start'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id:[0-9]+}/counts', [StockCountController::class, 'saveCounts'])

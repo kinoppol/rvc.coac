@@ -405,8 +405,15 @@ businessDay(at):
   `GET /stockcounts`, `GET /stockcounts/{id}`, `POST /stockcounts/start`, `GET /stockcounts/{id}/lookup?code=`,
   `GET /stockcounts/{id}/search?q=`, `POST /stockcounts/{id}/count` (ต้องมีรูป `photo`), `POST /stockcounts/{id}/barcode`,
   `POST /stockcounts/{id}/submit|approve|reopen|cancel`, `POST /products/{id}/photo`
-- **นับสต๊อกทันที** (ไม่มีรอบเปิด, `stockcount.approve`): `GET /inventory/lookup`, `GET /inventory/search`,
-  `POST /products/{id}/quick-count`, `POST /inventory/{id}/assign-barcode` (`purchase.create`)
+- **นับรายการ** (ไม่ต้องเปิดรอบ ใช้ได้เมื่อไม่มีรอบเปิด, `stockcount.create`; ต้องรัน migration 0077):
+  `GET /stockcounts/0/lookup?code=`, `GET /stockcounts/0/search?q=`, `POST /stockcounts/0/barcode`,
+  `POST /products/{id}/quick-count` {`counted_qty`, `photo`, `place` (นับที่ไหน), `method` (วิธีนับ เช่น 2 แพ็ค × 12 + 3 ชิ้น),
+  `note`, `reason`, `reason_detail`} — ยอดต่างจากระบบต้องมี `reason` (คีย์จาก `GET /stockcounts/items` → `reasons`) และ
+  `reason_detail` อย่างน้อย 5 ตัวอักษร ไม่ครบได้ 422 `{error, need_reason: true, system_qty}` (ถามใหม่ตาม `system_qty`)
+  · ต่างไม่เกิน 10 ชิ้นปรับสต๊อกทันที ต่างเกิน 10 ชิ้นได้ `pending: true` สต๊อกยังไม่เปลี่ยนจนผู้จัดการรับรอง
+  · `GET /stockcounts/items` (รายการรอรับรอง + ล่าสุด พร้อมรายละเอียดการนับ), `POST /stockcounts/items/{id}/approve` {`note`}
+  (`stockcount.approve`, ผู้นับรับรองของตัวเองไม่ได้ ยกเว้นผู้ดูแลระบบ), `POST /stockcounts/items/{id}/reject` {`reason`}
+  (ผู้จัดการไม่รับรอง หรือผู้นับถอนการนับของตัวเอง)
 - บาร์โค้ดที่ร้าน/ผู้ฝากสร้างเอง (ไม่ใช่ EAN-13) ใช้ได้ตามปกติ: แอปค้นหาก่อนเสมอ เตือนเฉพาะรหัสที่ไม่พบและดูเหมือน EAN-13 ที่อ่านผิด
 
 ## 6. ข้อมูลในเครื่องและการซิงก์

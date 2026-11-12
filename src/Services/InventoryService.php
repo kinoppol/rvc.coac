@@ -760,6 +760,66 @@ class InventoryService
         return $rows;
     }
 
+    /** An item count (migration 0077) with all that was recorded about it, for the drill-down dialog. */
+    private function itemCountDocument(array $d, callable $date, callable $dateTime): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT sci.*, p.name AS product, p.barcode, COALESCE(c.name, 'สินค้าของร้าน') AS owner, u.full_name AS counter
+             FROM stock_count_items sci JOIN products p ON p.id = sci.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
+             LEFT JOIN users u ON u.id = sci.counted_by WHERE sci.stock_count_id = ? LIMIT 1"
+        );
+        $stmt->execute([(int) $d['id']]);
+        $l = $stmt->fetch() ?: [];
+        $names = $this->db->prepare('SELECT full_name FROM users WHERE id = ?');
+        $who = function ($id) use ($names) {
+            if (!$id) {
+                return '-';
+            }
+            $names->execute([$id]);
+            return (string) ($names->fetchColumn() ?: '-');
+        };
+        $sysAt = $l['count_system_qty'] ?? $l['system_qty'] ?? null;
+        $cntAt = $l['count_qty'] ?? $l['counted_qty'] ?? null;
+        $diffAt = $sysAt !== null && $cntAt !== null ? (int) $cntAt - (int) $sysAt : null;
+        $status = match ($d['status']) {
+            'submitted' => 'รอผู้จัดการรับรอง',
+            'approved' => $diffAt !== null && abs($diffAt) > StockCountService::ITEM_APPROVAL_OVER ? 'ผู้จัดการรับรองแล้ว ปรับสต๊อกแล้ว' : 'ปรับสต๊อกแล้ว',
+            'cancelled' => 'ไม่รับรอง / ยกเลิก',
+            default => $d['status'],
+        };
+        $rows = [
+            ['k' => 'สินค้า', 'v' => ($l['product'] ?? '-') . ($l['barcode'] ? ' (' . $l['barcode'] . ')' : '') . ' · ' . ($l['owner'] ?? '')],
+            ['k' => 'สถานะ', 'v' => $status],
+            ['k' => 'ผู้นับ / เวลาที่นับ', 'v' => ($l['counter'] ?? $who($d['created_by'])) . ' · ' . $dateTime($l['counted_at'] ?? $d['created_at'])],
+            ['k' => 'สถานที่นับ', 'v' => $l['count_place'] ?? '-'],
+            ['k' => 'วิธีนับ', 'v' => $l['count_method'] ?? '-'],
+            ['k' => 'หมายเหตุการนับ', 'v' => $l['count_note'] ?? '-'],
+            ['k' => 'ในระบบตอนนับ', 'v' => $sysAt === null ? '-' : number_format((int) $sysAt)],
+            ['k' => 'นับได้', 'v' => $cntAt === null ? '-' : number_format((int) $cntAt)],
+            ['k' => 'ผลต่าง', 'v' => $diffAt === null ? '-' : ($diffAt === 0 ? 'ตรงกับระบบ' : ($diffAt > 0 ? '+' : '') . $diffAt)],
+        ];
+        if (!empty($l['diff_reason'])) {
+            $rows[] = ['k' => 'สาเหตุที่ยอดต่าง', 'v' => StockCountService::DIFF_REASONS[$l['diff_reason']] ?? $l['diff_reason']];
+            $rows[] = ['k' => 'รายละเอียด', 'v' => $l['diff_detail'] ?? '-'];
+        }
+        if ($d['status'] === 'approved') {
+            $rows[] = ['k' => ($diffAt !== null && abs($diffAt) > StockCountService::ITEM_APPROVAL_OVER ? 'ผู้รับรอง' : 'ปรับสต๊อก') . ' / เวลา', 'v' => $who($d['approved_by']) . ' · ' . $dateTime($d['approved_at'])];
+            $rows[] = ['k' => 'สต๊อกก่อน → หลังปรับ', 'v' => (int) ($l['system_qty'] ?? 0) . ' → ' . (int) ($l['counted_qty'] ?? 0)];
+            if (!empty($d['review_note'])) {
+                $rows[] = ['k' => 'ความเห็นผู้รับรอง', 'v' => $d['review_note']];
+            }
+        }
+        if ($d['status'] === 'cancelled') {
+            $rows[] = ['k' => 'ยกเลิกโดย / เวลา', 'v' => $who($d['cancelled_by']) . ' · ' . $dateTime($d['cancelled_at'])];
+            $rows[] = ['k' => 'เหตุผล', 'v' => $d['cancel_reason'] ?? '-'];
+        }
+        return [
+            'title' => 'นับสต๊อกรายการ ' . $d['doc_no'],
+            'note' => 'นับทีละรายการโดยไม่เปิดรอบตรวจนับ · ยอดต่างจากระบบเกิน ' . StockCountService::ITEM_APPROVAL_OVER . ' ชิ้นต้องให้ผู้จัดการรับรองก่อนปรับสต๊อก',
+            'sections' => [['title' => 'รายละเอียดการนับ', 'total' => false, 'columns' => [['k', 'หัวข้อ', 'text'], ['v', 'รายละเอียด', 'text']], 'rows' => $rows]],
+        ];
+    }
+
     /**
      * The document behind a stock movement, shaped for the drill-down dialog
      * ({title, note, sections: [{title, columns, rows}]}). Null when it does not exist.
@@ -968,6 +1028,9 @@ class InventoryService
                     (int) $d['id']
                 );
                 $statuses = ['draft' => 'กำลังนับ', 'submitted' => 'ส่งรายงานแล้ว', 'approved' => 'อนุมัติแล้ว', 'cancelled' => 'ยกเลิก'];
+                if (($d['kind'] ?? 'round') === 'item') {
+                    return $this->itemCountDocument($d, $date, $dateTime);
+                }
                 return [
                     'title' => 'รอบตรวจนับสต๊อก ' . $d['doc_no'],
                     'note' => sprintf(

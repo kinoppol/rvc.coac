@@ -1,8 +1,8 @@
 import { api } from '../api.js';
-import { money, escapeHtml } from '../util.js';
+import { money, escapeHtml, fmtDateTime } from '../util.js';
 import { openMobileCount, COUNT_PHOTO_SIZE } from './count-mobile.js';
 import { attachmentUrl, fileToDataUrl, thumbDataUrl } from '../images.js';
-import { confirmDialog } from '../dialog.js';
+import { confirmDialog, promptDialog } from '../dialog.js';
 
 // Which lines the table shows, besides the search words.
 const SHOWS = [
@@ -29,7 +29,8 @@ export async function render(container, { permissions, user }) {
 
     async function loadList() {
         const list = (await api.get('/stockcounts')).data;
-        const active = list.find((c) => c.status === 'draft' || c.status === 'submitted');
+        await loadItems();
+        const active = list.find((c) => (c.kind || 'round') !== 'item' && (c.status === 'draft' || c.status === 'submitted'));
         if (active) {
             await loadOne(active.id);
         } else {
@@ -49,8 +50,11 @@ export async function render(container, { permissions, user }) {
     function draw(history) {
         if (!current) {
             container.innerHTML = `
+            ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
+            ${notice ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(notice)}</div>` : ''}
+            ${itemsHtml(true)}
             <section class="card card-pad" style="text-align:center">
-              <p class="muted">ยังไม่มีรอบตรวจนับที่กำลังดำเนินการ</p>
+              <p class="muted">ยังไม่มีรอบตรวจนับที่กำลังดำเนินการ — นับทั้งร้านพร้อมกันให้เริ่มรอบตรวจนับ</p>
               <button type="button" class="btn" id="btn-start">เริ่มรอบตรวจนับใหม่</button>
               ${history && history.length ? `
                 <div class="table-wrap" style="margin-top:20px;text-align:left"><table>
@@ -59,9 +63,17 @@ export async function render(container, { permissions, user }) {
                 </table></div>` : ''}
             </section>`;
             container.querySelector('#btn-start').addEventListener('click', async () => {
-                const res = await api.post('/stockcounts/start');
-                await loadOne(res.data.id);
+                try {
+                    const res = await api.post('/stockcounts/start');
+                    error = null;
+                    notice = null;
+                    await loadOne(res.data.id);
+                } catch (e) {
+                    error = e.message;
+                    draw(history);
+                }
             });
+            bindItems(history);
             return;
         }
 
@@ -77,6 +89,7 @@ export async function render(container, { permissions, user }) {
         </div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
         ${notice ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(notice)}</div>` : ''}
+        ${itemsHtml(false)}
         ${current.status === 'draft' ? `
           <section class="card card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div><b>โหมดนับด้วยมือถือ</b><div class="muted" style="font-size:13px">สแกนบาร์โค้ดด้วยกล้อง ปุ่มกดตัวเลขขนาดใหญ่ ถ่ายภาพสินค้า และค้นหาสินค้าเพื่อผูกบาร์โค้ด — บันทึกทันทีทีละรายการ</div></div>
@@ -200,6 +213,161 @@ export async function render(container, { permissions, user }) {
         if (reopenBtn) reopenBtn.addEventListener('click', reopenCount);
         const cancelBtn = container.querySelector('#btn-cancel');
         if (cancelBtn) cancelBtn.addEventListener('click', cancelCount);
+        bindItems();
+    }
+
+    // ---- นับรายการ: one product at a time with no round open (migration 0077) ----
+    let itemData = null;   // { ready, pending, recent, reasons, approval_over, can_approve, user_id, open_round }
+    let showRecent = false;
+
+    async function loadItems() {
+        try {
+            itemData = (await api.get('/stockcounts/items')).data;
+        } catch {
+            itemData = null;
+        }
+    }
+
+    const signed = (n) => (n > 0 ? `+${n}` : String(n));
+
+    function itemPhotos(r) {
+        return `<div class="cnt-photo-row">${(r.photos || []).map((p) => (p.token
+            ? `<a href="${attachmentUrl(p.token)}" target="_blank" rel="noopener" title="${escapeHtml(p.note || '')}"><img src="${attachmentUrl(p.token)}" alt="รูปประกอบการนับ"></a>`
+            : '<span class="pill muted" title="ลบอัตโนมัติเมื่อครบ 30 วัน">รูปถูกลบแล้ว</span>')).join('') || '<span class="muted" style="font-size:12px">ไม่มีรูป</span>'}</div>`;
+    }
+
+    /** Where/how it was counted, and why it differs. */
+    function itemDetail(r) {
+        return `<div style="font-size:12.5px;line-height:1.5">
+          ${r.count_place ? `<div>นับที่: ${escapeHtml(r.count_place)}</div>` : ''}
+          ${r.count_method ? `<div class="muted">วิธีนับ: ${escapeHtml(r.count_method)}</div>` : ''}
+          ${r.reason_label ? `<div><b>สาเหตุ:</b> ${escapeHtml(r.reason_label)}</div>` : ''}
+          ${r.diff_detail ? `<div>${escapeHtml(r.diff_detail)}</div>` : ''}
+          ${r.count_note ? `<div class="muted">หมายเหตุ: ${escapeHtml(r.count_note)}</div>` : ''}
+        </div>`;
+    }
+
+    function itemStatus(r) {
+        if (r.status === 'cancelled') {
+            return `<span class="pill">ไม่รับรอง / ยกเลิก</span><div style="font-size:12px" class="muted">${escapeHtml(r.canceller_name || '-')} · ${escapeHtml(fmtDateTime(r.cancelled_at))}<br>เหตุผล: ${escapeHtml(r.cancel_reason || '-')}</div>`;
+        }
+        const certified = Math.abs(r.diff_at_count) > itemData.approval_over;
+        return `<span class="pill ok">${certified ? 'รับรองแล้ว' : 'ปรับสต๊อกแล้ว'}</span>${certified ? `<div style="font-size:12px" class="muted">โดย ${escapeHtml(r.approver_name || '-')} · ${escapeHtml(fmtDateTime(r.approved_at))}<br>สต๊อก ${r.system_qty} → ${r.counted_qty}${r.review_note ? `<br>ความเห็น: ${escapeHtml(r.review_note)}` : ''}</div>` : ''}`;
+    }
+
+    /** The item-count card: start counting (no round open), counts waiting for a manager, and the latest ones. */
+    function itemsHtml(noRound) {
+        if (!itemData) return '';
+        if (!itemData.ready) {
+            return noRound && canCreate ? '<div class="pill warn" style="font-size:13px;padding:8px 14px">นับสินค้าเป็นรายการ (ไม่ต้องเปิดรอบ) ต้องให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0077) ก่อน</div>' : '';
+        }
+        const pend = itemData.pending;
+        if (!noRound && !pend.length) return '';
+        const over = itemData.approval_over;
+        return `
+        <section class="card">
+          <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div><b>นับสินค้าเป็นรายการ (ไม่ต้องเปิดรอบ)</b>
+              <div class="muted" style="font-size:13px">สแกน/ค้นหาสินค้าแล้วนับทีละรายการ ถ่ายรูป ระบุที่นับ · ยอดต่างจากระบบต้องเลือกสาเหตุและอธิบายรายละเอียด · ต่างไม่เกิน ${over} ชิ้นปรับสต๊อกทันที <b>ต่างเกิน ${over} ชิ้นต้องให้ผู้จัดการรับรองก่อนจึงมีผล</b></div></div>
+            ${noRound && canCreate ? '<button type="button" class="btn" id="btn-item-count" style="font-size:15px;padding:12px 18px">🔢 นับรายการ</button>' : ''}
+          </div>
+          ${pend.length ? `
+            <div class="card-pad" style="padding-top:0"><b style="color:var(--bad)">รอผู้จัดการรับรอง (${pend.length})</b>
+              <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · รับรองแล้วสต๊อกจะเปลี่ยนตามผลต่างที่นับได้ (ถ้ามีขาย/รับเข้าหลังนับ ยอดนั้นยังอยู่) · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
+            <div class="table-wrap"><table>
+              <thead><tr><th>เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th class="num">สต๊อกตอนนี้ → หลังรับรอง</th><th></th></tr></thead>
+              <tbody>${pend.map((r, i) => {
+                  const mine = Number(r.counted_by) === Number(itemData.user_id);
+                  const canCertify = itemData.can_approve && (!mine || isAdmin);
+                  return `<tr style="background:var(--bad-bg)">
+                    <td>${escapeHtml(r.doc_no)}<div class="muted" style="font-size:12px">${escapeHtml(r.counter_name || '-')}<br>${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}</div></td>
+                    <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}</div></td>
+                    <td class="num">${r.count_system_qty}</td><td class="num">${r.count_qty}</td>
+                    <td><span class="pill bad">${signed(r.diff_at_count)}</span></td>
+                    <td>${itemDetail(r)}</td>
+                    <td>${itemPhotos(r)}</td>
+                    <td class="num">${r.qty_stock} → <b>${r.stock_if_approved}</b></td>
+                    <td style="white-space:nowrap">
+                      ${canCertify ? `<button type="button" class="btn sm" data-item-ok="${i}">รับรอง</button>` : ''}
+                      ${itemData.can_approve && !mine ? `<button type="button" class="btn secondary sm" data-item-no="${i}">ไม่รับรอง</button>` : ''}
+                      ${mine ? `<button type="button" class="btn secondary sm" data-item-no="${i}">ถอนการนับ</button>` : ''}
+                      ${!canCertify && !mine ? '<span class="pill warn">รอผู้จัดการ</span>' : ''}
+                    </td>
+                  </tr>`;
+              }).join('')}</tbody>
+            </table></div>` : ''}
+          ${noRound && itemData.recent.length ? `
+            <div class="card-pad" style="padding-top:${pend.length ? '12px' : '0'}">
+              <button type="button" class="btn secondary sm" id="btn-item-recent">${showRecent ? '▾' : '▸'} ประวัติการนับรายการ (${itemData.recent.length} ครั้งล่าสุด)</button>
+            </div>
+            ${showRecent ? `<div class="table-wrap"><table>
+              <thead><tr><th>เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th>ผล</th></tr></thead>
+              <tbody>${itemData.recent.map((r) => `<tr>
+                <td>${escapeHtml(r.doc_no)}<div class="muted" style="font-size:12px">${escapeHtml(r.counter_name || '-')}<br>${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}</div></td>
+                <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}</div></td>
+                <td class="num">${r.count_system_qty ?? r.system_qty}</td><td class="num">${r.count_qty ?? r.counted_qty}</td>
+                <td>${r.diff_at_count ? `<span class="pill bad">${signed(r.diff_at_count)}</span>` : '<span class="pill ok">ตรง</span>'}</td>
+                <td>${itemDetail(r)}</td>
+                <td>${itemPhotos(r)}</td>
+                <td>${itemStatus(r)}</td>
+              </tr>`).join('')}</tbody>
+            </table></div>` : ''}` : ''}
+        </section>`;
+    }
+
+    function bindItems(history) {
+        const redraw = () => (current ? draw() : draw(history));
+        container.querySelector('#btn-item-count')?.addEventListener('click', async () => {
+            const open = (await api.get('/stockcounts/open-round').catch(() => ({ data: { open: false } }))).data.open;
+            if (open) {
+                await loadList();
+                return;
+            }
+            openMobileCount({ quick: true, stockCount: null, items: [], onClose: () => loadList() });
+        });
+        container.querySelector('#btn-item-recent')?.addEventListener('click', () => {
+            showRecent = !showRecent;
+            redraw();
+        });
+        container.querySelectorAll('[data-item-ok]').forEach((b) => b.addEventListener('click', () => certifyItem(itemData.pending[Number(b.dataset.itemOk)], redraw)));
+        container.querySelectorAll('[data-item-no]').forEach((b) => b.addEventListener('click', () => rejectItem(itemData.pending[Number(b.dataset.itemNo)], redraw)));
+    }
+
+    async function certifyItem(r, redraw) {
+        const note = await promptDialog(
+            `${r.name}: ${r.counter_name || '-'} นับได้ ${r.count_qty} ในระบบตอนนับ ${r.count_system_qty} (${signed(r.diff_at_count)}) สาเหตุ: ${r.reason_label || '-'} — ${r.diff_detail || ''}\n\nรับรองแล้วสต๊อกจะเปลี่ยนจาก ${r.qty_stock} เป็น ${r.stock_if_approved} ชิ้น`,
+            { title: `รับรองการนับ ${r.doc_no}?`, okText: 'รับรองและปรับสต๊อก', placeholder: 'ความเห็นผู้รับรอง (ถ้ามี) เช่น ตรวจนับซ้ำแล้วตรงกัน', multiline: true }
+        );
+        if (note === null) return;
+        try {
+            const res = (await api.post(`/stockcounts/items/${r.id}/approve`, { note })).data;
+            notice = `รับรอง ${res.doc_no} แล้ว — สต๊อก ${r.name} เปลี่ยนจาก ${res.stock_before} เป็น ${res.stock_after} ชิ้น`;
+            error = null;
+        } catch (e) {
+            error = e.message;
+            notice = null;
+        }
+        await loadItems();
+        redraw();
+    }
+
+    async function rejectItem(r, redraw) {
+        const mine = Number(r.counted_by) === Number(itemData.user_id);
+        const reason = await promptDialog(
+            mine ? `ถอนการนับ ${r.name} (${signed(r.diff_at_count)}) สต๊อกจะไม่เปลี่ยน` : `ไม่รับรองการนับ ${r.name} ของ ${r.counter_name || '-'} (${signed(r.diff_at_count)}) สต๊อกจะไม่เปลี่ยน`,
+            { title: `${mine ? 'ถอนการนับ' : 'ไม่รับรองการนับ'} ${r.doc_no}?`, okText: mine ? 'ถอนการนับ' : 'ไม่รับรอง', placeholder: 'เหตุผล (ต้องระบุ) เช่น ให้นับใหม่อีกครั้ง', required: 'กรุณาระบุเหตุผล', multiline: true, danger: true }
+        );
+        if (reason === null) return;
+        try {
+            const res = (await api.post(`/stockcounts/items/${r.id}/reject`, { reason })).data;
+            notice = `${mine ? 'ถอนการนับ' : 'ไม่รับรองการนับ'} ${res.doc_no} แล้ว — สต๊อกไม่เปลี่ยน`;
+            error = null;
+        } catch (e) {
+            error = e.message;
+            notice = null;
+        }
+        await loadItems();
+        redraw();
     }
 
     function matchesWords(it) {

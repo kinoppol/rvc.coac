@@ -50,7 +50,7 @@ async function request(method, path, body) {
 
     const data = await res.json();
     if (!res.ok) {
-        throw Object.assign(new Error(data.error || 'เกิดข้อผิดพลาด'), { status: res.status });
+        throw Object.assign(new Error(data.error || 'เกิดข้อผิดพลาด'), { status: res.status, data });
     }
     return data;
 }
