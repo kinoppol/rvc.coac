@@ -97,6 +97,67 @@ class MobileController
         return $this->json($response, ['ok' => true]);
     }
 
+    /**
+     * POST /api/auth/mobile-web (form: token, role, to, theme) — the app opens the full web system in its
+     * own browser view, signed in as the device's owner without a password. The token travels in the
+     * POST body (never the URL) to the same server it is sent to on every API call. The session
+     * remembers the device: once the device is unpaired or the account closed, AuthMiddleware ends it.
+     * Lives under /api/auth/ so public/index.php opens the session for writing.
+     */
+    public function openWeb(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $db = Db::connection();
+        try {
+            $device = $this->devices()->byToken(trim((string) ($body['token'] ?? '')));
+        } catch (\PDOException $e) {
+            if (!MobileDeviceService::notMigrated($e)) {
+                throw $e;
+            }
+            return $this->webPage($response, 503, MobileDeviceService::NOT_MIGRATED);
+        }
+        if (!$device) {
+            return $this->webPage($response, 401, 'อุปกรณ์นี้ถูกยกเลิกการจับคู่ กรุณาจับคู่ใหม่');
+        }
+        $users = new UserRepo($db);
+        $user = $users->find((int) $device['user_id']);
+        $roles = $user && UserRepo::canSignIn($user) ? $users->rolesOf($user) : [];
+        if (!$roles) {
+            return $this->webPage($response, 403, 'บัญชีผู้ใช้ของอุปกรณ์นี้ปิดอยู่หรือถูกระงับ กรุณาติดต่อผู้ดูแลระบบ');
+        }
+        $role = (string) ($body['role'] ?? '');
+
+        session_regenerate_id(true);
+        $_SESSION = [
+            'user_id' => (int) $user['id'],
+            'csrf_token' => bin2hex(random_bytes(32)),
+            'active_role' => in_array($role, $roles, true) ? $role : $roles[0],
+            'auth_via' => 'mobile-app',
+            'mobile_device_id' => (int) $device['id'],
+        ];
+        $this->devices()->touch($device, $this->ip($request), $request->getHeaderLine('X-App-Version'));
+
+        $to = (string) ($body['to'] ?? '');
+        $to = preg_match('#^[a-z0-9-]{1,40}(\?[A-Za-z0-9=&_.%-]{0,200})?$#', $to) ? $to : 'dashboard';
+        $theme = in_array($body['theme'] ?? '', ['light', 'dark', 'auto'], true) ? $body['theme'] : 'auto';
+        $app = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/index.php')), '/') . '/';
+        return $response->withHeader('Location', $app . '?app_theme=' . $theme . '#/' . $to)
+            ->withHeader('Cache-Control', 'no-store')->withStatus(303);
+    }
+
+    /** A plain page for the app's browser view when it cannot be signed in. */
+    private function webPage(Response $response, int $status, string $message): Response
+    {
+        $m = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+        $response->getBody()->write(<<<HTML
+            <!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>เข้าสู่ระบบไม่ได้</title></head>
+            <body style="font-family:sans-serif;padding:32px 20px;text-align:center;color:#1e293b">
+            <h2 style="color:#1d4ed8">เปิดระบบจัดการร้านไม่ได้</h2><p>{$m}</p></body></html>
+            HTML);
+        return $response->withHeader('Content-Type', 'text/html; charset=utf-8')->withHeader('Cache-Control', 'no-store')->withStatus($status);
+    }
+
     // ---- web: the signed-in user's own devices ----
 
     public function myDevices(Request $request, Response $response): Response

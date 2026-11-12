@@ -126,7 +126,17 @@ function stopQr() {
     qrTimers = [];
 }
 
+// Inside the mobile app (its browser view adds window.CoacApp): the app signs in again with the device's
+// token instead of showing the login form; on a closed or unpaired device the app shows why.
+function appReauth() {
+    if (!window.CoacApp?.reauth) return false;
+    root.innerHTML = '<div class="auth-wrap"><div class="auth-card"><p class="sub">กำลังเข้าสู่ระบบผ่านแอป...</p></div></div>';
+    window.CoacApp.reauth(location.hash.replace(/^#\/?/, ''));
+    return true;
+}
+
 async function showLogin(message) {
+    if (appReauth()) return;
     try {
         const m = await api.get('/auth/methods');
         loginMethods = m.login_methods || 'both';
@@ -267,6 +277,8 @@ function onAuthenticated(data) {
         cycleTheme();
         updateThemeButton();
     });
+    // Signed in by the mobile app: it stays signed in while the device is paired (unpair it in the app instead).
+    if (data.via_app && !data.impersonator) document.getElementById('logout-btn').style.display = 'none';
     document.getElementById('logout-btn').addEventListener('click', async () => {
         let restored = false;
         try { restored = !!(await api.post('/auth/logout')).restored; } catch (e) { /* ignore */ }
@@ -298,7 +310,7 @@ function onAuthenticated(data) {
     }
 }
 
-window.addEventListener('app:unauthorized', () => { unmountAssistant(); renderLogin('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่'); });
+window.addEventListener('app:unauthorized', () => { unmountAssistant(); if (!appReauth()) renderLogin('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่'); });
 
 initResponsive();
 initKeyboard();

@@ -249,6 +249,8 @@ class AuthController
             'csrf_token' => $_SESSION['csrf_token'] ?? null,
             'impersonator' => $impersonator,
             'timezone' => date_default_timezone_get(),
+            // Opened inside the mobile app (MobileController::openWeb): the app signs in again by itself.
+            'via_app' => !empty($_SESSION['mobile_device_id']),
         ];
     }
 }

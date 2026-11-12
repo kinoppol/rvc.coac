@@ -26,6 +26,13 @@ class AuthMiddleware implements MiddlewareInterface
             return $this->deny(401, 'บัญชีผู้ใช้ไม่พร้อมใช้งาน');
         }
 
+        // Opened from the mobile app (MobileController::openWeb): lasts only while that device stays paired to its owner
+        // (the admin, while impersonating).
+        if (!empty($_SESSION['mobile_device_id']) && !$this->deviceStillPaired((int) $_SESSION['mobile_device_id'], (int) ($_SESSION['impersonator_id'] ?? $user['id']))) {
+            $this->endSession();
+            return $this->deny(401, 'อุปกรณ์นี้ถูกยกเลิกการจับคู่ กรุณาจับคู่ใหม่');
+        }
+
         // Users with a staff role and a consignor record switch between the two;
         // the chosen one becomes $user['role'] so RoleGuard checks it as usual.
         $roles = $userRepo->rolesOf($user);
@@ -46,12 +53,7 @@ class AuthMiddleware implements MiddlewareInterface
         if (!empty($_SESSION['impersonator_id'])) {
             $admin = $userRepo->find((int) $_SESSION['impersonator_id']);
             if (!$admin || !UserRepo::canSignIn($admin) || $admin['role'] !== 'admin') {
-                // Most requests read the session and release it (public/index.php): reopen it to clear it.
-                if (session_status() !== PHP_SESSION_ACTIVE) {
-                    session_start();
-                }
-                $_SESSION = [];
-                session_write_close();
+                $this->endSession();
                 return $this->deny(401, 'กรุณาเข้าสู่ระบบ');
             }
             $request = $request->withAttribute('impersonator', [
@@ -60,6 +62,27 @@ class AuthMiddleware implements MiddlewareInterface
             ]);
         }
         return $handler->handle($request);
+    }
+
+    private function deviceStillPaired(int $deviceId, int $userId): bool
+    {
+        try {
+            $stmt = Db::connection()->prepare("SELECT 1 FROM mobile_devices WHERE id = ? AND user_id = ? AND status = 'active'");
+            $stmt->execute([$deviceId, $userId]);
+            return (bool) $stmt->fetchColumn();
+        } catch (\PDOException $e) {
+            return false;
+        }
+    }
+
+    /** Most requests read the session and release it (public/index.php): reopen it to clear it. */
+    private function endSession(): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+        $_SESSION = [];
+        session_write_close();
     }
 
     private function deny(int $status, string $message): Response

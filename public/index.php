@@ -222,6 +222,8 @@ $app->group('/api/device/v1', function ($group) {
 // ---- Mobile app for everyone who is not selling (docs/android-mobile-app.md): paired by its owner on the web ----
 $app->post('/api/mobile/v1/pair/start', [MobileController::class, 'pairStart']);
 $app->post('/api/mobile/v1/pair/status', [MobileController::class, 'pairStatus']);
+// The app opens the full web system signed in as the device's owner (its token in the POST body).
+$app->post('/api/auth/mobile-web', [MobileController::class, 'openWeb']);
 $app->group('/api/mobile/v1', function ($group) {
     $group->get('/me', [MobileController::class, 'me']);
     $group->get('/sync', [MobileController::class, 'sync']);

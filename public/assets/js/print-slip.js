@@ -648,6 +648,11 @@ export function printClosingReport(r, { weekday, status, send }) {
 }
 
 function printHtml(html, { fitPage = false } = {}) {
+    // Inside the mobile app the page goes to Android's print service (print or save as PDF).
+    if (window.CoacApp?.printHtml) {
+        window.CoacApp.printHtml(html, !!fitPage);
+        return;
+    }
     const frame = document.createElement('iframe');
     frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';

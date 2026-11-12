@@ -17,6 +17,17 @@ export function applyTheme(theme) {
 }
 
 export function initTheme() {
+    // Opened from the mobile app (MobileController::openWeb): follow the app's light/dark choice, then tidy the address.
+    const params = new URLSearchParams(location.search);
+    const fromApp = params.get('app_theme');
+    if (ORDER.includes(fromApp)) {
+        try { localStorage.setItem(KEY, fromApp); } catch (e) { /* private mode */ }
+        params.delete('app_theme');
+        const q = params.toString();
+        history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash);
+        applyTheme(fromApp);
+        return;
+    }
     applyTheme(currentTheme());
 }
 
