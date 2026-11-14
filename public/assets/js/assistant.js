@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { escapeHtml, money } from './util.js';
 import { uploadImage, attachmentUrl, imagesFromClipboard } from './images.js';
 import { markdown } from './markdown.js';
+import { choiceDialog } from './dialog.js';
 
 const PURCHASE_DRAFT_KEY = 'purchase.draft'; // read by views/purchase.js
 const MAX_PHOTOS = 10;
@@ -110,11 +111,14 @@ export async function refreshAssistantModels() {
 
 // ---------------- Rendering ----------------
 
-function messageHtml(m) {
+function messageHtml(m, mi) {
     if (m.role === 'user') {
         const thumbs = (m.attachments || []).map((t, i) => `
           <a href="${escapeHtml(attachmentUrl(t))}" target="_blank" rel="noopener" class="ai-thumb"><img src="${escapeHtml(attachmentUrl(t))}" alt="รูปที่ ${i + 1}"></a>`).join('');
-        const docs = (m.documents || []).map((d) => `<span class="ai-doc">📄 ${escapeHtml(d.name)}</span>`).join('');
+        // Attached .md files and text read from photos by OCR: open to view, or download as a file.
+        const docs = (m.documents || []).map((d, di) => `<span class="ai-doc">
+            <button type="button" class="ai-doc-open" data-view-doc="${mi}:${di}" title="ดูรายละเอียด">📄 ${escapeHtml(d.name)}</button>
+            <button type="button" data-download-doc="${mi}:${di}" title="ดาวน์โหลดไฟล์ Markdown">⬇</button></span>`).join('');
         return `<div class="ai-msg user">${thumbs ? `<div class="ai-thumbs">${thumbs}</div>` : ''}${docs ? `<div class="ai-thumbs">${docs}</div>` : ''}${m.content ? `<div class="ai-bubble">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
     }
     if (m.role !== 'assistant') return '';
@@ -198,7 +202,7 @@ function render() {
     const atBottom = !prevScroll || prevScroll.scrollHeight - prevScroll.scrollTop - prevScroll.clientHeight < 40;
 
     const speechSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-    const visible = s.messages.map(messageHtml).join('');
+    const visible = s.messages.map((m, i) => messageHtml(m, i)).join('');
 
     el.innerHTML = `
       <button type="button" class="ai-fab ${s.open ? 'open' : ''}" id="ai-fab" aria-label="ผู้ช่วย AI" title="ผู้ช่วย AI">${s.open ? ICON_CLOSE : ICON_SPARK}</button>
@@ -324,6 +328,8 @@ function bind() {
         s.photos.splice(Number(b.dataset.unphoto), 1);
         render();
     }));
+    el.querySelectorAll('[data-view-doc]').forEach((b) => b.addEventListener('click', () => viewDocument(docAt(b.dataset.viewDoc))));
+    el.querySelectorAll('[data-download-doc]').forEach((b) => b.addEventListener('click', () => downloadDocument(docAt(b.dataset.downloadDoc))));
     el.querySelectorAll('[data-edit-form]').forEach((b) => b.addEventListener('click', () => editInForm(b.dataset.editForm)));
     el.querySelectorAll('[data-suggest]').forEach((b) => b.addEventListener('click', () => send(b.dataset.suggest)));
     el.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', () => decide(b.dataset.approve, true)));
@@ -366,6 +372,55 @@ function bind() {
             startListening();
         }
     });
+}
+
+// ---------------- Attached documents ----------------
+
+function docAt(ref) {
+    const [mi, di] = String(ref).split(':').map(Number);
+    return ctx.state.messages[mi]?.documents?.[di] || null;
+}
+
+function docFileName(doc) {
+    const name = doc.name || 'document.md';
+    return /\.(md|markdown|txt)$/i.test(name) ? name : `${name}.md`;
+}
+
+function downloadDocument(doc) {
+    if (!doc) return;
+    const url = URL.createObjectURL(new Blob([doc.content], { type: 'text/markdown;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = docFileName(doc);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Shows a document (e.g. the Markdown read from receipt photos by OCR) rendered and as source. */
+async function viewDocument(doc) {
+    if (!doc) return;
+    const lines = doc.content.split('\n').length;
+    const html = `
+      <div class="ai-doc-meta">${doc.ocr ? 'อ่านจากรูปใบเสร็จด้วย OCR · ' : ''}${doc.content.length.toLocaleString()} ตัวอักษร · ${lines.toLocaleString()} บรรทัด</div>
+      <div class="ai-doc-view">${markdown(doc.content)}</div>
+      <details class="ai-doc-source"><summary>ข้อความ Markdown ต้นฉบับ</summary><pre>${escapeHtml(doc.content)}</pre></details>`;
+    const pick = await choiceDialog('', [
+        { key: 'download', label: '⬇ ดาวน์โหลด .md' },
+        { key: 'copy', label: '📋 คัดลอกข้อความ' },
+    ], { title: doc.name, cancelText: 'ปิด', html, width: Math.min(760, window.innerWidth - 32) });
+    if (pick === 'download') {
+        downloadDocument(doc);
+    } else if (pick === 'copy') {
+        try {
+            await navigator.clipboard.writeText(doc.content);
+            ctx.state.notice = 'คัดลอกข้อความ Markdown แล้ว';
+        } catch (e) {
+            ctx.state.notice = 'คัดลอกไม่สำเร็จ — ใช้ปุ่มดาวน์โหลดแทน';
+        }
+        render();
+    }
 }
 
 // ---------------- Waiting indicator ----------------

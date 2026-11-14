@@ -122,8 +122,8 @@ export function confirmDialog(message, { title = 'ยืนยันการท
 }
 
 /** Buttons to pick from ({ key, label }); resolves to the key picked, or null when cancelled. */
-export function choiceDialog(message, choices, { title = 'เลือก', cancelText = 'ยกเลิก', html = '' } = {}) {
-    return open({ title, message, okText: null, cancelText, tone: 'info', html, choices }).then((v) => (typeof v === 'string' ? v : null));
+export function choiceDialog(message, choices, { title = 'เลือก', cancelText = 'ยกเลิก', html = '', width = 0 } = {}) {
+    return open({ title, message, okText: null, cancelText, tone: 'info', html, width, choices }).then((v) => (typeof v === 'string' ? v : null));
 }
 
 /**
