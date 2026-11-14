@@ -78,7 +78,8 @@ class AttachmentService
         if (!mb_check_encoding($content, 'UTF-8')) {
             throw new \RuntimeException('ไฟล์ต้องเป็นข้อความ UTF-8');
         }
-        $name = preg_replace('/[^\p{L}\p{N} ._()-]/u', '', $name) ?: 'receipt.md';
+        // \p{M}: Thai vowel and tone marks are combining characters, not letters.
+        $name = preg_replace('/[^\p{L}\p{M}\p{N} ._()-]/u', '', $name) ?: 'receipt.md';
         if (!preg_match('/\.(md|markdown|txt)$/i', $name)) {
             $name .= '.md';
         }

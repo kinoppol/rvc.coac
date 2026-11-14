@@ -552,7 +552,8 @@ class AiController
                     if (!is_array($d) || trim((string) ($d['content'] ?? '')) === '') {
                         continue;
                     }
-                    $name = preg_replace('/[^\p{L}\p{N} ._()-]/u', '', (string) ($d['name'] ?? 'file.md')) ?: 'file.md';
+                    // \p{M}: Thai vowel and tone marks are combining characters, not letters.
+                    $name = preg_replace('/[^\p{L}\p{M}\p{N} ._()-]/u', '', (string) ($d['name'] ?? 'file.md')) ?: 'file.md';
                     $docs[] = ['name' => mb_substr($name, 0, 120), 'content' => mb_substr((string) $d['content'], 0, self::MAX_DOC_CHARS)]
                         + (!empty($d['imported']) ? ['imported' => true] : [])
                         + (!empty($d['ocr']) ? ['ocr' => true] : []);
