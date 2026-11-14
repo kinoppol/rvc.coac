@@ -85,42 +85,66 @@ class AiClient
         return $message;
     }
 
+    /** Index of the /ocr request shape the server accepted, reused for the next photo. */
+    private ?int $ocrShape = null;
+
     /**
      * Reads an image with an OCR model and returns its text as Markdown.
-     * Tries the Mistral-style /ocr endpoint (the de-facto standard), a plain
-     * {model, image} body if the server rejects that shape, and finally a chat
-     * completion with the image for servers that expose OCR models via chat.
+     * Providers don't agree on the /ocr body, so the common shapes are tried
+     * in turn (JSON with a data URL, then a multipart file upload) until one is
+     * accepted. Only when the server has no /ocr route at all is the model
+     * asked through chat/completions.
      */
     public function ocr(string $model, string $dataUrl): string
     {
         $prompt = 'ถอดข้อความทั้งหมดในรูปใบเสร็จนี้เป็น Markdown ให้ตรงตามต้นฉบับ ตารางรายการสินค้าให้เป็นตาราง Markdown (| ... |) '
             . 'ห้ามสรุป ห้ามแปล ห้ามเพิ่มข้อความอื่น ตอบเฉพาะ Markdown';
-        $mistral = ['model' => $model, 'document' => ['type' => 'image_url', 'image_url' => $dataUrl]];
-        $plain = ['model' => $model, 'image' => $dataUrl, 'prompt' => $prompt];
-        $chat = ['model' => $model, 'temperature' => 0, 'messages' => [['role' => 'user', 'content' => [
-            ['type' => 'text', 'text' => $prompt],
-            ['type' => 'image_url', 'image_url' => ['url' => $dataUrl]],
-        ]]]];
-        $shapeRejected = [400, 415, 422];
-        $missing = [404, 405];
+        [$mime, $base64] = preg_match('#^data:([^;,]+);base64,(.*)$#s', $dataUrl, $m) ? [$m[1], $m[2]] : ['image/jpeg', ''];
+        $ext = ['image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'][$mime] ?? 'jpg';
+        $file = fn () => new \CURLStringFile((string) base64_decode($base64), 'receipt.' . $ext, $mime);
+        $shapes = [
+            // TokenMe (Paxa OCR): raw base64 in "document", output format chosen by "output".
+            fn () => ['model' => $model, 'document' => $base64, 'output' => 'markdown'],
+            fn () => ['model' => $model, 'document' => ['type' => 'image_url', 'image_url' => $dataUrl]],
+            fn () => ['model' => $model, 'document' => ['type' => 'image_url', 'image_url' => ['url' => $dataUrl]]],
+            fn () => ['model' => $model, 'image' => $dataUrl],
+            fn () => ['model' => $model, 'image_url' => $dataUrl],
+            fn () => ['model' => $model, 'image' => $base64],
+            fn () => ['model' => $model, 'file' => $file()],
+            fn () => ['model' => $model, 'image' => $file()],
+            fn () => ['model' => $model, 'document' => $file()],
+        ];
+        $order = array_keys($shapes);
+        if ($this->ocrShape !== null) {
+            $order = array_merge([$this->ocrShape], array_diff($order, [$this->ocrShape]));
+        }
 
-        try {
-            $data = $this->request('POST', '/ocr', $mistral);
-        } catch (AiHttpException $e) {
-            if (in_array($e->status, $shapeRejected, true)) {
-                try {
-                    $data = $this->request('POST', '/ocr', $plain);
-                } catch (AiHttpException $e2) {
-                    if (!in_array($e2->status, array_merge($shapeRejected, $missing), true)) {
-                        throw $e2;
-                    }
-                    $data = $this->request('POST', '/chat/completions', $chat);
+        $data = null;
+        $errors = [];
+        foreach ($order as $i) {
+            try {
+                $data = $this->request('POST', '/ocr', $shapes[$i]());
+                $this->ocrShape = $i;
+                break;
+            } catch (AiHttpException $e) {
+                if (in_array($e->status, [404, 405], true)) {
+                    $errors = null; // no /ocr route: ask the model through chat instead
+                    break;
                 }
-            } elseif (in_array($e->status, $missing, true)) {
-                $data = $this->request('POST', '/chat/completions', $chat);
-            } else {
-                throw $e;
+                if (!in_array($e->status, [400, 415, 422], true)) {
+                    throw $e;
+                }
+                $errors[$e->getMessage()] = true; // body shape rejected: try the next one
             }
+        }
+        if ($data === null && $errors === null) {
+            $data = $this->request('POST', '/chat/completions', ['model' => $model, 'temperature' => 0, 'messages' => [['role' => 'user', 'content' => [
+                ['type' => 'text', 'text' => $prompt],
+                ['type' => 'image_url', 'image_url' => ['url' => $dataUrl]],
+            ]]]]);
+        }
+        if ($data === null) {
+            throw new \RuntimeException('endpoint /ocr ของผู้ให้บริการไม่รับรูปแบบคำขอที่ระบบรู้จัก — ' . implode(' / ', array_slice(array_keys($errors), 0, 3)));
         }
         $text = trim(self::ocrText($data));
         if ($text === '') {
@@ -151,15 +175,17 @@ class AiClient
                 }
             }
         }
-        foreach (['markdown', 'md', 'text', 'content', 'output', 'result'] as $key) {
+        // The longest candidate wins, so echoed options such as "output":"markdown" are never taken for the text.
+        $best = '';
+        foreach (['markdown', 'md', 'text', 'content', 'output', 'result', 'document', 'data'] as $key) {
             if (isset($data[$key])) {
                 $text = self::ocrText($data[$key]);
-                if (trim($text) !== '') {
-                    return $text;
+                if (mb_strlen(trim($text)) > mb_strlen(trim($best))) {
+                    $best = $text;
                 }
             }
         }
-        return '';
+        return $best;
     }
 
     private function request(string $method, string $path, ?array $body = null): array
@@ -184,7 +210,9 @@ class AiClient
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_FOLLOWLOCATION => false,
         ]);
-        if ($body !== null) {
+        if ($body !== null && array_filter($body, fn ($v) => $v instanceof \CURLStringFile)) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body); // multipart/form-data upload
+        } elseif ($body !== null) {
             $headers[] = 'Content-Type: application/json';
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_UNICODE));
         }
