@@ -70,7 +70,7 @@ export async function mountAssistant({ user, permissions = [], navigate }) {
         state: {
             open: false, models: [], defaultId: null, modelId: null, loading: false, error: null,
             messages: [], pending: [], decisions: {}, listening: false, canManage: false,
-            photos: [], documents: [], uploading: false, canPurchase: false, notice: null,
+            photos: [], documents: [], uploading: false, canPurchase: false, notice: null, ocr: null,
         },
     };
     ctx.state.messages = load(sessionStorage, 'messages', []);
@@ -96,9 +96,11 @@ export async function refreshAssistantModels() {
         const res = await api.get('/ai/models');
         s.models = res.data;
         s.defaultId = res.default_id ?? null;
+        s.ocr = res.ocr || null;
     } catch (e) {
         s.models = [];
         s.defaultId = null;
+        s.ocr = null;
     }
     // 'auto' (default) lets the server use the admin's default model, else the cheapest that can handle each message.
     const saved = load(localStorage, 'modelChoice', 'auto');
@@ -163,6 +165,11 @@ function detailsHtml(det) {
         ${diff ? `<div class="ai-detail-warn">⚠ ยอดไม่ตรงกับใบเสร็จ ต่าง ฿${money(diff)}</div>` : ''}
         ${(det.warnings || []).map((w) => `<div class="ai-detail-warn">⚠ ${escapeHtml(w)}</div>`).join('')}
       </div>`;
+}
+
+/** Photos can be sent: the OCR model reads them into text first, or the chat model reads images itself. */
+function canReadPhotos() {
+    return !!ctx.state.ocr || !!currentModel()?.supports_vision;
 }
 
 function currentModel() {
@@ -231,8 +238,8 @@ function render() {
           ${s.documents.map((d, i) => `
             <div class="ai-doc">📄 ${escapeHtml(d.name)} <span class="muted">${Math.max(1, Math.round(d.size / 1024))} KB</span>
               <button type="button" data-undoc="${i}" title="เอาไฟล์ออก">✕</button></div>`).join('')}
-          ${s.documents.length && s.canPurchase ? `
-            <div class="ai-doc-kind" role="radiogroup" aria-label="ไฟล์ที่แนบเป็นเอกสารแบบไหน">ไฟล์นี้เป็น
+          ${(s.documents.length || (s.photos.length && s.ocr)) && s.canPurchase ? `
+            <div class="ai-doc-kind" role="radiogroup" aria-label="เอกสารที่แนบเป็นแบบไหน">${s.documents.length ? 'ไฟล์นี้เป็น' : 'รูปนี้เป็น'}
               <label><input type="radio" name="ai-doc-kind" value="receipt" ${s.docKind !== 'order' ? 'checked' : ''}> ใบเสร็จ <small>(ได้รับของแล้ว เข้าสต๊อก)</small></label>
               <label><input type="radio" name="ai-doc-kind" value="order" ${s.docKind === 'order' ? 'checked' : ''}> ใบสั่งของ <small>(รอร้านมาส่ง ยังไม่เข้าสต๊อก)</small></label>
             </div>` : ''}
@@ -241,6 +248,7 @@ function render() {
               <button type="button" data-unphoto="${i}" title="เอารูปออก">✕</button></div>`).join('')}
           ${s.uploading ? '<div class="ai-photo ai-photo-loading">กำลังอัปโหลด...</div>' : ''}
           ${s.photos.length > 1 ? '<div class="ai-photo-hint">หลายรูป = ใบเสร็จใบเดียวกัน เรียงจากบนลงล่าง</div>' : ''}
+          ${s.photos.length && s.ocr ? `<div class="ai-photo-hint">อ่านรูปเป็นข้อความด้วย OCR (${escapeHtml(s.ocr.model)}) แล้วส่งต่อให้โมเดลที่เลือก</div>` : ''}
         </div>` : ''}
         <form class="ai-input-row" id="ai-form">
           ${hasModels ? `
@@ -300,7 +308,7 @@ function bind() {
     el.querySelector('#ai-model')?.addEventListener('change', (e) => {
         s.modelId = e.target.value === 'auto' ? 'auto' : Number(e.target.value);
         save(localStorage, 'modelChoice', s.modelId);
-        s.notice = s.photos.length && !currentModel()?.supports_vision
+        s.notice = s.photos.length && !canReadPhotos()
             ? 'โมเดลนี้อ่านรูปไม่ได้ — รูปที่แนบไว้จะส่งไม่ได้ กรุณาเลือกโมเดลที่มี 🖼'
             : null;
         render();
@@ -342,7 +350,7 @@ function bind() {
         e.preventDefault();
         const text = input.value.trim();
         if ((!text && !s.photos.length && !s.documents.length) || s.loading || s.uploading) return;
-        if (s.photos.length && !currentModel()?.supports_vision) {
+        if (s.photos.length && !canReadPhotos()) {
             s.error = 'โมเดลที่เลือกอ่านรูปไม่ได้ กรุณาเลือกโมเดลที่มี 🖼 ก่อนส่ง';
             render();
             return;
@@ -438,9 +446,14 @@ async function send(text) {
     s.decisions = {};
     s.notice = null;
     const msg = { role: 'user', content: text };
+    const ocrPhotos = s.photos.length > 0 && !!s.ocr;
+    const photoKind = s.canPurchase && s.docKind === 'order' ? 'order' : 'receipt';
     if (s.photos.length) {
         msg.attachments = s.photos.map((p) => p.token);
-        if (!text) msg.content = s.canPurchase ? 'นำเข้าข้อมูลการซื้อสินค้าเข้าร้านจากใบเสร็จนี้' : 'อ่านข้อมูลจากรูปนี้';
+        if (!text) {
+            msg.content = !s.canPurchase ? 'อ่านข้อมูลจากรูปนี้'
+                : photoKind === 'order' && ocrPhotos ? 'นำเข้าใบสั่งของจากรูปที่แนบ (รอร้านมาส่ง)' : 'นำเข้าข้อมูลการซื้อสินค้าเข้าร้านจากใบเสร็จนี้';
+        }
         s.photos = [];
     }
     if (s.documents.length) {
@@ -452,8 +465,58 @@ async function send(text) {
         s.docKind = 'receipt';
     }
     s.messages.push(msg);
+    if (ocrPhotos) {
+        if (!msg.docKind) msg.docKind = photoKind;
+        s.docKind = 'receipt';
+        const ok = await readPhotosWithOcr(msg);
+        if (!ok) return;
+    }
     if (msg.documents && s.canPurchase && await importReceipts(msg)) return;
     await callServer({});
+}
+
+/**
+ * Reads the message's photos into Markdown with the OCR model and attaches the
+ * text as a document, so the chosen chat model (vision or not) works on text.
+ * The photos stay on the message and are saved with the purchase as evidence.
+ * Returns false when the turn can't go on (error shown).
+ */
+async function readPhotosWithOcr(msg) {
+    const s = ctx.state;
+    const mine = ctx;
+    const count = msg.attachments.length;
+    s.loading = true;
+    s.error = null;
+    s.progress = { text: `กำลังอ่านรูปใบเสร็จ${count > 1 ? ` ${count} รูป` : ''}เป็นข้อความด้วย OCR (${s.ocr.model})...`, done: [] };
+    startWaiting();
+    persist();
+    render();
+    let ok = true;
+    try {
+        const res = await api.post('/ai/ocr', { attachments: msg.attachments });
+        if (ctx !== mine) return false;
+        msg.documents = [...(msg.documents || []), {
+            name: count > 1 ? `ใบเสร็จจากรูป ${count} รูป (OCR).md` : 'ใบเสร็จจากรูป (OCR).md',
+            content: res.markdown,
+            ocr: true,
+        }];
+        s.progress.done.push({ icon: '✓', text: `อ่านรูปเป็นข้อความแล้ว (${res.markdown.length.toLocaleString()} ตัวอักษร) ส่งต่อให้ ${modelLabel()}` });
+    } catch (err) {
+        if (ctx !== mine) return false;
+        if (currentModel()?.supports_vision) {
+            // The chat model can still read the photos itself.
+            s.notice = `อ่านด้วย OCR ไม่สำเร็จ (${err.message}) — ส่งรูปให้ ${modelLabel()} อ่านเองแทน`;
+        } else {
+            s.error = `${err.message} — ลองส่งใหม่ หรือเลือกโมเดลที่อ่านรูปได้ (มี 🖼)`;
+            ok = false;
+        }
+    }
+    s.loading = false;
+    stopWaiting();
+    if (!ok) s.progress = null;
+    persist();
+    render();
+    return ok;
 }
 
 // ---------------- Step-by-step .md receipt import ----------------
@@ -468,7 +531,7 @@ async function importReceipts(msg) {
     const mine = ctx;
     s.loading = true;
     s.error = null;
-    s.progress = { text: 'กำลังแยกตารางรายการสินค้าในไฟล์...', done: [] };
+    s.progress = { text: 'กำลังแยกตารางรายการสินค้าในไฟล์...', done: s.progress?.done || [] };
     startWaiting();
     render();
     const step = (text) => { s.progress.text = text; render(); };
@@ -484,7 +547,7 @@ async function importReceipts(msg) {
     try {
         const plans = [];
         for (const doc of msg.documents) {
-            const plan = await api.post('/ai/receipt/plan', { content: doc.content, file_name: doc.name });
+            const plan = await api.post('/ai/receipt/plan', { content: doc.content, file_name: doc.name, ocr: !!doc.ocr });
             if (ctx !== mine) return true;
             if (plan.rows.length) plans.push({ doc, plan });
         }
@@ -511,14 +574,17 @@ async function importReceipts(msg) {
             }
             step(`${prefix}กำลังสรุปยอดทั้งหมด (ร้านค้า เลขที่ใบเสร็จ ส่วนลด ยอดสุทธิ)...`);
             const sum = await api.post('/ai/receipt/summary', {
-                model: s.modelId, header: plan.header, footer: plan.footer, file_name: doc.name, item_count: items.length,
+                model: s.modelId, header: plan.header, footer: plan.footer, file_name: doc.name, item_count: items.length, ocr: !!doc.ocr,
             });
             if (ctx !== mine) return true;
             if (sum.error) warnings.push(`อ่านยอดสรุปจากไฟล์ไม่สำเร็จ (${sum.error}) กรุณาตรวจชื่อร้านและยอดสุทธิเอง`);
             done(sum.summary
                 ? `${prefix}สรุปยอด: ${sum.summary.supplier_name || 'ไม่ระบุร้าน'} สุทธิ ฿${money(sum.summary.total)}`
                 : `${prefix}อ่านยอดสรุปไม่สำเร็จ`, sum.summary ? '✓' : '⚠');
-            receipts.push({ file_name: doc.name, attachment: plan.attachment, items, summary: sum.summary, warnings });
+            receipts.push({
+                file_name: doc.name, attachment: plan.attachment, items, summary: sum.summary, warnings,
+                photos: doc.ocr ? msg.attachments || [] : [],
+            });
             doc.imported = true;
         }
 
@@ -600,8 +666,8 @@ async function addPhotos(files) {
         render();
         return;
     }
-    // Photos need a vision model: switch to one automatically, or explain how to enable one.
-    if (!currentModel()?.supports_vision) {
+    // Photos need a vision model (unless the OCR model reads them): switch to one automatically, or explain how to enable one.
+    if (!canReadPhotos()) {
         const vision = s.models.find((m) => m.supports_vision);
         if (!vision) {
             s.error = s.canManage
@@ -666,6 +732,7 @@ async function callServer(approvals) {
     const mine = ctx;
     s.loading = true;
     s.error = null;
+    s.progress = null; // OCR step lines (if any) give way to the chat's own status
     startWaiting();
     render();
     try {

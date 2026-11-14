@@ -41,7 +41,8 @@ class AiReceiptController
         // A receipt file is kept as evidence and filed with the purchase once it is saved.
         $parts['attachment'] = null;
         $parts['attachment_error'] = null;
-        if ($parts['rows']) {
+        // Text read from photos by OCR is not kept: the photos themselves are the evidence.
+        if ($parts['rows'] && empty($body['ocr'])) {
             try {
                 $parts['attachment'] = (new AttachmentService(Db::connection()))
                     ->saveText($content, (string) ($body['file_name'] ?? ''), (int) $request->getAttribute('user')['id'])['token'];
@@ -108,8 +109,9 @@ class AiReceiptController
             (new AiUsageService($db, new SettingsService($db)))->log([
                 'user_id' => (int) $request->getAttribute('user')['id'],
                 'channel' => 'chat',
-                'category' => 'markdown',
-                'prompt' => sprintf('[นำเข้าใบเสร็จ .md แบบแบ่งช่วง] %s (%d รายการ)', mb_substr((string) ($body['file_name'] ?? ''), 0, 120), (int) ($body['item_count'] ?? 0)),
+                // Photos read by OCR were already billed as a receipt read by /ai/ocr.
+                'category' => empty($body['ocr']) ? 'markdown' : 'general',
+                'prompt' => sprintf(empty($body['ocr']) ? '[นำเข้าใบเสร็จ .md แบบแบ่งช่วง] %s (%d รายการ)' : '[นำเข้าใบเสร็จจากรูปที่อ่านด้วย OCR แบบแบ่งช่วง] %s (%d รายการ)', mb_substr((string) ($body['file_name'] ?? ''), 0, 120), (int) ($body['item_count'] ?? 0)),
                 'model_row_id' => (int) $model['id'],
                 'model_name' => $model['model_id'],
                 'provider_name' => $provider['name'],
@@ -138,7 +140,9 @@ class AiReceiptController
             return $denied;
         }
         $body = (array) $request->getParsedBody();
-        $toolbox = new AiToolbox(Db::connection(), $request->getAttribute('user'), $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        $user = $request->getAttribute('user');
+        $toolbox = new AiToolbox(Db::connection(), $user, $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        $attachments = new AttachmentService(Db::connection());
         $calls = [];
         $pending = [];
         $lines = [];
@@ -171,6 +175,11 @@ class AiReceiptController
             if (preg_match('/^[a-f0-9]{32}$/', (string) ($r['attachment'] ?? ''))) {
                 $args['receipt_file'] = $r['attachment'];
             }
+            // Receipt photos read by OCR go with the draft as its evidence (only this user's images).
+            $toolbox->setPhotos(array_column(array_filter(
+                $attachments->ownedBy(array_slice((array) ($r['photos'] ?? []), 0, 10), (int) $user['id']),
+                [AttachmentService::class, 'isImage']
+            ), 'token'));
             $id = 'imp_' . bin2hex(random_bytes(6));
             $calls[] = ['id' => $id, 'type' => 'function', 'function' => ['name' => 'create_purchase', 'arguments' => json_encode($args, JSON_UNESCAPED_UNICODE)]];
             $details = $toolbox->details('create_purchase', $args);

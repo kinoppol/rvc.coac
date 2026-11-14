@@ -218,6 +218,26 @@ class AiProviderRepo
         return $model ? [$this->find((int) $model['provider_id']), $model] : null;
     }
 
+    /**
+     * The OCR model (settings.ai_ocr_model, "<provider_id>:<model_id>") if its
+     * provider is enabled and open to the role. The model need not be enabled
+     * as a chat model: OCR models can't hold a conversation.
+     * @return array{0:array,1:string}|null [provider row, model id]
+     */
+    public function ocrModel(string $role): ?array
+    {
+        $stmt = $this->db->prepare("SELECT setting_value FROM settings WHERE setting_key = 'ai_ocr_model'");
+        $stmt->execute();
+        $parts = explode(':', (string) $stmt->fetchColumn(), 2);
+        if (count($parts) !== 2 || !ctype_digit($parts[0]) || trim($parts[1]) === '') {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT p.* FROM ai_providers p WHERE p.id = ? AND p.enabled = 1 AND ' . self::ROLE_FILTER);
+        $stmt->execute([(int) $parts[0], $role]);
+        $provider = $stmt->fetch();
+        return $provider ? [$provider, trim($parts[1])] : null;
+    }
+
     /** No model chosen: the default model if it can do the job, else the cheapest one that can. */
     public function pickDefault(bool $needVision, string $role): ?array
     {

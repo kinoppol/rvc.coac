@@ -46,7 +46,12 @@ class AiController
         $repo = $this->repo();
         $rows = $repo->enabledModels($role);
         $default = $repo->defaultModel($role);
-        return $this->json($response, ['default_id' => $default ? (int) $default[1]['id'] : null, 'data' => array_map(fn ($m) => [
+        $ocr = $repo->ocrModel($role);
+        return $this->json($response, [
+            'default_id' => $default ? (int) $default[1]['id'] : null,
+            // Receipt photos are read into Markdown by this model first, so any chat model can import them.
+            'ocr' => $ocr ? ['model' => $ocr[1], 'provider_name' => $ocr[0]['name']] : null,
+            'data' => array_map(fn ($m) => [
             'id' => (int) $m['id'],
             'model_id' => $m['model_id'],
             'label' => $m['display_name'] ?: $m['model_id'],
@@ -57,6 +62,73 @@ class AiController
             'provider_id' => (int) $m['provider_id'],
             'provider_name' => $m['provider_name'],
         ], $rows)]);
+    }
+
+    /**
+     * Reads receipt photos with the OCR model into Markdown (one section per
+     * photo, top to bottom). The client then hands the text to the chat model
+     * the user picked, which no longer needs to read images.
+     */
+    public function ocr(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        $repo = $this->repo();
+        $resolved = $repo->ocrModel($user['role']);
+        if (!$resolved) {
+            return $this->error($response, 'ยังไม่ได้ตั้งค่าโมเดล OCR หรือผู้ให้บริการของโมเดล OCR ถูกปิดใช้งาน', 422);
+        }
+        [$provider, $modelId] = $resolved;
+        $db = Db::connection();
+        $attachments = new AttachmentService($db);
+        $body = (array) $request->getParsedBody();
+        $rows = array_values(array_filter(
+            $attachments->ownedBy(array_slice((array) ($body['attachments'] ?? []), 0, self::MAX_IMAGES_PER_MESSAGE), (int) $user['id']),
+            [AttachmentService::class, 'isImage']
+        ));
+        if (!$rows) {
+            return $this->error($response, 'ไม่พบรูปที่แนบ', 422);
+        }
+
+        set_time_limit(60 + 90 * count($rows));
+        $client = new AiClient($provider['base_url'], $repo->apiKey($provider), $repo->extraHeaders($provider), 120);
+        $started = microtime(true);
+        $pages = [];
+        $error = null;
+        try {
+            foreach ($rows as $row) {
+                $pages[] = $client->ocr($modelId, $attachments->dataUrl($row));
+            }
+        } catch (\RuntimeException $e) {
+            $error = self::friendlyError($e);
+        }
+        $markdown = count($pages) > 1
+            ? implode("\n\n", array_map(fn ($p, $i) => '<!-- รูปที่ ' . ($i + 1) . " -->\n" . $p, $pages, array_keys($pages)))
+            : ($pages[0] ?? '');
+
+        try {
+            (new AiUsageService($db, new SettingsService($db)))->log([
+                'user_id' => (int) $user['id'],
+                'channel' => 'chat',
+                'category' => 'receipt',
+                'prompt' => sprintf('[อ่านรูปใบเสร็จด้วย OCR] %d รูป', count($rows)),
+                'model_row_id' => null,
+                'model_name' => $modelId,
+                'provider_name' => $provider['name'],
+                'image_count' => count($rows),
+                'response_chars' => mb_strlen($markdown),
+                'tool_calls' => [],
+                'status' => $error ? 'error' : 'ok',
+                'error_message' => $error,
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
+            ]);
+        } catch (\Throwable $e) {
+            error_log('AI usage log failed: ' . $e->getMessage());
+        }
+
+        if ($error) {
+            return $this->error($response, 'อ่านรูปด้วย OCR ไม่สำเร็จ: ' . $error, 422);
+        }
+        return $this->json($response, ['markdown' => $markdown, 'pages' => count($pages), 'model' => $modelId]);
     }
 
     /**
@@ -85,7 +157,9 @@ class AiController
 
         // "auto": the admin's default model, or the cheapest one (a vision model when this turn has photos).
         $auto = ($body['model'] ?? 'auto') === 'auto';
-        $needVision = !$approvals && !empty($lastUser['attachments']) && end($history)['role'] === 'user';
+        // Photos already read into Markdown by the OCR model need no vision model.
+        $ocrTurn = (bool) array_filter($lastUser['documents'] ?? [], fn ($d) => !empty($d['ocr']));
+        $needVision = !$approvals && !empty($lastUser['attachments']) && !$ocrTurn && end($history)['role'] === 'user';
         $resolved = $auto ? $repo->pickDefault($needVision, $user['role']) : $repo->resolveEnabledModel((int) $body['model'], $user['role']);
         if (!$resolved) {
             return $this->error($response, $auto && $needVision
@@ -103,7 +177,7 @@ class AiController
         $toolbox->setPhotos($latestPhotos);
         $tools = $model['supports_tools'] ? $toolbox->schemas() : [];
         // Receipt photos or an attached receipt file: the model writes every line into a draft, which takes a while.
-        $longTask = $needVision || (end($history)['role'] === 'user' && !empty(end($history)['documents']));
+        $longTask = $needVision || (end($history)['role'] === 'user' && (!empty(end($history)['attachments']) || !empty(end($history)['documents'])));
         $client = new AiClient($provider['base_url'], $repo->apiKey($provider), $repo->extraHeaders($provider), $longTask ? 240 : 90);
         if ($longTask) {
             set_time_limit(300);
@@ -116,7 +190,9 @@ class AiController
         $newDocs = !$approvals && $lastMessage['role'] === 'user' ? ($lastMessage['documents'] ?? []) : [];
         $usageService = new AiUsageService($db, new SettingsService($db));
         // Billing: receipt photos > attached .md / long pasted markdown > general.
+        // Photos read by OCR were already billed as a receipt read by /ai/ocr.
         $category = match (true) {
+            $newPhotoTurn && $ocrTurn => 'general',
             $newPhotoTurn => 'receipt',
             (bool) $newDocs, !$approvals && $usageService->isLargeMarkdown((string) ($lastUser['content'] ?? '')) => 'markdown',
             default => 'general',
@@ -401,8 +477,10 @@ class AiController
         $withPhotos = array_keys(array_filter($history, fn ($m) => $m['role'] === 'user' && !empty($m['attachments'])));
         $inline = array_flip(array_slice($withPhotos, -self::IMAGE_MESSAGES_SENT));
         $out = [];
+        $ocrRead = [];
         foreach ($history as $i => $m) {
             if ($m['role'] === 'user' && !empty($m['documents'])) {
+                $ocrRead[$i] = (bool) array_filter($m['documents'], fn ($d) => !empty($d['ocr']));
                 $m['content'] = ($m['content'] !== '' ? $m['content'] : 'สรุป/นำเข้าข้อมูลจากไฟล์ที่แนบ') . $this->documentsText($m['documents']);
             }
             unset($m['documents'], $m['model']);
@@ -413,6 +491,10 @@ class AiController
             }
             $count = count($m['attachments']);
             $text = $m['content'] !== '' ? $m['content'] : 'นำเข้าข้อมูลการซื้อสินค้าจากใบเสร็จนี้';
+            if ($ocrRead[$i] ?? false) {
+                $out[] = ['role' => 'user', 'content' => $text . "\n[แนบรูปใบเสร็จ {$count} รูป — อ่านเป็นข้อความด้วย OCR แล้ว ตามไฟล์แนบด้านบน]"];
+                continue;
+            }
             if (!$vision || !isset($inline[$i])) {
                 $out[] = ['role' => 'user', 'content' => $text . "\n[แนบรูปใบเสร็จ {$count} รูป — ไม่ได้ส่งรูปซ้ำในรอบนี้]"];
                 continue;
@@ -472,7 +554,8 @@ class AiController
                     }
                     $name = preg_replace('/[^\p{L}\p{N} ._()-]/u', '', (string) ($d['name'] ?? 'file.md')) ?: 'file.md';
                     $docs[] = ['name' => mb_substr($name, 0, 120), 'content' => mb_substr((string) $d['content'], 0, self::MAX_DOC_CHARS)]
-                        + (!empty($d['imported']) ? ['imported' => true] : []);
+                        + (!empty($d['imported']) ? ['imported' => true] : [])
+                        + (!empty($d['ocr']) ? ['ocr' => true] : []);
                 }
                 if ($text !== '' || $tokens || $docs) {
                     $msg = ['role' => 'user', 'content' => mb_substr($text, 0, self::MAX_PROMPT_CHARS)];
@@ -577,8 +660,33 @@ class AiController
         foreach (AiProviderRepo::PRESETS as $key => $p) {
             $presets[] = ['key' => $key] + $p;
         }
-        $default = (string) (new SettingsService(Db::connection()))->get('ai_default_model');
-        return $this->json($response, ['data' => $this->repo()->allForAdmin(), 'presets' => $presets, 'default_model' => $default]);
+        $settings = new SettingsService(Db::connection());
+        return $this->json($response, [
+            'data' => $this->repo()->allForAdmin(),
+            'presets' => $presets,
+            'default_model' => (string) $settings->get('ai_default_model'),
+            'ocr_model' => (string) $settings->get('ai_ocr_model'),
+        ]);
+    }
+
+    /** Sets the OCR model that reads receipt photos into Markdown ("<provider_id>:<model_id>", '' = off). */
+    public function updateOcrModel(Request $request, Response $response): Response
+    {
+        $value = trim((string) (((array) $request->getParsedBody())['ocr_model'] ?? ''));
+        if ($value !== '') {
+            [$pid, $mid] = array_pad(explode(':', $value, 2), 2, '');
+            $mid = trim($mid);
+            if (!ctype_digit($pid) || !$this->repo()->find((int) $pid)) {
+                return $this->error($response, 'ไม่พบผู้ให้บริการที่เลือก', 422);
+            }
+            if ($mid === '' || mb_strlen($mid) > 191 || preg_match('/\s/', $mid)) {
+                return $this->error($response, 'กรุณากรอก Model ID ของโมเดล OCR ให้ถูกต้อง', 422);
+            }
+            $value = $pid . ':' . $mid;
+        }
+        $user = $request->getAttribute('user');
+        (new SettingsService(Db::connection()))->update(['ai_ocr_model' => $value], (int) $user['id']);
+        return $this->json($response, ['ok' => true]);
     }
 
     /** Sets the model used when the user hasn't picked one ("<provider_id>:<model_id>", '' = cheapest). */

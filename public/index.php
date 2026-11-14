@@ -737,6 +737,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('ai.use'));
     $group->post('/ai/chat', [AiController::class, 'chat'])
         ->add(new RoleGuard('ai.use'));
+    $group->post('/ai/ocr', [AiController::class, 'ocr'])
+        ->add(new RoleGuard('ai.use'));
     foreach (['plan', 'items', 'summary', 'draft'] as $step) {
         $group->post("/ai/receipt/{$step}", [AiReceiptController::class, $step])
             ->add(new RoleGuard('ai.use'));
@@ -746,6 +748,8 @@ $app->group('/api', function ($group) {
     $group->post('/ai/providers', [AiController::class, 'storeProvider'])
         ->add(new RoleGuard('ai.manage'));
     $group->put('/ai/default-model', [AiController::class, 'updateDefaultModel'])
+        ->add(new RoleGuard('ai.manage'));
+    $group->put('/ai/ocr-model', [AiController::class, 'updateOcrModel'])
         ->add(new RoleGuard('ai.manage'));
     $group->post('/ai/providers/test', [AiController::class, 'testProvider'])
         ->add(new RoleGuard('ai.manage'));

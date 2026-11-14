@@ -15,6 +15,7 @@ export async function render(container) {
     let providers = [];
     let presets = [];
     let defaultModel = ''; // "<provider_id>:<model_id>", '' = cheapest (auto)
+    let ocrModel = ''; // "<provider_id>:<model_id>" of the OCR model that reads receipt photos, '' = off
     let editing = null; // draft provider being edited (or null)
     let fetched = null; // models returned by the last connection test
     let status = null; // { type: 'ok'|'bad', text } shown inside the modal
@@ -27,6 +28,7 @@ export async function render(container) {
         providers = res.data;
         presets = res.presets;
         defaultModel = res.default_model || '';
+        ocrModel = res.ocr_model || '';
         draw();
     }
 
@@ -231,6 +233,7 @@ export async function render(container) {
             : '<div class="empty">ยังไม่มีผู้ให้บริการ — กด "เพิ่มผู้ให้บริการ" เพื่อเริ่มต้น</div>'}
         </section>
         ${drawDefault()}
+        ${drawOcr()}
         ${editing ? drawEditor() : ''}`;
         // Redraws rebuild the modal; keep its scroll position so toggling a model doesn't jump to the top.
         const body = container.querySelector('.modal-body');
@@ -259,6 +262,39 @@ export async function render(container) {
         </section>`;
     }
 
+    function drawOcr() {
+        const [pid, ...rest] = ocrModel.split(':');
+        const mid = rest.join(':');
+        const provider = providers.find((p) => String(p.id) === pid);
+        // Suggest the provider's saved models whose id says OCR first (they need not be enabled for chat).
+        const suggest = (provider?.models || []).map((m) => m.model_id)
+            .sort((a, b) => (/ocr/i.test(b) - /ocr/i.test(a)) || a.localeCompare(b));
+        return `
+        <section class="card">
+            <div class="card-head"><h2>อ่านรูปใบเสร็จด้วย OCR</h2>
+              ${ocrModel ? (provider?.enabled ? '<span class="pill ok">เปิดใช้</span>' : '<span class="pill bad">ผู้ให้บริการถูกปิด</span>') : '<span class="pill muted">ปิด</span>'}
+            </div>
+            <form id="ocr-form" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <select id="ocr-provider" style="max-width:260px">
+                  <option value="">ไม่ใช้ OCR (ส่งรูปให้โมเดลที่อ่านรูปได้)</option>
+                  ${providers.map((p) => `<option value="${p.id}" ${String(p.id) === pid ? 'selected' : ''}>${escapeHtml(p.name)}${p.enabled ? '' : ' (ปิดอยู่)'}</option>`).join('')}
+                </select>
+                <input id="ocr-model-id" list="ocr-model-list" placeholder="Model ID เช่น paxa/paxa-ocr-lite-v1" value="${escapeHtml(mid)}"
+                  style="flex:1;min-width:220px;max-width:360px" ${pid ? '' : 'disabled'}>
+                <datalist id="ocr-model-list">${suggest.map((id) => `<option value="${escapeHtml(id)}">`).join('')}</datalist>
+                <button type="submit" class="btn sm">บันทึก</button>
+              </div>
+              <div class="muted" style="font-size:12.5px">
+                เมื่อเปิดใช้ รูปใบเสร็จที่แนบในผู้ช่วย AI จะถูกอ่านเป็นข้อความ Markdown ด้วยโมเดล OCR ก่อน แล้วจึงส่งต่อให้โมเดลที่ผู้ใช้เลือก (หรือเลือกอัตโนมัติ)
+                ทำงานต่อทีละช่วง — โมเดลที่อ่านรูปไม่ได้ก็นำเข้าใบเสร็จจากรูปได้ ·
+                ใช้ endpoint <code>/ocr</code> ของผู้ให้บริการ (ถ้าไม่มีจะลองผ่าน chat/completions) · ไม่ต้องเปิดโมเดล OCR ในรายการโมเดลสนทนา ·
+                หาก OCR ล้มเหลวและโมเดลที่เลือกอ่านรูปได้ จะส่งรูปให้โมเดลนั้นอ่านแทน
+              </div>
+            </form>
+        </section>`;
+    }
+
     function findModel(id) {
         return editing.models.find((m) => m.model_id === id);
     }
@@ -277,6 +313,35 @@ export async function render(container) {
                 refreshAssistantModels();
             } catch (e) {
                 defaultModel = prev;
+                alertDialog(e.message || 'บันทึกไม่สำเร็จ', { tone: 'error' });
+            }
+            draw();
+        });
+        container.querySelector('#ocr-provider')?.addEventListener('change', (ev) => {
+            const input = container.querySelector('#ocr-model-id');
+            input.disabled = !ev.target.value;
+            const provider = providers.find((p) => String(p.id) === ev.target.value);
+            const list = container.querySelector('#ocr-model-list');
+            list.innerHTML = (provider?.models || []).map((m) => m.model_id)
+                .sort((a, b) => (/ocr/i.test(b) - /ocr/i.test(a)) || a.localeCompare(b))
+                .map((id) => `<option value="${escapeHtml(id)}">`).join('');
+            if (ev.target.value) input.focus();
+        });
+        container.querySelector('#ocr-form')?.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const pid = container.querySelector('#ocr-provider').value;
+            const mid = container.querySelector('#ocr-model-id').value.trim();
+            if (pid && !mid) {
+                alertDialog('กรุณากรอก Model ID ของโมเดล OCR', { tone: 'error' });
+                return;
+            }
+            const value = pid ? `${pid}:${mid}` : '';
+            try {
+                await api.put('/ai/ocr-model', { ocr_model: value });
+                ocrModel = value;
+                listMessage = value ? 'เปิดใช้การอ่านรูปใบเสร็จด้วย OCR แล้ว' : 'ปิดการอ่านรูปใบเสร็จด้วย OCR แล้ว';
+                refreshAssistantModels();
+            } catch (e) {
                 alertDialog(e.message || 'บันทึกไม่สำเร็จ', { tone: 'error' });
             }
             draw();

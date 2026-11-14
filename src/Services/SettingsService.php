@@ -30,6 +30,7 @@ class SettingsService
         'qr_login' => '0', // '1' = signed-out screens offer sign-in by scanning a QR-Code with a signed-in phone
         'timezone' => '', // '' = app.timezone from config/config.php
         'ai_default_model' => '', // "<provider_id>:<model_id>"; '' = cheapest model (auto)
+        'ai_ocr_model' => '', // "<provider_id>:<model_id>" of an OCR model; receipt photos are read into Markdown first, '' = off (photos go to a vision model)
         'pos_payment_methods' => 'cash,transfer,qr,card', // comma list of PAYMENT_METHODS accepted at the POS
         // Thai QR Payment with the amount, shown when "qr" is the payment method (admin only):
         'pos_promptpay_enabled' => '0',

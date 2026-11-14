@@ -85,6 +85,83 @@ class AiClient
         return $message;
     }
 
+    /**
+     * Reads an image with an OCR model and returns its text as Markdown.
+     * Tries the Mistral-style /ocr endpoint (the de-facto standard), a plain
+     * {model, image} body if the server rejects that shape, and finally a chat
+     * completion with the image for servers that expose OCR models via chat.
+     */
+    public function ocr(string $model, string $dataUrl): string
+    {
+        $prompt = 'ถอดข้อความทั้งหมดในรูปใบเสร็จนี้เป็น Markdown ให้ตรงตามต้นฉบับ ตารางรายการสินค้าให้เป็นตาราง Markdown (| ... |) '
+            . 'ห้ามสรุป ห้ามแปล ห้ามเพิ่มข้อความอื่น ตอบเฉพาะ Markdown';
+        $mistral = ['model' => $model, 'document' => ['type' => 'image_url', 'image_url' => $dataUrl]];
+        $plain = ['model' => $model, 'image' => $dataUrl, 'prompt' => $prompt];
+        $chat = ['model' => $model, 'temperature' => 0, 'messages' => [['role' => 'user', 'content' => [
+            ['type' => 'text', 'text' => $prompt],
+            ['type' => 'image_url', 'image_url' => ['url' => $dataUrl]],
+        ]]]];
+        $shapeRejected = [400, 415, 422];
+        $missing = [404, 405];
+
+        try {
+            $data = $this->request('POST', '/ocr', $mistral);
+        } catch (AiHttpException $e) {
+            if (in_array($e->status, $shapeRejected, true)) {
+                try {
+                    $data = $this->request('POST', '/ocr', $plain);
+                } catch (AiHttpException $e2) {
+                    if (!in_array($e2->status, array_merge($shapeRejected, $missing), true)) {
+                        throw $e2;
+                    }
+                    $data = $this->request('POST', '/chat/completions', $chat);
+                }
+            } elseif (in_array($e->status, $missing, true)) {
+                $data = $this->request('POST', '/chat/completions', $chat);
+            } else {
+                throw $e;
+            }
+        }
+        $text = trim(self::ocrText($data));
+        if ($text === '') {
+            throw new \RuntimeException('โมเดล OCR ไม่พบข้อความในรูป');
+        }
+        // Some OCR models wrap the whole answer in a ```markdown fence.
+        return trim(preg_replace('/^```(?:markdown|md)?\s*\n(.*)\n```$/s', '$1', $text));
+    }
+
+    /** Text from the common OCR/chat response shapes. */
+    private static function ocrText(mixed $data): string
+    {
+        if (is_string($data)) {
+            return $data;
+        }
+        if (!is_array($data)) {
+            return '';
+        }
+        if (isset($data['choices'][0]['message']['content'])) {
+            $c = $data['choices'][0]['message']['content'];
+            return is_array($c) ? implode("\n", array_map(fn ($p) => is_array($p) ? (string) ($p['text'] ?? '') : (string) $p, $c)) : (string) $c;
+        }
+        foreach (['pages', 'data', 'results'] as $listKey) {
+            if (isset($data[$listKey]) && is_array($data[$listKey]) && array_is_list($data[$listKey])) {
+                $parts = array_filter(array_map(fn ($p) => trim(self::ocrText($p)), $data[$listKey]), 'strlen');
+                if ($parts) {
+                    return implode("\n\n", $parts);
+                }
+            }
+        }
+        foreach (['markdown', 'md', 'text', 'content', 'output', 'result'] as $key) {
+            if (isset($data[$key])) {
+                $text = self::ocrText($data[$key]);
+                if (trim($text) !== '') {
+                    return $text;
+                }
+            }
+        }
+        return '';
+    }
+
     private function request(string $method, string $path, ?array $body = null): array
     {
         if (!preg_match('#^https?://#i', $this->baseUrl)) {
