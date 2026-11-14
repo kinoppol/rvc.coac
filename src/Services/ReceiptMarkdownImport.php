@@ -64,7 +64,7 @@ class ReceiptMarkdownImport
         usort($tables, fn ($a, $b) => [self::itemScore($b), count($b['rows'])] <=> [self::itemScore($a), count($a['rows'])]);
         $t = $tables[0] ?? null;
         if (!$t || !$t['rows']) {
-            return ['columns' => '', 'rows' => [], 'header' => $md, 'footer' => ''];
+            return self::splitList($lines) ?? ['columns' => '', 'rows' => [], 'header' => $md, 'footer' => ''];
         }
         // Total/discount/VAT rows inside the table are bill totals, not items.
         $items = [];
@@ -85,6 +85,54 @@ class ReceiptMarkdownImport
             'rows' => $items,
             'header' => trim(implode("\n", array_slice($lines, 0, $t['start']))),
             'footer' => $footer,
+        ];
+    }
+
+    /**
+     * Receipts without a Markdown table (e.g. OCR of an online order: one
+     * bullet per item, "- name x 12 | 2 | 100 ฿", with "50 ฿/unit(s)" on the
+     * next line). Each bullet that carries at least two numbers is an item;
+     * a short follow-up line without its own bullet is joined to it.
+     * @param string[] $lines
+     */
+    private static function splitList(array $lines): ?array
+    {
+        $isItem = fn (string $l) => (bool) preg_match('/^\s*(?:[-*+•]|\d+[.)])\s+\S/u', $l)
+            && preg_match('/\p{L}/u', $l)
+            && preg_match_all('/(?<![\d\/.-])\d[\d,]*(?:\.\d+)?/', $l) >= 2
+            && (str_contains($l, '|') || preg_match('/[฿$]|บาท/u', $l));
+        $rows = [];
+        $first = null;
+        $last = null;
+        for ($i = 0; $i < count($lines); $i++) {
+            if (!$isItem($lines[$i]) || self::isTotalRow(preg_replace('/^\s*(?:[-*+•]|\d+[.)])\s+/u', '', $lines[$i]))) {
+                continue;
+            }
+            $row = trim($lines[$i]);
+            $first ??= $i;
+            $last = $i;
+            // The unit price line under the item ("50 ฿/unit(s)"), skipping blank lines.
+            for ($j = $i + 1; $j < count($lines) && $j <= $i + 3; $j++) {
+                $next = trim($lines[$j]);
+                if ($next === '') {
+                    continue;
+                }
+                if (!preg_match('/^\s*(?:[-*+•#]|\d+[.)]\s)/u', $next) && mb_strlen($next) <= 60 && preg_match('/\d/', $next)) {
+                    $row .= ' | ' . $next;
+                    $last = $j;
+                }
+                break;
+            }
+            $rows[] = $row;
+        }
+        if (count($rows) < 2) {
+            return null;
+        }
+        return [
+            'columns' => '(ไม่มีหัวตาราง — แต่ละบรรทัดคือรายการสินค้า 1 รายการ คั่นช่องด้วย | เช่น ชื่อสินค้า | จำนวน | ราคารวม | ราคาต่อหน่วย)',
+            'rows' => $rows,
+            'header' => trim(implode("\n", array_slice($lines, 0, $first))),
+            'footer' => trim(implode("\n", array_slice($lines, $last + 1))),
         ];
     }
 
@@ -175,7 +223,7 @@ class ReceiptMarkdownImport
     /** Last resort for one row the model could not read: read the cells directly. */
     public static function parseRow(string $row): array
     {
-        $cells = array_map('trim', explode('|', trim(trim($row), '|')));
+        $cells = array_map('trim', explode('|', trim(trim(preg_replace('/^\s*(?:[-*+•]|\d+[.)])\s+/u', '', $row)), '|')));
         $name = '';
         $barcode = '';
         $qty = 1;
@@ -187,8 +235,12 @@ class ReceiptMarkdownImport
             } elseif (preg_match('/^(\d+(?:\.\d+)?)\s*[*xX×@]\s*([\d,]+(?:\.\d+)?)$/u', $c, $m)) {
                 $qty = (int) round((float) $m[1]);
                 $unit = (float) str_replace(',', '', $m[2]);
-            } elseif (preg_match('/^-?[\d,]+\.\d{2}$/', $c)) {
-                $lineTotal = (float) str_replace(',', '', $c);
+            } elseif (preg_match('/^([\d,]+(?:\.\d+)?)\s*(?:฿|บาท)?\s*\/\s*(?:unit|หน่วย|ชิ้น)/iu', $c, $m)) {
+                $unit = (float) str_replace(',', '', $m[1]); // "50 ฿/unit(s)"
+            } elseif (preg_match('/^-?[\d,]+\.\d{2}$/', $c) || preg_match('/^(-?[\d,]+(?:\.\d+)?)\s*(?:฿|บาท)$/u', $c)) {
+                $lineTotal = (float) str_replace([',', '฿', 'บาท', ' '], '', $c);
+            } elseif (preg_match('/^\d{1,4}$/', $c)) {
+                $qty = (int) $c;
             } elseif (preg_match('/\p{L}/u', $c) && mb_strlen($c) > mb_strlen($name)) {
                 $name = $c;
             }

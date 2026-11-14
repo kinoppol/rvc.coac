@@ -57,6 +57,8 @@ export async function render(container, { user } = {}) {
     let models = [];
     let modelId = null;
     let busy = null; // 'upload' | 'extract' | 'save'
+    let ocr = null; // { model } when receipt photos are read into Markdown by the OCR model first
+    let extractStep = ''; // progress shown on the read button while reading with OCR
     let error = null;
     let success = null;
     let docs = [];
@@ -99,7 +101,9 @@ export async function render(container, { user } = {}) {
         // Cheapest vision model first (unpriced models last) so the default costs the least.
         const price = (m) => (m.price_in == null || m.price_out == null ? Infinity : m.price_in + m.price_out);
         const res = await api.get('/ai/models');
-        models = res.data.filter((m) => m.supports_vision).sort((a, b) => price(a) - price(b));
+        ocr = res.ocr || null;
+        // With OCR, any model can turn the text into items; otherwise it must read photos itself.
+        models = res.data.filter((m) => ocr || m.supports_vision).sort((a, b) => price(a) - price(b));
         // The admin's default model goes first when it can read photos.
         const def = models.find((m) => m.id === res.default_id);
         if (def) models = [def, ...models.filter((m) => m !== def)];
@@ -314,11 +318,11 @@ export async function render(container, { user } = {}) {
           </div>
           <div class="actions-row" style="margin-top:14px">
             ${models.length ? `
-              <select id="pc-model" class="pc-select" title="โมเดลที่ใช้อ่านรูป">
+              <select id="pc-model" class="pc-select" title="${ocr ? `อ่านรูปด้วย OCR (${escapeHtml(ocr.model)}) แล้วใช้โมเดลนี้แยกรายการสินค้า` : 'โมเดลที่ใช้อ่านรูป'}">
                 ${models.map((m) => `<option value="${m.id}" ${m.id === modelId ? 'selected' : ''}>${escapeHtml(m.label)} · ${escapeHtml(m.provider_name)}</option>`).join('')}
               </select>
               <button type="button" class="btn" id="pc-extract" ${photos.some(isImage) && !busy ? '' : 'disabled'}>
-                ${busy === 'extract' ? 'กำลังอ่านใบเสร็จ...' : '✨ อ่านใบเสร็จด้วย AI'}
+                ${busy === 'extract' ? escapeHtml(extractStep || 'กำลังอ่านใบเสร็จ...') : '✨ อ่านใบเสร็จด้วย AI'}
               </button>`
             : '<span class="muted" style="font-size:13px">ยังไม่มีโมเดล AI ที่อ่านรูปได้ — เปิดใช้ได้ที่หน้า "ตั้งค่าผู้ช่วย AI" (ติ๊ก "อ่านรูป") หรือกรอกรายการเองด้านล่าง</span>'}
           </div>
@@ -1375,11 +1379,13 @@ export async function render(container, { user } = {}) {
         const hasData = items.some((i) => i.name);
         if (hasData && !(await confirmDialog('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI', { title: 'อ่านใบเสร็จด้วย AI?', okText: 'ดำเนินการต่อ' }))) return;
         busy = 'extract';
+        extractStep = '';
         error = null;
         success = null;
         draw();
         try {
-            const res = await api.post('/purchases/extract', { model: modelId, attachments: photos.filter(isImage).map((p) => p.token) });
+            const tokens = photos.filter(isImage).map((p) => p.token);
+            const res = ocr ? await extractWithOcr(tokens) : await api.post('/purchases/extract', { model: modelId, attachments: tokens });
             applyDraft(res.data, null);
             res.preview.forEach((p, i) => {
                 if (items[i]) applyPreview(items[i], p);
@@ -1389,7 +1395,66 @@ export async function render(container, { user } = {}) {
             error = e.message;
         }
         busy = null;
+        extractStep = '';
         draw();
+    }
+
+    function step(text) {
+        extractStep = text;
+        const btn = container.querySelector('#pc-extract');
+        if (btn) btn.textContent = text;
+    }
+
+    /**
+     * Reads the photos into Markdown with the OCR model, then has the chosen model
+     * convert the item lines a few at a time (like a .md import in the assistant).
+     * Returns the same { data, preview } as /purchases/extract.
+     */
+    async function extractWithOcr(tokens) {
+        step(`กำลังอ่านรูป${tokens.length > 1 ? ` ${tokens.length} รูป` : ''}ด้วย OCR...`);
+        const md = (await api.post('/ai/ocr', { attachments: tokens })).markdown;
+        step('กำลังแยกรายการสินค้า...');
+        const plan = await api.post('/ai/receipt/plan', { content: md, file_name: 'ใบเสร็จจากรูป (OCR).md', ocr: true });
+        if (!plan.rows.length) {
+            // No item lines found in the text: a model that reads photos can still try the photos.
+            if (models.find((m) => m.id === modelId)?.supports_vision) {
+                step('ไม่พบรายการในข้อความ OCR — ให้ AI อ่านจากรูปแทน...');
+                return api.post('/purchases/extract', { model: modelId, attachments: tokens });
+            }
+            throw new Error('OCR อ่านรูปได้ แต่ไม่พบรายการสินค้าในข้อความ ลองถ่ายให้ชัดขึ้น เลือกโมเดลที่อ่านรูปได้ หรือกรอกเอง');
+        }
+        const warnings = [];
+        const items = [];
+        const total = plan.rows.length;
+        const read = async (from, to) => {
+            step(`กำลังอ่านรายการที่ ${from + 1}${to - from > 1 ? `–${to}` : ''} จาก ${total}...`);
+            try {
+                const res = await api.post('/ai/receipt/items', { model: modelId, columns: plan.columns, rows: plan.rows.slice(from, to) });
+                if (res.fallback) warnings.push(`รายการที่ ${from + 1}: AI อ่านไม่ได้ ระบบแยกข้อมูลให้แทน กรุณาตรวจ`);
+                return res.items;
+            } catch (e) {
+                if (to - from <= 1) throw e;
+                const mid = from + Math.ceil((to - from) / 2);
+                return [...await read(from, mid), ...await read(mid, to)];
+            }
+        };
+        for (let i = 0; i < total; i += plan.chunk_size) {
+            items.push(...await read(i, Math.min(i + plan.chunk_size, total)));
+        }
+        step('กำลังสรุปยอด (ร้านค้า เลขที่ใบเสร็จ ส่วนลด ยอดสุทธิ)...');
+        const sum = await api.post('/ai/receipt/summary', {
+            model: modelId, header: plan.header, footer: plan.footer, file_name: 'ใบเสร็จจากรูป (OCR)', item_count: items.length, ocr: true,
+        });
+        if (sum.error) warnings.push(`อ่านยอดสรุปไม่สำเร็จ (${sum.error}) กรุณาตรวจชื่อร้านและยอดสุทธิเอง`);
+        const s = sum.summary || {};
+        const data = {
+            supplier_name: s.supplier_name || '', supplier_tax_id: s.supplier_tax_id || '', receipt_no: s.receipt_no || '',
+            receipt_date: s.receipt_date || '', discount: s.discount || 0, vat: s.vat || 0, total: s.total || 0,
+            items, warnings,
+        };
+        step('กำลังจับคู่สินค้ากับสต๊อก...');
+        const preview = (await api.post('/purchases/preview', { items })).data;
+        return { data, preview };
     }
 
     /** The product a line restocks: one paired by hand, else (editing) the one it was saved with. */

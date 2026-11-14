@@ -151,7 +151,23 @@ class AiClient
             throw new \RuntimeException('โมเดล OCR ไม่พบข้อความในรูป');
         }
         // Some OCR models wrap the whole answer in a ```markdown fence.
-        return trim(preg_replace('/^```(?:markdown|md)?\s*\n(.*)\n```$/s', '$1', $text));
+        return self::cleanOcr(preg_replace('/^```(?:markdown|md)?\s*\n(.*)\n```$/s', '$1', $text));
+    }
+
+    /**
+     * Drops the HTML some OCR models mix into Markdown: <figure> blocks (logos
+     * and product pictures, whose caption repeats the item name), images and
+     * leftover inline tags; <br> becomes a line break.
+     */
+    public static function cleanOcr(string $text): string
+    {
+        $text = preg_replace('~<figure\b[^>]*>.*?</figure>~isu', '', $text);
+        $text = preg_replace('~<img\b[^>]*>~iu', '', $text);
+        $text = preg_replace('~<br\s*/?>~iu', "\n", $text);
+        $text = preg_replace('~</?(?:p|div|span|figure|figcaption|sup|sub|b|i|u|strong|em|center|font)\b[^>]*>~iu', '', $text);
+        $text = preg_replace('/[ \t]{2,}/u', ' ', $text);
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text);
+        return trim(implode("\n", array_map('rtrim', explode("\n", $text))));
     }
 
     /** Text from the common OCR/chat response shapes. */
