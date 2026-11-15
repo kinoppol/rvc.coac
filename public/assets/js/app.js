@@ -21,6 +21,8 @@ const ROUTE_PERMS = {
 
 // Pages that are tabs of ตั้งค่าระบบ (views/settings.js) rather than menu items of their own.
 const SETTINGS_TABS = ['ai', 'migrations', 'backup', 'security'];
+// Pages that are tabs of แอป Android (views/android.js): the phone app and the POS devices.
+const ANDROID_TABS = ['mobileapp', 'devices'];
 
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
@@ -59,13 +61,18 @@ async function loadView({ key, params }) {
         history.replaceState(null, '', `#/settings?${new URLSearchParams({ ...params, tab: key })}`);
         return loadView({ key: 'settings', params: { ...params, tab: key } });
     }
+    if (ANDROID_TABS.includes(key)) {
+        history.replaceState(null, '', `#/android?${new URLSearchParams({ ...params, tab: key })}`);
+        return loadView({ key: 'android', params: { ...params, tab: key } });
+    }
 
     if (state.permissions.length && ROUTE_PERMS[key] && !state.permissions.includes(ROUTE_PERMS[key])) {
         view.innerHTML = `<div class="card card-pad">ไม่มีสิทธิ์เข้าถึงหน้านี้</div>`;
         return;
     }
 
-    setActiveNav(key);
+    // ตั้งค่าผู้ช่วย AI has its own menu item, though it is a tab of ตั้งค่าระบบ.
+    setActiveNav(key === 'settings' && params.tab === 'ai' ? 'ai' : key);
     view.innerHTML = skPage(ROUTE_SKELETON[key] || 'list');
 
     try {
@@ -322,7 +329,7 @@ initBarcodeKeys();
         onAuthenticated(data);
     } catch (e) {
         // Scanned a sign-in (or phone-scanner) QR-Code while signed out here: remember it across the sign-in (also via RVC-ONE).
-        if (location.hash.startsWith('#/qr-approve') || location.hash.startsWith('#/scanlink') || location.hash.startsWith('#/mobileapp')) {
+        if (location.hash.startsWith('#/qr-approve') || location.hash.startsWith('#/scanlink') || location.hash.startsWith('#/mobileapp') || location.hash.startsWith('#/android')) {
             try { sessionStorage.setItem('qr-approve', location.hash); } catch (err) { /* private mode */ }
         }
         showLogin();

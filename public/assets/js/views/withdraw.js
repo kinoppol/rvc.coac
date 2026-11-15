@@ -7,10 +7,12 @@ const HOLD_LABEL = 'พักในบัญชีเพื่อผู้ฝา
 const STATUS_LABEL = { pending: ['รออนุมัติ', 'warn'], paid: ['จ่ายแล้ว', 'ok'], cancelled: ['ยกเลิก', 'muted'] };
 const methodLabel = (m) => (m === 'hold' ? HOLD_LABEL : METHOD_LABEL[m] || m);
 
-export async function render(container, { permissions, user }) {
+export async function render(container, { permissions, user, params = {} }) {
     const options = (await api.get('/consignors/options')).data;
-    // No consignor until one is chosen, so money is never paid to someone by accident.
-    let consignorId = null;
+    // Opened for one consignor (from the register): the form is for them and the list shows only theirs.
+    const fixedId = Number(params.consignor) || null;
+    // Otherwise no consignor until one is chosen, so money is never paid to someone by accident.
+    let consignorId = fixedId;
     let balance = 0;
     let amount = '';
     let method = 'cash';
@@ -19,7 +21,7 @@ export async function render(container, { permissions, user }) {
     let overdrawReason = '';
     let error = null;
     let rows = [];
-    let formOpen = false; // the withdrawal form, on a modal
+    let formOpen = !!fixedId; // the withdrawal form, on a modal
     const canApprove = permissions.includes('withdraw.approve');
     const isAdmin = user?.role === 'admin';
     let period = 'today';
@@ -57,7 +59,7 @@ export async function render(container, { permissions, user }) {
         try {
             const res = await api.get(`/withdrawals${qs({ from, to })}`);
             if (mine !== seq) return;
-            rows = res.data;
+            rows = fixedId ? res.data.filter((r) => Number(r.consignor_id) === fixedId) : res.data;
             limit = res.limit ?? null;
             canHold = !!res.can_hold;
         } catch (e) {
@@ -86,7 +88,7 @@ export async function render(container, { permissions, user }) {
               <button type="button" class="modal-close" data-close-form title="ปิด" aria-label="ปิด">✕</button></div>
             <div class="modal-body">
             <label class="field" style="margin-bottom:12px">ผู้ฝากขาย *
-              <select id="sel-consignor" required>
+              <select id="sel-consignor" required ${fixedId ? 'disabled' : ''}>
                 <option value="" ${consignorId == null ? 'selected' : ''} disabled>— เลือกผู้ฝากขาย —</option>
                 ${options.map((o) => `<option value="${o.id}" ${Number(o.id) === Number(consignorId) ? 'selected' : ''}>${escapeHtml(o.code)} - ${escapeHtml(o.name)}</option>`).join('')}</select>
             </label>
@@ -250,11 +252,11 @@ export async function render(container, { permissions, user }) {
         const pending = rows.filter((r) => r.status === 'pending').length;
         container.innerHTML = `
         <div class="actions-row" style="justify-content:flex-end">
-          <button type="button" class="btn" id="btn-open" style="font-size:15px;padding:12px 22px">+ เบิกเงินให้ผู้ฝากขาย</button>
+          <button type="button" class="btn" id="btn-open" style="font-size:15px;padding:12px 22px">+ เบิกเงินให้${fixedId ? 'ผู้ฝากรายนี้' : 'ผู้ฝากขาย'}</button>
         </div>
         <section class="card">
           <div class="card-head">
-            <h2>คำขอเบิกเงินและการจ่ายล่าสุด</h2>
+            <h2>คำขอเบิกเงินและการจ่ายล่าสุด${fixedId ? 'ของผู้ฝากรายนี้' : ''}</h2>
             ${pending ? `<span class="pill warn">รออนุมัติ ${pending}</span>` : ''}
           </div>
           <div class="sv-filters" style="padding:12px 18px;border-bottom:1px solid var(--border)">
@@ -354,7 +356,7 @@ export async function render(container, { permissions, user }) {
             overdrawReason = '';
             error = null;
             formOpen = false;
-            consignorId = null; // the next one starts with no consignor chosen
+            consignorId = fixedId; // the next one starts with no consignor chosen (unless opened for one)
             await load();
         } catch (e) {
             error = e.message;

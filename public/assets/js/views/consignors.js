@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { skBlock } from '../skeleton.js';
 import { promptDialog } from '../dialog.js';
+import { openViewModal } from '../view-modal.js';
 
 export async function render(container, { navigate, permissions, user }) {
     const isAdmin = user?.role === 'admin';
@@ -55,7 +56,8 @@ export async function render(container, { navigate, permissions, user }) {
                   <td><span class="pill ${c.status === 'active' ? 'ok' : 'warn'}">${c.status === 'active' ? 'ปกติ' : 'รอตรวจสอบเอกสาร'}</span></td>
                   <td style="text-align:right;white-space:nowrap">
                     ${isAdmin && Math.abs(Number(c.balance)) >= 0.005 ? `<button type="button" class="btn secondary sm" data-adjust="${c.id}" title="ปรับยอดเงินคงเหลือเป็น 0 พร้อมบันทึกเหตุผลในสมุดบัญชี">ปรับยอดเป็น 0</button>` : ''}
-                    <button type="button" class="btn secondary sm" data-passbook="${c.id}">สมุดบัญชี</button>
+                    ${permissions.includes('passbook.view') ? `<button type="button" class="btn secondary sm" data-passbook="${c.id}" title="ดูสมุดบัญชีของผู้ฝากรายนี้">สมุดบัญชี</button>` : ''}
+                    ${permissions.includes('withdraw.create') ? `<button type="button" class="btn secondary sm" data-withdraw="${c.id}" title="เบิก / จ่ายเงินให้ผู้ฝากรายนี้ และดูรายการเบิกของเขา">เบิก / จ่ายเงิน</button>` : ''}
                   </td>
                 </tr>
               `).join('') || `<tr><td colspan="8" class="empty">ยังไม่มีผู้ฝากขาย</td></tr>`}
@@ -79,9 +81,17 @@ export async function render(container, { navigate, permissions, user }) {
             if (showImport && imp.rows === null) searchDirectory();
             else load();
         });
-        container.querySelectorAll('[data-passbook]').forEach((btn) => {
-            btn.addEventListener('click', () => navigate('passbook', { id: btn.dataset.passbook }));
-        });
+        // Passbook and withdrawals open over this page, so the register stays where it was.
+        const who = (id) => rows.find((c) => String(c.id) === String(id));
+        const ctx = { navigate, permissions, user };
+        container.querySelectorAll('[data-passbook]').forEach((btn) => btn.addEventListener('click', () => {
+            const c = who(btn.dataset.passbook);
+            openViewModal('passbook', { title: `สมุดบัญชีผู้ฝาก ${c ? `${c.code} ${c.name}` : ''}`, params: { id: btn.dataset.passbook }, ctx, onClose: load });
+        }));
+        container.querySelectorAll('[data-withdraw]').forEach((btn) => btn.addEventListener('click', () => {
+            const c = who(btn.dataset.withdraw);
+            openViewModal('withdraw', { title: `เบิก / จ่ายเงิน ${c ? `${c.code} ${c.name}` : ''}`, params: { consignor: btn.dataset.withdraw }, ctx, onClose: load });
+        }));
         container.querySelectorAll('[data-adjust]').forEach((btn) => {
             btn.addEventListener('click', () => adjustBalance(rows.find((c) => String(c.id) === btn.dataset.adjust)));
         });

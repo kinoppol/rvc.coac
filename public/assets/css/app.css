@@ -79,6 +79,31 @@ input, select, textarea, button { font-family: inherit; font-size: 14px; }
 .app-shell.sidebar-collapsed .nav-btn { position: relative; justify-content: center; padding: 11px 0; }
 .app-shell.sidebar-collapsed .nav-btn svg { flex: none; }
 .app-shell.sidebar-collapsed .nav-btn .badge { position: absolute; top: 3px; right: 3px; font-size: 9.5px; padding: 0 5px; }
+/* Main menus: a header that opens its pages (one main menu open at a time, layout.js). */
+.nav-group-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; border: 0; color: rgba(255,255,255,.82); padding: 10px 12px; border-radius: 9px; font-size: 13.8px; font-weight: 600; cursor: pointer; }
+.nav-group-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+.nav-group.has-active > .nav-group-btn { color: #fff; }
+.nav-group-btn .badge { margin-left: auto; background: var(--bad); color: #fff; border-radius: 99px; font-size: 11px; padding: 1px 7px; }
+.nav-group-btn .badge.warn { background: #e08a00; }
+.nav-group-btn .nav-chev { flex: none; margin-left: auto; opacity: .7; transition: transform .18s ease; }
+.nav-group-btn .badge:not([hidden]) + .nav-chev { margin-left: 6px; }
+.nav-group.open > .nav-group-btn .nav-chev { transform: rotate(90deg); }
+.nav-group.open .nav-group-btn .badge { display: none; }
+.nav-sub { display: none; flex-direction: column; gap: 2px; margin: 2px 0 4px 17px; padding-left: 8px; border-left: 1px solid rgba(255,255,255,.16); }
+.nav-group.open > .nav-sub { display: flex; }
+.nav-sub-btn { padding: 8px 10px; font-size: 13.4px; }
+.nav-sub-btn svg { width: 15px; height: 15px; opacity: .85; }
+/* Icon-only menu (desktop, collapsed): no headers, every page's icon shown. */
+@media (min-width: 901px) {
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-group-btn { display: none; }
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-sub { display: flex; margin: 0; padding: 0; border: 0; }
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-group + .nav-group,
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-group + .nav-btn,
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-btn + .nav-group { border-top: 1px solid rgba(255,255,255,.13); padding-top: 4px; margin-top: 4px; }
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-sub-btn { padding: 11px 0; }
+    body:not(.tablet-mode) .app-shell.sidebar-collapsed .nav-sub-btn svg { width: 17px; height: 17px; }
+}
+body.tablet-mode .nav-group-btn { font-size: 16px; min-height: 50px; }
 .btn-sidebar-toggle { flex: none; width: 36px; height: 36px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 9px; cursor: pointer; }
 .btn-sidebar-toggle:hover { background: var(--hover); }
 

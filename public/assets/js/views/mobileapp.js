@@ -200,7 +200,7 @@ export async function render(container, { user, permissions, params = {} }) {
             code = '';
             name = '';
             // Leave the code out of the address so a reload does not try it again.
-            if (params.code) history.replaceState(null, '', '#/mobileapp');
+            if (params.code) history.replaceState(null, '', '#/android');
             await load();
             await alertDialog(`จับคู่ "${d.name}" กับบัญชีของคุณแล้ว แอปจะเริ่มโหลดข้อมูลเองในไม่กี่วินาที`, { title: 'จับคู่สำเร็จ' });
         } catch (e) {

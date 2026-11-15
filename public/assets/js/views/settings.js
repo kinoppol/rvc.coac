@@ -4,6 +4,7 @@ import { renderUsersPanel, renderOaPanel } from './settings-users.js';
 import { renderPerfPanel } from './settings-perf.js';
 import { renderDiskPanel } from './settings-disk.js';
 import { skPage } from '../skeleton.js';
+import { setActiveNav } from '../layout.js';
 import { loadThaiQr, thaiQrCard, thaiQrWarning } from '../thai-qr.js';
 
 const WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
@@ -62,6 +63,8 @@ export async function render(page, { user, permissions, params = {} }) {
         page.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
         // Keep the tab in the URL without triggering the router's hashchange reload.
         history.replaceState(null, '', key === 'fees' ? '#/settings' : `#/settings?tab=${key}`);
+        // ตั้งค่าผู้ช่วย AI is a menu item of its own; the other tabs belong to ตั้งค่าระบบ.
+        setActiveNav(key === 'ai' ? 'ai' : 'settings');
         saved = null;
         error = null;
         // A fresh pane per visit, so a slow load from a tab left behind lands in a detached node.

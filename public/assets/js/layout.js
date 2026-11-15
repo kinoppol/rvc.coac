@@ -40,82 +40,149 @@ const ICONS = {
     audit: svg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path>'),
 };
 
+ICONS.android = ICONS.mobileapp;
+ICONS.ledger = svg('<path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"></path><path d="M18 8h2v12a2 2 0 0 1-2 2H6"></path><path d="M8 8h6M8 12h6M8 16h3"></path>');
+
+// The menu: a few pages stand alone; the rest sit under main menus that open one at a time.
+// A main menu with only one page the user may open shows that page on its own.
+// hideIf: left out for users who also hold that permission (they reach the page another way).
 const PAGES = [
-    { group: 'งานประจำวัน', items: [
-        { key: 'dashboard', label: 'แดชบอร์ด', perm: 'dashboard.view' },
+    { key: 'dashboard', label: 'แดชบอร์ด', perm: 'dashboard.view' },
+    { group: 'sell', label: 'งานขายหน้าร้าน', icon: 'sales', items: [
         { key: 'sales', label: 'ขายสินค้า (POS)', perm: 'sales.create' },
-        { key: 'mysales', label: 'ประวัติการขายของฉัน', perm: 'sales.create' },
-        { key: 'saleedits', label: 'อนุมัติแก้ไขการขาย', perm: 'sales.edit.approve' },
+        { key: 'mysales', label: 'ประวัติการขาย', perm: 'sales.create' },
         { key: 'drawer', label: 'เงินในลิ้นชัก / ปิดยอด', perm: 'sales.create' },
-        { key: 'closing', label: 'สรุปบัญชีรายวัน / ส่งเงิน', perm: 'closing.submit' },
-        { key: 'wages', label: 'ค่าแรงพนักงาน', perm: 'wages.manage' },
-        { key: 'capital', label: 'งบลงทุน / เบิกกำไร', perm: 'capital.manage' },
+        { key: 'saleedits', label: 'อนุมัติแก้ไขการขาย', perm: 'sales.edit.approve' },
         { key: 'posimport', label: 'นำเข้ายอดขายจาก POS', perm: 'sales.import' },
-        { key: 'purchase', label: 'ซื้อสินค้าเข้าร้าน', perm: 'purchase.create' },
+    ]},
+    { group: 'buy', label: 'ซื้อสินค้าเข้าร้าน', icon: 'purchase', items: [
+        { key: 'purchase', label: 'บันทึกรายการซื้อสินค้า', perm: 'purchase.create' },
         { key: 'reorder', label: 'รายการซื้อสินค้าใกล้หมด', perm: 'purchase.create' },
+    ]},
+    { group: 'stock', label: 'สต๊อกสินค้า', icon: 'inventory', items: [
         { key: 'inventory', label: 'สต๊อกสินค้าของร้าน', perm: 'reports.view' },
-        { key: 'receive', label: 'รับฝากสินค้า', perm: 'receive.create' },
-        { key: 'ret', label: 'คืนสินค้าผู้ฝาก', perm: 'return.create' },
         { key: 'count', label: 'ตรวจนับสต๊อก', perm: 'stockcount.create' },
     ]},
-    { group: 'ผู้ฝากขาย', items: [
+    { group: 'books', label: 'บัญชีของร้าน', icon: 'ledger', items: [
+        { key: 'closing', label: 'สรุปบัญชีรายวัน / ส่งเงิน', perm: 'closing.submit' },
+        { key: 'capital', label: 'งบลงทุน / เบิกกำไร', perm: 'capital.manage' },
+        { key: 'wages', label: 'เบิกเงินค่าแรงพนักงาน', perm: 'wages.manage' },
+    ]},
+    { group: 'consign', label: 'การรับฝากขายสินค้า', icon: 'consignors', items: [
         { key: 'consignors', label: 'ทะเบียนผู้ฝากขาย', perm: 'consignors.view' },
-        { key: 'passbook', label: 'สมุดบัญชีผู้ฝาก', perm: 'passbook.view' },
+        { key: 'receive', label: 'รับฝากสินค้า', perm: 'receive.create' },
+        { key: 'ret', label: 'คืนสินค้าผู้ฝาก', perm: 'return.create' },
         { key: 'withdraw', label: 'เบิก / จ่ายเงิน', perm: 'withdraw.create' },
+        // Opened from each consignor's row in the register; on its own only for those without the register.
+        { key: 'passbook', label: 'สมุดบัญชีผู้ฝาก', perm: 'passbook.view', hideIf: 'consignors.view' },
         { key: 'holds', label: 'บัญชีเพื่อผู้ฝากขาย', perm: 'hold.manage' },
     ]},
-    { group: 'ผู้ฝากขาย (ของฉัน)', items: [
+    { group: 'portal', label: 'ผู้ฝากขาย (ของฉัน)', icon: 'mypassbook', items: [
         { key: 'myrequests', label: 'แจ้งฝากสินค้า', perm: 'consignor.portal' },
         { key: 'mypassbook', label: 'สมุดบัญชีของฉัน', perm: 'consignor.portal' },
         { key: 'myproducts', label: 'สินค้าที่ฝากขาย', perm: 'consignor.portal' },
     ]},
-    { group: 'รายงานและระบบ', items: [
-        { key: 'reports', label: 'รายงานสรุป', perm: 'reports.view' },
+    { key: 'reports', label: 'รายงานสรุป', perm: 'reports.view' },
+    { group: 'system', label: 'ระบบ', icon: 'settings', items: [
         { key: 'settings', label: 'ตั้งค่าระบบ', perm: 'settings.view' },
+        { key: 'ai', label: 'ตั้งค่าผู้ช่วย AI', perm: 'ai.manage' },
         { key: 'aiusage', label: 'การใช้งานผู้ช่วย AI', perm: 'ai.usage' },
-        { key: 'devices', label: 'อุปกรณ์ POS (Android)', perm: 'devices.manage' },
+        // Every signed-in user pairs their own phone (no permission needed); the POS tab needs devices.manage.
+        { key: 'android', label: 'แอป Android', perm: null },
         { key: 'audit', label: 'ประวัติการแก้ไข', perm: 'audit.view' },
-        // Every signed-in user pairs their own phone (no permission needed).
-        { key: 'mobileapp', label: 'แอปบนมือถือ', perm: null },
     ]},
 ];
 
+// Routes shown under another menu item (tabs of one page).
+const NAV_ALIAS = { mobileapp: 'android', devices: 'android' };
+
+const ANDROID_TITLE = ['ระบบ', 'แอป Android: แอปผู้จัดการบนมือถือ และแอป POS'];
 const PAGE_TITLES = {
     dashboard: ['หน้าแรก', 'แดชบอร์ดภาพรวม'],
-    sales: ['งานประจำวัน', 'ขายสินค้า (POS)'],
-    mysales: ['งานประจำวัน', 'ประวัติการขายของฉัน และขอแก้ไขการขาย'],
-    saleedits: ['งานประจำวัน', 'อนุมัติคำขอแก้ไขการขาย'],
-    drawer: ['งานประจำวัน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
-    closing: ['งานประจำวัน', 'สรุปบัญชีรายวันและส่งเงินสดให้วิทยาลัย'],
-    wages: ['งานประจำวัน', 'เบิกจ่ายค่าแรงพนักงานและผู้จัดการ'],
-    capital: ['งานประจำวัน', 'งบลงทุน เบิกเงินออกจากกำไร และกำไรสุทธิรายเดือน'],
+    sales: ['งานขายหน้าร้าน', 'ขายสินค้า (POS)'],
+    mysales: ['งานขายหน้าร้าน', 'ประวัติการขาย และขอแก้ไขการขาย'],
+    saleedits: ['งานขายหน้าร้าน', 'อนุมัติคำขอแก้ไขการขาย'],
+    drawer: ['งานขายหน้าร้าน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
+    posimport: ['งานขายหน้าร้าน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
+    closing: ['บัญชีของร้าน', 'สรุปบัญชีรายวันและส่งเงินสดให้วิทยาลัย'],
+    wages: ['บัญชีของร้าน', 'เบิกจ่ายค่าแรงพนักงานและผู้จัดการ'],
+    capital: ['บัญชีของร้าน', 'งบลงทุน เบิกเงินออกจากกำไร และกำไรสุทธิรายเดือน'],
     'qr-approve': ['เข้าสู่ระบบ', 'อนุมัติการเข้าสู่ระบบด้วย QR-Code'],
     scanlink: ['สต๊อกสินค้า', 'มือถือเป็นเครื่องสแกนบาร์โค้ดให้คอมพิวเตอร์'],
-    posimport: ['งานประจำวัน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
-    purchase: ['งานประจำวัน', 'ซื้อสินค้าเข้าร้าน'],
-    reorder: ['งานประจำวัน', 'รายการซื้อสินค้าใกล้หมด เปรียบเทียบต้นทุนผู้ขาย'],
-    inventory: ['งานประจำวัน', 'สต๊อก ต้นทุน และกำไรสินค้าของร้าน'],
-    receive: ['งานประจำวัน', 'รับฝากสินค้าเข้าร้าน'],
-    ret: ['งานประจำวัน', 'คืนสินค้าให้ผู้ฝากขาย'],
-    count: ['งานประจำวัน', 'ตรวจนับสต๊อกสินค้าฝากขาย'],
-    consignors: ['ผู้ฝากขาย', 'ทะเบียนผู้ฝากขาย'],
-    passbook: ['ผู้ฝากขาย', 'สมุดบัญชีผู้ฝากขาย'],
-    withdraw: ['ผู้ฝากขาย', 'เบิกเงิน / จ่ายเงินผู้ฝากขาย'],
-    holds: ['ผู้ฝากขาย', 'บัญชีเพื่อผู้ฝากขาย'],
+    purchase: ['ซื้อสินค้าเข้าร้าน', 'บันทึกรายการซื้อสินค้าเข้าร้าน'],
+    reorder: ['ซื้อสินค้าเข้าร้าน', 'รายการซื้อสินค้าใกล้หมด เปรียบเทียบต้นทุนผู้ขาย'],
+    inventory: ['สต๊อกสินค้า', 'สต๊อก ต้นทุน และกำไรสินค้าของร้าน'],
+    count: ['สต๊อกสินค้า', 'ตรวจนับสต๊อกสินค้า'],
+    receive: ['การรับฝากขายสินค้า', 'รับฝากสินค้าเข้าร้าน'],
+    ret: ['การรับฝากขายสินค้า', 'คืนสินค้าให้ผู้ฝากขาย'],
+    consignors: ['การรับฝากขายสินค้า', 'ทะเบียนผู้ฝากขาย'],
+    passbook: ['การรับฝากขายสินค้า', 'สมุดบัญชีผู้ฝากขาย'],
+    withdraw: ['การรับฝากขายสินค้า', 'เบิกเงิน / จ่ายเงินผู้ฝากขาย'],
+    holds: ['การรับฝากขายสินค้า', 'บัญชีเพื่อผู้ฝากขาย'],
     myrequests: ['ผู้ฝากขาย', 'แจ้งฝากสินค้า'],
     mypassbook: ['ผู้ฝากขาย', 'สมุดบัญชีของฉัน'],
     myproducts: ['ผู้ฝากขาย', 'สินค้าที่ฉันฝากขาย'],
-    reports: ['รายงานและระบบ', 'รายงานสรุป'],
-    settings: ['รายงานและระบบ', 'ตั้งค่าระบบบริหารบัญชี'],
-    ai: ['รายงานและระบบ', 'ตั้งค่าผู้ช่วย AI'],
-    aiusage: ['รายงานและระบบ', 'การใช้งานและค่าใช้จ่ายผู้ช่วย AI'],
-    migrations: ['รายงานและระบบ', 'จัดการฐานข้อมูล (Migrations)'],
-    security: ['รายงานและระบบ', 'ตรวจสอบความปลอดภัย / ค้นหา web shell'],
-    backup: ['รายงานและระบบ', 'แบ็คอัพและกู้คืนข้อมูล (รูปภาพ ฐานข้อมูล ไฟล์อื่น ๆ)'],
-    devices: ['รายงานและระบบ', 'จับคู่และจัดการอุปกรณ์ POS (แอป Android)'],
-    audit: ['รายงานและระบบ', 'ประวัติการแก้ไขข้อมูล'],
-    mobileapp: ['แอปบนมือถือ', 'จับคู่แอป Android กับบัญชีของฉัน'],
+    reports: ['รายงาน', 'รายงานสรุป'],
+    settings: ['ระบบ', 'ตั้งค่าระบบบริหารบัญชี'],
+    ai: ['ระบบ', 'ตั้งค่าผู้ช่วย AI'],
+    aiusage: ['ระบบ', 'การใช้งานและค่าใช้จ่ายผู้ช่วย AI'],
+    migrations: ['ระบบ', 'จัดการฐานข้อมูล (Migrations)'],
+    security: ['ระบบ', 'ตรวจสอบความปลอดภัย / ค้นหา web shell'],
+    backup: ['ระบบ', 'แบ็คอัพและกู้คืนข้อมูล (รูปภาพ ฐานข้อมูล ไฟล์อื่น ๆ)'],
+    android: ANDROID_TITLE,
+    devices: ANDROID_TITLE,
+    mobileapp: ANDROID_TITLE,
+    audit: ['ระบบ', 'ประวัติการแก้ไขข้อมูล'],
 };
+
+const CHEVRON = '<svg class="nav-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"></path></svg>';
+
+function navItemHtml(it, badges, sub = false) {
+    return `
+                <button type="button" class="nav-btn${sub ? ' nav-sub-btn' : ''}" data-route="${it.key}" title="${escapeHtml(it.label)}">
+                  ${ICONS[it.key] || ''}<span>${escapeHtml(it.label)}</span>
+                  ${badges[it.key] ? `<span class="badge${badges[it.key].warn ? ' warn' : ''}">${badges[it.key].count}</span>` : ''}
+                </button>`;
+}
+
+/** The menu for this user: pages they may open, main menus with their pages (one page = shown alone). */
+function navHtml(visible, badges) {
+    return PAGES.map((e) => {
+        if (!e.group) return visible(e) ? navItemHtml(e, badges) : '';
+        const items = e.items.filter(visible);
+        if (!items.length) return '';
+        if (items.length === 1) return navItemHtml(items[0], badges);
+        return `
+              <div class="nav-group" data-group="${e.group}">
+                <button type="button" class="nav-group-btn" data-group-toggle="${e.group}" aria-expanded="false" title="${escapeHtml(e.label)}">
+                  ${ICONS[e.icon] || ''}<span>${escapeHtml(e.label)}</span><span class="badge" data-group-badge hidden></span>${CHEVRON}
+                </button>
+                <div class="nav-sub">${items.map((it) => navItemHtml(it, badges, true)).join('')}</div>
+              </div>`;
+    }).join('');
+}
+
+/** Opens one main menu and closes the others (null closes all). */
+function openGroup(name) {
+    document.querySelectorAll('#side-nav .nav-group').forEach((g) => {
+        const open = g.dataset.group === name;
+        g.classList.toggle('open', open);
+        g.querySelector('[data-group-toggle]').setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+}
+
+/** A closed main menu shows the total of its pages' badges, so nothing waiting is hidden. */
+function markGroupBadges() {
+    document.querySelectorAll('#side-nav .nav-group').forEach((g) => {
+        let n = 0;
+        let warn = false;
+        g.querySelectorAll('.nav-sub .badge').forEach((b) => { n += Number(b.textContent) || 0; warn = warn || b.classList.contains('warn'); });
+        const el = g.querySelector('[data-group-badge]');
+        el.hidden = !n;
+        el.textContent = n;
+        el.classList.toggle('warn', warn);
+    });
+}
 
 const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', manager: 'ผู้จัดการร้าน', advisor: 'ครูที่ปรึกษา', cashier: 'พนักงานขาย', closer: 'ผู้สรุปบัญชีรายวัน', executive: 'ผู้บริหาร', consignor: 'ผู้ฝากขาย' };
 
@@ -191,15 +258,7 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
           </div>
         </div>
         <nav id="side-nav">
-          ${PAGES.map((g) => {
-              const items = g.items.filter((it) => (it.perm === null || has(it.perm)) && !(readOnly && READ_ONLY_HIDDEN.includes(it.key)));
-              if (!items.length) return '';
-              return `<div class="group-label">${escapeHtml(g.group)}</div>` + items.map((it) => `
-                <button type="button" class="nav-btn" data-route="${it.key}" title="${escapeHtml(it.label)}">
-                  ${ICONS[it.key] || ''}<span>${escapeHtml(it.label)}</span>
-                  ${badges[it.key] ? `<span class="badge${badges[it.key].warn ? ' warn' : ''}">${badges[it.key].count}</span>` : ''}
-                </button>`).join('');
-          }).join('')}
+          ${navHtml((it) => (it.perm === null || has(it.perm)) && !(it.hideIf && has(it.hideIf)) && !(readOnly && READ_ONLY_HIDDEN.includes(it.key)), badges)}
         </nav>
         <div class="footer-widget">
           <div class="box">
@@ -254,7 +313,12 @@ export function renderShell(root, { user, permissions, impersonator = null, badg
         try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
     });
     document.getElementById('nav-backdrop').addEventListener('click', closeDrawer);
-    document.getElementById('side-nav').addEventListener('click', (e) => { if (e.target.closest('.nav-btn')) closeDrawer(); });
+    document.getElementById('side-nav').addEventListener('click', (e) => {
+        if (e.target.closest('.nav-btn')) { closeDrawer(); return; }
+        const g = e.target.closest('[data-group-toggle]');
+        if (g) openGroup(g.closest('.nav-group').classList.contains('open') ? null : g.dataset.groupToggle);
+    });
+    markGroupBadges();
     DRAWER_MQ.addEventListener?.('change', closeDrawer);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
     document.getElementById('device-btn').addEventListener('click', (e) => toggleDevicePanel(e.currentTarget));
@@ -335,9 +399,16 @@ export function updateThemeButton() {
 }
 
 export function setActiveNav(routeKey) {
+    const navKey = NAV_ALIAS[routeKey] || routeKey;
+    let group = null;
     document.querySelectorAll('.nav-btn').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.route === routeKey);
+        const on = btn.dataset.route === navKey;
+        btn.classList.toggle('active', on);
+        if (on) group = btn.closest('.nav-group')?.dataset.group ?? null;
     });
+    // The main menu of the page shown opens (the others close); a page on its own closes them all.
+    openGroup(group);
+    document.querySelectorAll('#side-nav .nav-group').forEach((g) => g.classList.toggle('has-active', g.dataset.group === group));
     const [crumb, title] = PAGE_TITLES[routeKey] || ['', ''];
     const crumbEl = document.getElementById('topbar-crumb');
     const titleEl = document.getElementById('topbar-title');
@@ -362,4 +433,5 @@ export function updateBadges(badges) {
         el.classList.toggle('warn', !!info.warn);
         el.textContent = info.count;
     }
+    markGroupBadges();
 }
