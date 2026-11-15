@@ -254,6 +254,30 @@ class StockCountService
         return count($old);
     }
 
+    /**
+     * Per product in the round: the suppliers it was bought from (active purchases, under each
+     * supplier's main name so aliases count as one), for filtering the count list by supplier.
+     * @return array<int, string[]>
+     */
+    private function suppliersFor(int $stockCountId): array
+    {
+        [$join, $main] = (new SupplierService($this->db))->sql('pd.supplier_name', 'pd.supplier_tax_id');
+        $stmt = $this->db->prepare(
+            "SELECT DISTINCT pi.product_id, {$main} AS supplier
+             FROM purchase_items pi
+             JOIN purchase_documents pd ON pd.id = pi.purchase_document_id {$join}
+             JOIN stock_count_items sci ON sci.product_id = pi.product_id AND sci.stock_count_id = ?
+             WHERE pi.item_type = 'stock' AND pd.status = 'active' AND TRIM(COALESCE(pd.supplier_name, '')) <> ''
+             ORDER BY supplier"
+        );
+        $stmt->execute([$stockCountId]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $out[(int) $r['product_id']][] = (string) $r['supplier'];
+        }
+        return $out;
+    }
+
     public function diffSummary(int $stockCountId): array
     {
         $stmt = $this->db->prepare(
@@ -267,8 +291,10 @@ class StockCountService
         $stmt->execute([$stockCountId]);
         $items = $stmt->fetchAll();
         $photos = $this->photosFor($stockCountId);
+        $suppliers = $this->suppliersFor($stockCountId);
         foreach ($items as &$item) {
             $item['photos'] = $photos[(int) $item['product_id']] ?? [];
+            $item['suppliers'] = $suppliers[(int) $item['product_id']] ?? [];
             $item['returned'] = self::isReturnedLine($item['note']);
         }
         unset($item);

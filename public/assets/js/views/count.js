@@ -4,6 +4,8 @@ import { openMobileCount, COUNT_PHOTO_SIZE } from './count-mobile.js';
 import { attachmentUrl, fileToDataUrl, thumbDataUrl } from '../images.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 
+const NO_SUPPLIER = '__none__';
+
 // Which lines the table shows, besides the search words.
 const SHOWS = [
     ['all', 'ทั้งหมด'],
@@ -21,6 +23,8 @@ export async function render(container, { permissions, user }) {
     let show = 'all';
     let consignedOnly = false;
     let shopOnly = false;
+    // Supplier filter: '' = any, NO_SUPPLIER = never bought on a purchase, else a supplier's main name.
+    let supplier = '';
     // Column the table is sorted by (null = the order the server sent) and which way.
     let sortKey = null;
     let sortDir = 1;
@@ -110,6 +114,7 @@ export async function render(container, { permissions, user }) {
             <div class="tabs" role="group" aria-label="แสดงรายการ">
               ${SHOWS.map(([k, label]) => `<button type="button" class="tab-btn${show === k ? ' active' : ''}" data-show="${k}">${label}</button>`).join('')}
             </div>
+            ${supplierSelectHtml()}
             <label class="cnt-check"><input type="checkbox" id="cnt-consigned" ${consignedOnly ? 'checked' : ''}> เฉพาะสินค้าฝากขาย</label>
             <label class="cnt-check"><input type="checkbox" id="cnt-shop" ${shopOnly ? 'checked' : ''}> เฉพาะสินค้าของร้าน</label>
             <label class="cnt-check"><input type="checkbox" id="cnt-discontinued" ${showDiscontinued ? 'checked' : ''}> แสดงสินค้าที่เลิกจำหน่าย</label>
@@ -204,6 +209,7 @@ export async function render(container, { permissions, user }) {
             if (shopOnly) { consignedOnly = false; container.querySelector('#cnt-consigned').checked = false; }
             applyFilter();
         });
+        container.querySelector('#cnt-supplier').addEventListener('change', (e) => { supplier = e.target.value; applyFilter(); });
         container.querySelector('#cnt-discontinued').addEventListener('change', (e) => toggleDiscontinued(e.target.checked));
         container.querySelectorAll('[data-return-all]').forEach((b) => b.addEventListener('click', () => returnAll(items[Number(b.dataset.returnAll)])));
         container.querySelectorAll('[data-discontinue]').forEach((b) => b.addEventListener('click', () => discontinue(items[Number(b.dataset.discontinue)])));
@@ -394,8 +400,27 @@ export async function render(container, { permissions, user }) {
 
     function matchesWords(it) {
         const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        const text = [it.name, it.consignor_name, it.barcode].join(' ').toLowerCase();
+        const text = [it.name, it.consignor_name, it.barcode, ...(it.suppliers || [])].join(' ').toLowerCase();
         return words.every((w) => text.includes(w));
+    }
+
+    /** Suppliers the round's goods were bought from (purchase history), with how many lines each. */
+    function supplierSelectHtml() {
+        const n = new Map();
+        let none = 0;
+        items.forEach((it) => {
+            const sup = it.suppliers || [];
+            if (!sup.length && !it.consignor_id) none++;
+            sup.forEach((x) => n.set(x, (n.get(x) || 0) + 1));
+        });
+        const names = [...n.keys()].sort((a, b) => thaiCmp.compare(a, b));
+        if (supplier && supplier !== NO_SUPPLIER && !n.has(supplier)) supplier = '';
+        const opt = (v, label) => `<option value="${escapeHtml(v)}"${supplier === v ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+        return `<select id="cnt-supplier" class="cnt-supplier" title="แสดงเฉพาะสินค้าที่เคยซื้อจากผู้จำหน่ายนี้ (ตามใบซื้อสินค้าเข้าร้าน)">
+            ${opt('', 'ผู้จำหน่ายทั้งหมด')}
+            ${names.map((x) => opt(x, `${x} (${n.get(x)})`)).join('')}
+            ${none ? opt(NO_SUPPLIER, `สินค้าของร้านที่ไม่มีใบซื้อ (${none})`) : ''}
+          </select>`;
     }
 
     /** A clickable header: click to sort by it, click again to flip the order. */
@@ -449,6 +474,7 @@ export async function render(container, { permissions, user }) {
         if (!matchesWords(it)) return false;
         if (consignedOnly && !it.consignor_id) return false;
         if (shopOnly && it.consignor_id) return false;
+        if (supplier === NO_SUPPLIER ? (it.suppliers || []).length : supplier && !(it.suppliers || []).includes(supplier)) return false;
         if (show === 'todo') return counted(it) === null;
         if (show === 'done') return counted(it) !== null;
         if (show === 'diff') return !!diffOf(it);
