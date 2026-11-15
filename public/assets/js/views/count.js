@@ -21,6 +21,9 @@ export async function render(container, { permissions, user }) {
     let show = 'all';
     let consignedOnly = false;
     let shopOnly = false;
+    // Column the table is sorted by (null = the order the server sent) and which way.
+    let sortKey = null;
+    let sortDir = 1;
     let showDiscontinued = false;
     let discontinued = [];
     let notice = null;
@@ -113,9 +116,10 @@ export async function render(container, { permissions, user }) {
             <span class="muted" data-k="shown" style="font-size:13px"></span>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th class="num">ในระบบ</th><th class="num">นับได้จริง</th><th>ผลต่าง</th><th title="รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน">รูปประกอบการนับ</th>${current.status === 'draft' ? '<th></th>' : ''}${manage ? '<th>ผู้ดูแลระบบ</th>' : ''}</tr></thead>
+            <thead><tr>${sortTh('name', 'สินค้า')}${sortTh('consignor', 'ผู้ฝาก')}${sortTh('system', 'ในระบบ', 'num')}${sortTh('counted', 'นับได้จริง', 'num')}${sortTh('diff', 'ผลต่าง')}${sortTh('photos', 'รูปประกอบการนับ', '', 'รูปถ่ายตอนนับ เก็บไว้ตรวจสอบ 30 วัน')}${current.status === 'draft' ? '<th></th>' : ''}${manage ? '<th>ผู้ดูแลระบบ</th>' : ''}</tr></thead>
             <tbody>
-              ${items.map((it, i) => {
+              ${sortedIdx().map((i) => {
+                  const it = items[i];
                   const diff = diffOf(it);
                   return `<tr data-tr="${i}" style="${diff ? 'background:var(--bad-bg)' : ''}" ${matches(it) ? '' : 'hidden'}>
                     <td>${escapeHtml(it.name)}</td><td class="muted">${escapeHtml(it.consignor_name)}</td>
@@ -176,6 +180,12 @@ export async function render(container, { permissions, user }) {
             const b = e.target.closest('[data-save]');
             if (b) saveRow(Number(b.dataset.save), false);
         });
+        container.querySelectorAll('[data-sort]').forEach((th) => th.addEventListener('click', () => {
+            const k = th.dataset.sort;
+            if (sortKey === k) sortDir = -sortDir;
+            else { sortKey = k; sortDir = 1; }
+            sortRows();
+        }));
         const q = container.querySelector('#cnt-q');
         q.addEventListener('input', () => { query = q.value; applyFilter(); });
         container.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
@@ -388,6 +398,52 @@ export async function render(container, { permissions, user }) {
         return words.every((w) => text.includes(w));
     }
 
+    /** A clickable header: click to sort by it, click again to flip the order. */
+    function sortTh(key, label, cls = '', title = '') {
+        const arrow = sortKey === key ? (sortDir > 0 ? ' ▲' : ' ▼') : '';
+        return `<th class="${cls} cnt-sort${sortKey === key ? ' active' : ''}" data-sort="${key}" title="${escapeHtml(title || 'กดเพื่อเรียงตามคอลัมน์นี้ กดอีกครั้งเพื่อกลับลำดับ')}">${label}<span class="cnt-sort-arrow">${arrow}</span></th>`;
+    }
+
+    const thaiCmp = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
+
+    /** Value of a line for the sort column; null (not counted) always goes last. */
+    function sortVal(it) {
+        switch (sortKey) {
+            case 'name': return it.name || '';
+            case 'consignor': return it.consignor_name || '';
+            case 'system': return Number(it.system_qty);
+            case 'counted': return counted(it);
+            case 'diff': return diffOf(it);
+            case 'photos': return (it.photos || []).length;
+            default: return null;
+        }
+    }
+
+    /** Indexes into items in the order the table shows them. */
+    function sortedIdx() {
+        const idx = items.map((_, i) => i);
+        if (!sortKey) return idx;
+        return idx.sort((a, b) => {
+            const va = sortVal(items[a]);
+            const vb = sortVal(items[b]);
+            if (va === null || vb === null) return va === vb ? a - b : va === null ? 1 : -1;
+            const c = typeof va === 'string' ? thaiCmp.compare(va, vb) : va - vb;
+            return c ? c * sortDir : a - b;
+        });
+    }
+
+    // Rows are moved, not redrawn, so numbers typed but not saved stay in their boxes.
+    function sortRows() {
+        const tbody = container.querySelector('tbody');
+        const rows = new Map([...container.querySelectorAll('tr[data-tr]')].map((tr) => [Number(tr.dataset.tr), tr]));
+        sortedIdx().forEach((i) => { const tr = rows.get(i); if (tr) tbody.appendChild(tr); });
+        container.querySelectorAll('[data-sort]').forEach((th) => {
+            const on = th.dataset.sort === sortKey;
+            th.classList.toggle('active', on);
+            th.querySelector('.cnt-sort-arrow').textContent = on ? (sortDir > 0 ? ' ▲' : ' ▼') : '';
+        });
+    }
+
     /** Search words (name, consignor, barcode), consigned-only or shop-only goods if asked, and the chosen tab. */
     function matches(it) {
         if (!matchesWords(it)) return false;
@@ -527,8 +583,10 @@ export async function render(container, { permissions, user }) {
             i = items.findIndex((x) => x.id === it.id);
         }
         if (!next || i < 0) return;
-        const boxes = [...container.querySelectorAll('[data-idx]')].filter((b) => !b.closest('tr').hidden && !b.disabled);
-        const after = boxes.find((b) => Number(b.dataset.idx) > i);
+        // The next box down the table as shown (the table may be sorted by a column).
+        const all = [...container.querySelectorAll('[data-idx]')];
+        const pos = all.findIndex((b) => Number(b.dataset.idx) === i);
+        const after = all.slice(pos + 1).find((b) => !b.closest('tr').hidden && !b.disabled);
         if (after) { after.focus(); after.select?.(); }
     }
 

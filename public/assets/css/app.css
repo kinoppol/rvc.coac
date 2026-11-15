@@ -953,6 +953,9 @@ div.pos-row.out { cursor: not-allowed; }
 .cnt-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
 .cnt-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; cursor: pointer; white-space: nowrap; }
 .cnt-check input { width: auto; margin: 0; }
+.cnt-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+.cnt-sort:hover, .cnt-sort.active { color: var(--pri); }
+.cnt-sort-arrow { font-size: 11px; }
 td[data-save-cell] { white-space: nowrap; }
 .pc-filters select, .pc-filters input[type="date"] { height: 38px; }
 .pc-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 18px; border-top: 1px solid var(--border); font-size: 13px; }
