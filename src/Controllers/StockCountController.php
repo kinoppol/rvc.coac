@@ -144,7 +144,7 @@ class StockCountController
             return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
         }
         $this->service()->purgeOldPhotos();
-        $this->service()->addConsignedLines($id);
+        $this->service()->addMissingLines($id);
         $this->service()->refreshSystemQty($id);
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
     }

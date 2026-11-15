@@ -37,7 +37,7 @@ class StockCountService
             foreach ($products as $p) {
                 $itemStmt->execute([$countId, $p['id'], $p['qty_stock']]);
             }
-            $this->addConsignedLines($countId);
+            $this->addMissingLines($countId);
 
             $this->db->commit();
             return $countId;
@@ -102,9 +102,11 @@ class StockCountService
     /**
      * A draft round lists every consigned product still on sale, even sold out, so the count can
      * find one that is on the shelf though the system says none. Discontinued ones stay out
-     * unless they somehow hold stock.
+     * unless they somehow hold stock. Store goods that came into stock after the round was
+     * opened (a purchase received the same day, a new product) join the round too, since it
+     * otherwise only holds what had stock when it started.
      */
-    public function addConsignedLines(int $stockCountId): void
+    public function addMissingLines(int $stockCountId): void
     {
         $onSale = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')
             ? 'AND (p.discontinued_at IS NULL OR p.qty_stock > 0)' : '';
@@ -112,7 +114,7 @@ class StockCountService
             "INSERT INTO stock_count_items (stock_count_id, product_id, system_qty)
              SELECT sc.id, p.id, p.qty_stock
              FROM stock_counts sc
-             JOIN products p ON p.consignor_id IS NOT NULL {$onSale}
+             JOIN products p ON (p.qty_stock > 0 OR (p.consignor_id IS NOT NULL {$onSale}))
              WHERE sc.id = ? AND sc.status = 'draft'
                AND NOT EXISTS (SELECT 1 FROM stock_count_items x WHERE x.stock_count_id = sc.id AND x.product_id = p.id)"
         )->execute([$stockCountId]);
