@@ -20,6 +20,7 @@ export async function render(container, { permissions, user }) {
     let query = '';
     let show = 'all';
     let consignedOnly = false;
+    let shopOnly = false;
     let showDiscontinued = false;
     let discontinued = [];
     let notice = null;
@@ -107,6 +108,7 @@ export async function render(container, { permissions, user }) {
               ${SHOWS.map(([k, label]) => `<button type="button" class="tab-btn${show === k ? ' active' : ''}" data-show="${k}">${label}</button>`).join('')}
             </div>
             <label class="cnt-check"><input type="checkbox" id="cnt-consigned" ${consignedOnly ? 'checked' : ''}> เฉพาะสินค้าฝากขาย</label>
+            <label class="cnt-check"><input type="checkbox" id="cnt-shop" ${shopOnly ? 'checked' : ''}> เฉพาะสินค้าของร้าน</label>
             <label class="cnt-check"><input type="checkbox" id="cnt-discontinued" ${showDiscontinued ? 'checked' : ''}> แสดงสินค้าที่เลิกจำหน่าย</label>
             <span class="muted" data-k="shown" style="font-size:13px"></span>
           </div>
@@ -181,7 +183,17 @@ export async function render(container, { permissions, user }) {
             container.querySelectorAll('[data-show]').forEach((x) => x.classList.toggle('active', x === b));
             applyFilter();
         }));
-        container.querySelector('#cnt-consigned').addEventListener('change', (e) => { consignedOnly = e.target.checked; applyFilter(); });
+        // The two owner filters exclude each other: ticking one clears the other.
+        container.querySelector('#cnt-consigned').addEventListener('change', (e) => {
+            consignedOnly = e.target.checked;
+            if (consignedOnly) { shopOnly = false; container.querySelector('#cnt-shop').checked = false; }
+            applyFilter();
+        });
+        container.querySelector('#cnt-shop').addEventListener('change', (e) => {
+            shopOnly = e.target.checked;
+            if (shopOnly) { consignedOnly = false; container.querySelector('#cnt-consigned').checked = false; }
+            applyFilter();
+        });
         container.querySelector('#cnt-discontinued').addEventListener('change', (e) => toggleDiscontinued(e.target.checked));
         container.querySelectorAll('[data-return-all]').forEach((b) => b.addEventListener('click', () => returnAll(items[Number(b.dataset.returnAll)])));
         container.querySelectorAll('[data-discontinue]').forEach((b) => b.addEventListener('click', () => discontinue(items[Number(b.dataset.discontinue)])));
@@ -376,10 +388,11 @@ export async function render(container, { permissions, user }) {
         return words.every((w) => text.includes(w));
     }
 
-    /** Search words (name, consignor, barcode), consigned goods only if asked, and the chosen tab. */
+    /** Search words (name, consignor, barcode), consigned-only or shop-only goods if asked, and the chosen tab. */
     function matches(it) {
         if (!matchesWords(it)) return false;
         if (consignedOnly && !it.consignor_id) return false;
+        if (shopOnly && it.consignor_id) return false;
         if (show === 'todo') return counted(it) === null;
         if (show === 'done') return counted(it) !== null;
         if (show === 'diff') return !!diffOf(it);
