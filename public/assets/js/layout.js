@@ -41,6 +41,7 @@ const ICONS = {
 };
 
 ICONS.android = ICONS.mobileapp;
+ICONS.suppliers = svg('<path d="M3 21V9l9-6 9 6v12"></path><path d="M9 21v-6h6v6"></path><path d="M3 21h18"></path>');
 ICONS.ledger = svg('<path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"></path><path d="M18 8h2v12a2 2 0 0 1-2 2H6"></path><path d="M8 8h6M8 12h6M8 16h3"></path>');
 
 // The menu: a few pages stand alone; the rest sit under main menus that open one at a time.
@@ -58,6 +59,7 @@ const PAGES = [
     { group: 'buy', label: 'ซื้อสินค้าเข้าร้าน', icon: 'purchase', items: [
         { key: 'purchase', label: 'บันทึกรายการซื้อสินค้า', perm: 'purchase.create' },
         { key: 'reorder', label: 'รายการซื้อสินค้าใกล้หมด', perm: 'purchase.create' },
+        { key: 'suppliers', label: 'ทะเบียนผู้จำหน่ายสินค้า', perm: 'purchase.create' },
     ]},
     { group: 'stock', label: 'สต๊อกสินค้า', icon: 'inventory', items: [
         { key: 'inventory', label: 'สต๊อกสินค้าของร้าน', perm: 'reports.view' },
@@ -111,6 +113,7 @@ const PAGE_TITLES = {
     scanlink: ['สต๊อกสินค้า', 'มือถือเป็นเครื่องสแกนบาร์โค้ดให้คอมพิวเตอร์'],
     purchase: ['ซื้อสินค้าเข้าร้าน', 'บันทึกรายการซื้อสินค้าเข้าร้าน'],
     reorder: ['ซื้อสินค้าเข้าร้าน', 'รายการซื้อสินค้าใกล้หมด เปรียบเทียบต้นทุนผู้ขาย'],
+    suppliers: ['ซื้อสินค้าเข้าร้าน', 'ทะเบียนผู้จำหน่ายสินค้า และรวมชื่อผู้จำหน่ายที่ซ้ำกัน'],
     inventory: ['สต๊อกสินค้า', 'สต๊อก ต้นทุน และกำไรสินค้าของร้าน'],
     count: ['สต๊อกสินค้า', 'ตรวจนับสต๊อกสินค้า'],
     receive: ['การรับฝากขายสินค้า', 'รับฝากสินค้าเข้าร้าน'],

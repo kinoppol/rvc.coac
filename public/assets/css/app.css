@@ -971,6 +971,11 @@ div.pos-row.out { cursor: not-allowed; }
 .sp-aliases { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 .sp-alias { display: inline-flex; align-items: center; gap: 4px; }
 .sp-alias small { opacity: .75; }
+.sp-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+.sp-sort:hover, .sp-sort.active { color: var(--pri); }
+.sp-suggest { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--priBorder); background: var(--soft); border-radius: 10px; font-size: 13.5px; }
+.sp-suggest-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px dashed var(--border); flex-wrap: wrap; }
+.sp-suggest-names { flex: 1; min-width: 220px; }
 .sp-x { border: 0; background: none; padding: 0 2px; cursor: pointer; color: var(--bad); font-size: 11px; line-height: 1; }
 
 /* Purchase list: filters and pages */
