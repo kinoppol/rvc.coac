@@ -409,7 +409,7 @@ class PurchaseService
         $this->saveBuyer($id, $h['buyer_id']);
         $this->relinkAttachments($id, $keepTokens, $newAttachments);
         $this->audit->log('purchase_documents', $id, 'update',
-            ['doc_no' => $doc['doc_no'], 'status' => 'ordered', 'total' => (float) $doc['total']],
+            ['doc_no' => $doc['doc_no'], 'status' => $doc['status'], 'total' => (float) $doc['total']],
             ['doc_no' => $doc['doc_no'], 'status' => 'active', 'note' => 'ยืนยันรับสินค้าตามใบสั่งซื้อเข้าสต๊อก', 'total' => $h['total'], 'items' => count($lines)],
             $userId, $ip);
         return ['id' => $id, 'doc_no' => $doc['doc_no'], 'received' => true, 'subtotal' => $h['subtotal'], 'supply_total' => $this->supplyTotal($lines), 'total' => $h['total'], 'items' => $result];
@@ -432,9 +432,8 @@ class PurchaseService
         try {
             [$doc, $old] = $this->lockActive($id, 'แก้ไข');
             if (in_array($doc['status'], ['draft', 'ordered'], true)) {
-                if ($receive && $doc['status'] === 'draft') {
-                    throw new \RuntimeException("ใบสั่งซื้อ {$doc['doc_no']} ยังเป็นร่าง กด ยืนยันสั่งซื้อแล้ว ก่อนรับสินค้า");
-                }
+                // A draft may be received straight away: the goods were bought at the shop
+                // (checked against the receipt) without a separate order step.
                 $result = $receive
                     ? $this->receiveOrder($doc, $h, $lines, $keepTokens, $newAttachments, $userId, $ip)
                     : $this->updateOrder($doc, $h, $items, $keepTokens, $newAttachments, $userId, $ip);

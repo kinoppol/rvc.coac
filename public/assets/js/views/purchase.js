@@ -5,6 +5,7 @@ import { markdown } from '../markdown.js';
 import { printPurchaseDoc } from '../print-slip.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 import { openSupplierModal, supplierOptions } from '../supplier-modal.js';
+import { openReconcile } from '../purchase-reconcile.js';
 
 /**
  * ซื้อสินค้าเข้าร้าน: store-owned purchases. Receipt photos (one receipt may
@@ -154,7 +155,7 @@ export async function render(container, { user } = {}) {
     /** Loads a saved purchase into the form; saving then updates it in place. */
     function startEdit(d, { receive = false } = {}) {
         const ordered = d.status === 'ordered' || d.status === 'draft';
-        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, draft: d.status === 'draft', receive: d.status === 'ordered' && receive, orig: d };
+        editing = { id: Number(d.id), doc_no: d.doc_no, ordered, draft: d.status === 'draft', receive: ordered && receive, orig: d };
         header = {
             ...emptyHeader(),
             supplier_name: d.supplier_name || '', supplier_tax_id: d.supplier_tax_id || '', receipt_no: d.receipt_no || '',
@@ -284,7 +285,7 @@ export async function render(container, { user } = {}) {
         ${editing?.ordered ? `<div class="pc-warn" style="margin:0">
           <div><b>${editing.receive ? 'ตรวจสินค้าที่มาส่งกับใบสั่งซื้อ' : editing.draft ? 'ร่างใบสั่งซื้อ ยังไม่ได้สั่ง' : 'ใบสั่งซื้อ รอร้านมาส่ง'} ${escapeHtml(editing.doc_no)}</b><br>
             <span style="font-size:12.5px">${editing.receive
-                ? 'แก้จำนวน/ราคาให้ตรงกับของที่ได้รับจริงและใบเสร็จ/ใบส่งของ แล้วกด <b>ยืนยันรับสินค้าเข้าสต๊อก</b> — สินค้าจะเข้าสต๊อกและบันทึกเป็นใบซื้อ (เลขที่เดิม)'
+                ? 'แก้จำนวน/ราคาให้ตรงกับของที่ได้รับจริงและใบเสร็จ/ใบส่งของ (หรือแนบใบเสร็จแล้วกด <b>✨ ตรวจกับใบเสร็จด้วย AI</b>) แล้วกด <b>ยืนยันรับสินค้าเข้าสต๊อก</b> — สินค้าจะเข้าสต๊อกและบันทึกเป็นใบซื้อ (เลขที่เดิม)'
                 : editing.draft
                     ? 'เพิ่ม/แก้รายการได้ (หรือเลือกสินค้าเพิ่มจากหน้าสต๊อกสินค้า) เมื่อสั่งซื้อกับร้านเรียบร้อยแล้ว กด <b>ยืนยันสั่งซื้อแล้ว</b> สถานะจะเป็นรอรับของ'
                     : 'ใบสั่งซื้อยังไม่เข้าสต๊อก แก้ไขรายการได้จนกว่าจะยืนยันรับสินค้า'}</span></div>
@@ -321,11 +322,14 @@ export async function render(container, { user } = {}) {
               <select id="pc-model" class="pc-select" title="${ocr ? `อ่านรูปด้วย OCR (${escapeHtml(ocr.model)}) แล้วใช้โมเดลนี้แยกรายการสินค้า` : 'โมเดลที่ใช้อ่านรูป'}">
                 ${models.map((m) => `<option value="${m.id}" ${m.id === modelId ? 'selected' : ''}>${escapeHtml(m.label)} · ${escapeHtml(m.provider_name)}</option>`).join('')}
               </select>
-              <button type="button" class="btn" id="pc-extract" ${photos.some(isImage) && !busy ? '' : 'disabled'}>
-                ${busy === 'extract' ? escapeHtml(extractStep || 'กำลังอ่านใบเสร็จ...') : '✨ อ่านใบเสร็จด้วย AI'}
+              <button type="button" class="btn" id="pc-extract" ${photos.length && !busy ? '' : 'disabled'}
+                title="${editing?.ordered ? 'อ่านใบเสร็จแล้วเทียบกับรายการในใบสั่งซื้อ ให้ตรวจก่อนปรับ' : 'อ่านรูปใบเสร็จ หรือไฟล์ .md เป็นรายการสินค้า'}">
+                ${busy === 'extract' ? escapeHtml(extractStep || 'กำลังอ่านใบเสร็จ...') : editing?.ordered ? '✨ ตรวจกับใบเสร็จด้วย AI' : '✨ อ่านใบเสร็จด้วย AI'}
               </button>`
             : '<span class="muted" style="font-size:13px">ยังไม่มีโมเดล AI ที่อ่านรูปได้ — เปิดใช้ได้ที่หน้า "ตั้งค่าผู้ช่วย AI" (ติ๊ก "อ่านรูป") หรือกรอกรายการเองด้านล่าง</span>'}
           </div>
+          ${editing?.ordered && models.length ? `<div class="muted" style="font-size:12.5px;margin-top:8px">ซื้อ/รับของได้ไม่ตรงกับใบสั่งซื้อ? แนบรูปใบเสร็จหรือไฟล์ .md ของที่ได้จริง แล้วกด <b>✨ ตรวจกับใบเสร็จด้วย AI</b>
+            ระบบจะเทียบทีละรายการ — จำนวน ราคาทุน รายการที่ไม่ได้รับ และรายการที่ได้เพิ่ม — ให้ตรวจก่อนปรับรายการในฟอร์ม${photos.some((p) => p.fresh) ? ' (อ่านเฉพาะไฟล์ที่แนบเพิ่มครั้งนี้)' : ''}</div>` : ''}
         </section>
 
         <section class="card card-pad">
@@ -419,9 +423,11 @@ export async function render(container, { user } = {}) {
         const wait = busy ? 'disabled' : '';
         const label = (mode, text) => (busy === mode ? 'กำลังบันทึก...' : text);
         if (editing?.draft) {
+            const receive = `<button type="button" class="btn ${editing.receive ? '' : 'secondary'}" data-save="receive" ${wait} title="ซื้อ/ได้รับของแล้ว: เข้าสต๊อกตามรายการนี้">${label('receive', '✓ ยืนยันรับสินค้าเข้าสต๊อก')}</button>`;
+            const place = `<button type="button" class="btn ${editing.receive ? 'secondary' : ''}" data-save="place" ${wait} title="สั่งซื้อกับร้านแล้ว: สถานะเป็นรอรับของ">${label('place', '✓ บันทึกและยืนยันสั่งซื้อแล้ว')}</button>`;
             return `<span class="actions-row">
               <button type="button" class="btn secondary" data-save="order" ${wait}>${label('order', 'บันทึกร่าง')}</button>
-              <button type="button" class="btn" data-save="place" ${wait} title="สั่งซื้อกับร้านแล้ว: สถานะเป็นรอรับของ">${label('place', '✓ บันทึกและยืนยันสั่งซื้อแล้ว')}</button></span>`;
+              ${editing.receive ? place + receive : receive + place}</span>`;
         }
         if (editing?.ordered) {
             const order = `<button type="button" class="btn ${editing.receive ? 'secondary' : ''}" data-save="order" ${wait}>${label('order', `บันทึกใบสั่งซื้อ ${escapeHtml(editing.doc_no)}`)}</button>`;
@@ -472,7 +478,8 @@ export async function render(container, { user } = {}) {
                   <td class="muted" style="font-size:12.5px">${escapeHtml(d.user_name || '')}<div>${fmtDateTime(d.created_at)}</div>${d.buyer_name ? `<div>ผู้ซื้อ: <b style="color:var(--text)">${escapeHtml(d.buyer_name)}</b></div>` : ''}</td>
                   <td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-view="${d.id}">ดู</button>
                     ${isOrdered(d) ? `<button type="button" class="btn sm" data-receive="${d.id}" title="ของมาส่งแล้ว: ตรวจรายการแล้วยืนยันเข้าสต๊อก">รับสินค้า</button>` : ''}
-                    ${isDraft(d) ? `<button type="button" class="btn sm" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}" title="สั่งซื้อกับร้านเรียบร้อยแล้ว: เปลี่ยนเป็นรอรับของ">ยืนยันสั่งซื้อแล้ว</button>` : ''}
+                    ${isDraft(d) ? `<button type="button" class="btn sm" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}" title="สั่งซื้อกับร้านเรียบร้อยแล้ว: เปลี่ยนเป็นรอรับของ">ยืนยันสั่งซื้อแล้ว</button>
+                    <button type="button" class="btn secondary sm" data-receive="${d.id}" title="ซื้อของแล้ว: ตรวจกับใบเสร็จแล้วรับเข้าสต๊อก">รับสินค้า</button>` : ''}
                     ${isCancelled(d) ? '' : `<button type="button" class="btn secondary sm" data-edit="${d.id}" ${editing?.id === Number(d.id) ? 'disabled title="กำลังแก้ไขอยู่"' : ''}>แก้ไข</button>
                     <button type="button" class="btn secondary sm pc-cancel-btn" data-cancel="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยกเลิก</button>`}</td>
                 </tr>`).join('') || `<tr><td colspan="9" class="empty">${list.q || list.status || list.range !== 'all' ? 'ไม่พบใบซื้อตามเงื่อนไขที่เลือก' : 'ยังไม่มีใบซื้อ'}</td></tr>`}
@@ -849,7 +856,8 @@ export async function render(container, { user } = {}) {
               <button type="button" class="btn secondary" data-print-view>🖨 พิมพ์</button>
               ${isCancelled(d) ? '' : `<button type="button" class="btn ${isOrdered(d) || isDraft(d) ? 'secondary' : ''}" data-edit="${d.id}">${isDraft(d) ? 'แก้ไขร่าง' : isOrdered(d) ? 'แก้ไขใบสั่งซื้อ' : 'แก้ไขใบซื้อนี้'}</button>`}
               ${isOrdered(d) ? `<button type="button" class="btn" data-receive="${d.id}">รับสินค้าเข้าสต๊อก</button>` : ''}
-              ${isDraft(d) ? `<button type="button" class="btn" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยืนยันสั่งซื้อแล้ว</button>` : ''}
+              ${isDraft(d) ? `<button type="button" class="btn secondary" data-receive="${d.id}" title="ซื้อของแล้ว: ตรวจกับใบเสร็จแล้วรับเข้าสต๊อก">ซื้อแล้ว / รับสินค้า</button>
+                <button type="button" class="btn" data-place="${d.id}" data-doc="${escapeHtml(d.doc_no)}">ยืนยันสั่งซื้อแล้ว</button>` : ''}
               <button type="button" class="btn secondary" data-close-view>ปิด</button></div></div>
           </div>
         </div>`;
@@ -1302,7 +1310,7 @@ export async function render(container, { user } = {}) {
         draw();
         try {
             for (const f of files.slice(0, room)) {
-                photos.push(await uploadEvidence(f));
+                photos.push({ ...(await uploadEvidence(f)), fresh: true });
                 draw();
             }
             if (files.length > room) error = `แนบได้สูงสุด ${MAX_PHOTOS} ไฟล์ต่อใบเสร็จ`;
@@ -1375,17 +1383,24 @@ export async function render(container, { user } = {}) {
     }
 
     async function extract() {
-        if (!photos.some(isImage) || !modelId) return;
+        if (!photos.length || !modelId) return;
+        const reconcile = !!editing?.ordered && items.some((i) => i.name.trim());
         const hasData = items.some((i) => i.name);
-        if (hasData && !(await confirmDialog('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI', { title: 'อ่านใบเสร็จด้วย AI?', okText: 'ดำเนินการต่อ' }))) return;
+        if (!reconcile && hasData && !(await confirmDialog('ข้อมูลรายการที่กรอกไว้จะถูกแทนที่ด้วยผลการอ่านจาก AI', { title: 'อ่านใบเสร็จด้วย AI?', okText: 'ดำเนินการต่อ' }))) return;
         busy = 'extract';
         extractStep = '';
         error = null;
         success = null;
         draw();
         try {
-            const tokens = photos.filter(isImage).map((p) => p.token);
-            const res = ocr ? await extractWithOcr(tokens) : await api.post('/purchases/extract', { model: modelId, attachments: tokens });
+            const res = await readReceipt();
+            if (reconcile) {
+                busy = null;
+                extractStep = '';
+                draw();
+                await reconcileWith(res);
+                return;
+            }
             applyDraft(res.data, null);
             res.preview.forEach((p, i) => {
                 if (items[i]) applyPreview(items[i], p);
@@ -1406,22 +1421,51 @@ export async function render(container, { user } = {}) {
     }
 
     /**
-     * Reads the photos into Markdown with the OCR model, then has the chosen model
-     * convert the item lines a few at a time (like a .md import in the assistant).
-     * Returns the same { data, preview } as /purchases/extract.
+     * Reads the receipt evidence: the files added in this form if any (an order's own older
+     * evidence stays out), else all of them. A .md / .txt file is read as text (exact); else
+     * the photos (OCR first when set up). Returns { data, preview } like /purchases/extract.
      */
+    async function readReceipt() {
+        const fresh = photos.filter((p) => p.fresh);
+        const pool = fresh.length ? fresh : photos;
+        const texts = pool.filter((p) => !isImage(p));
+        if (texts.length) {
+            step('กำลังเปิดไฟล์ .md...');
+            const parts = await Promise.all(texts.map(async (f) => {
+                const r = await fetch(attachmentUrl(f.token), { credentials: 'same-origin' });
+                if (!r.ok) throw new Error(`เปิดไฟล์ ${f.name || '.md'} ไม่ได้`);
+                return r.text();
+            }));
+            return readMarkdown(parts.join('\n\n'), texts[0].name || 'ใบเสร็จ.md', false, null);
+        }
+        const tokens = pool.filter(isImage).map((p) => p.token);
+        if (!tokens.length) throw new Error('ยังไม่มีรูปใบเสร็จหรือไฟล์ .md');
+        return ocr ? extractWithOcr(tokens) : api.post('/purchases/extract', { model: modelId, attachments: tokens });
+    }
+
+    /** Reads the photos into Markdown with the OCR model, then reads that like a .md file. */
     async function extractWithOcr(tokens) {
         step(`กำลังอ่านรูป${tokens.length > 1 ? ` ${tokens.length} รูป` : ''}ด้วย OCR...`);
         const md = (await api.post('/ai/ocr', { attachments: tokens })).markdown;
+        return readMarkdown(md, 'ใบเสร็จจากรูป (OCR).md', true, tokens);
+    }
+
+    /**
+     * Has the chosen model convert a receipt's text into items a few lines at a time (like a
+     * .md import in the assistant). tokens: the photos it came from (OCR), tried directly
+     * by a model that reads photos when the text has no item lines.
+     */
+    async function readMarkdown(md, fileName, isOcr, tokens) {
         step('กำลังแยกรายการสินค้า...');
-        const plan = await api.post('/ai/receipt/plan', { content: md, file_name: 'ใบเสร็จจากรูป (OCR).md', ocr: true });
+        const plan = await api.post('/ai/receipt/plan', { content: md, file_name: fileName, ocr: isOcr });
         if (!plan.rows.length) {
             // No item lines found in the text: a model that reads photos can still try the photos.
-            if (models.find((m) => m.id === modelId)?.supports_vision) {
+            if (tokens && models.find((m) => m.id === modelId)?.supports_vision) {
                 step('ไม่พบรายการในข้อความ OCR — ให้ AI อ่านจากรูปแทน...');
                 return api.post('/purchases/extract', { model: modelId, attachments: tokens });
             }
-            throw new Error('OCR อ่านรูปได้ แต่ไม่พบรายการสินค้าในข้อความ ลองถ่ายให้ชัดขึ้น เลือกโมเดลที่อ่านรูปได้ หรือกรอกเอง');
+            throw new Error(isOcr ? 'OCR อ่านรูปได้ แต่ไม่พบรายการสินค้าในข้อความ ลองถ่ายให้ชัดขึ้น เลือกโมเดลที่อ่านรูปได้ หรือกรอกเอง'
+                : `ไม่พบรายการสินค้าในไฟล์ ${fileName}`);
         }
         const warnings = [];
         const items = [];
@@ -1443,7 +1487,7 @@ export async function render(container, { user } = {}) {
         }
         step('กำลังสรุปยอด (ร้านค้า เลขที่ใบเสร็จ ส่วนลด ยอดสุทธิ)...');
         const sum = await api.post('/ai/receipt/summary', {
-            model: modelId, header: plan.header, footer: plan.footer, file_name: 'ใบเสร็จจากรูป (OCR)', item_count: items.length, ocr: true,
+            model: modelId, header: plan.header, footer: plan.footer, file_name: fileName.replace(/\.(md|markdown|txt)$/i, ''), item_count: items.length, ocr: isOcr,
         });
         if (sum.error) warnings.push(`อ่านยอดสรุปไม่สำเร็จ (${sum.error}) กรุณาตรวจชื่อร้านและยอดสุทธิเอง`);
         const s = sum.summary || {};
@@ -1455,6 +1499,82 @@ export async function render(container, { user } = {}) {
         step('กำลังจับคู่สินค้ากับสต๊อก...');
         const preview = (await api.post('/purchases/preview', { items })).data;
         return { data, preview };
+    }
+
+    /**
+     * The receipt against the draft / order in the form: the user checks each pairing in a
+     * dialog, then matched lines take the receipt's quantity and cost, lines bought on top are
+     * added and lines not received are taken out. Nothing is saved until the form is saved.
+     */
+    async function reconcileWith(res) {
+        const d = res.data || {};
+        const recItems = d.items || [];
+        if (!recItems.length) {
+            error = 'AI ไม่พบรายการสินค้าในใบเสร็จ ลองถ่ายให้ชัดขึ้น หรือปรับรายการเอง';
+            draw();
+            return;
+        }
+        const lines = items.filter((it) => it.name.trim());
+        const order = lines.map((it) => ({
+            name: it.name, receipt_name: it.receipt_name, barcode: it.barcode, productId: it.pickedId || it.match?.product_id || null,
+            qty: Number(it.qty), unit_cost: Number(it.unit_cost), line_total: Number(it.line_total),
+        }));
+        const rec = recItems.map((r, i) => ({
+            name: r.name || r.product_name || '', product_name: r.product_name || '', barcode: r.barcode || '',
+            productId: res.preview?.[i]?.match?.product_id || null,
+            qty: Number(r.qty) || 0, unit_cost: Number(r.unit_cost) || 0, line_total: Number(r.line_total) || 0,
+        }));
+        const choice = await openReconcile({ docNo: editing.doc_no, order, rec, receipt: d, warnings: d.warnings || [] });
+        if (!choice) return;
+
+        const notes = [];
+        const added = [];
+        recItems.forEach((r, i) => {
+            const k = choice.pair[i];
+            if (k === -2) return;
+            if (k >= 0) {
+                const it = lines[k];
+                const before = { qty: Number(it.qty), cost: Number(it.unit_cost) };
+                it.qty = Number(r.qty) || it.qty;
+                it.unit_cost = Number(r.unit_cost) || it.unit_cost;
+                it.line_total = Number(r.line_total) || round2(it.qty * it.unit_cost);
+                if (!it.barcode && r.barcode) it.barcode = String(r.barcode);
+                if (r.name && r.name !== it.name) it.receipt_name = r.name;
+                if (!it.packFixed && Number(r.pack_size) > 1 && Number(it.pack_size) <= 1) it.pack_size = Number(r.pack_size);
+                const bits = [];
+                if (before.qty !== Number(it.qty)) bits.push(`จำนวน ${before.qty} → ${it.qty}`);
+                if (Math.abs(before.cost - Number(it.unit_cost)) >= 0.005) bits.push(`ทุน ${money(before.cost)} → ${money(it.unit_cost)}`);
+                if (bits.length) notes.push(`${it.name}: ${bits.join(', ')}`);
+                return;
+            }
+            const it = {
+                ...emptyItem(), name: r.product_name || r.name, receipt_name: r.name || '', pack_size: Number(r.pack_size) || 1,
+                item_type: r.item_type === 'supply' ? 'supply' : 'stock', typeTouched: !!r.item_type,
+                barcode: r.barcode || '', qty: Number(r.qty) || 1, unit_cost: Number(r.unit_cost) || 0,
+                line_total: Number(r.line_total) || 0, sale_price: Number(r.sale_price) || 0, presetPrice: Number(r.sale_price) || 0,
+            };
+            if (res.preview?.[i]) applyPreview(it, res.preview[i]);
+            added.push(it);
+            notes.push(`ได้เพิ่ม: ${it.name} ${it.qty} × ${money(it.unit_cost)}`);
+        });
+        const removed = new Set(choice.remove.map((k) => lines[k]));
+        removed.forEach((it) => notes.push(`ไม่ได้รับ (นำออก): ${it.name}`));
+        items = [...lines.filter((it) => !removed.has(it)), ...added];
+        if (!items.length) items = [emptyItem()];
+        if (choice.header) {
+            for (const f of ['receipt_no', 'receipt_date']) if (d[f]) header[f] = d[f];
+            if (d.supplier_tax_id && !header.supplier_tax_id) header.supplier_tax_id = d.supplier_tax_id;
+            header.discount = Number(d.discount) || 0;
+            header.vat = Number(d.vat) || 0;
+            if (Number(d.total)) header.total = Number(d.total);
+        }
+        warnings = [`ปรับตามใบเสร็จแล้ว — ${notes.length ? notes.join(' · ') : 'ทุกรายการตรงกับใบสั่งซื้อ'}`, ...(d.warnings || [])];
+        source = 'ai';
+        // Checked against what was bought: confirming the goods into stock is the next step.
+        editing.receive = true;
+        if (!header.receipt_date) header.receipt_date = todayISO();
+        draw();
+        refreshPreview();
     }
 
     /** The product a line restocks: one paired by hand, else (editing) the one it was saved with. */
