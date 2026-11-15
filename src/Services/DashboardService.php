@@ -198,11 +198,11 @@ class DashboardService
             'store_stock' => [
                 'title' => 'สต๊อกสินค้าของร้าน', 'link' => 'inventory',
                 'sections' => [
-                    $section('ใกล้หมด (เหลือไม่เกิน ' . $lowAt . ' ชิ้น)', [['product', 'สินค้า', 'text'], ['qty', 'คงเหลือ', 'qty'], ['sold_30d', 'ขาย 30 วัน', 'qty'], ['cost_price', 'ทุน/ชิ้น', 'money']], $q(
+                    $section('ใกล้หมด (ตามเกณฑ์ของแต่ละสินค้า ไม่มีเกณฑ์ใช้ ' . $lowAt . ' ชิ้น)', [['product', 'สินค้า', 'text'], ['qty', 'คงเหลือ', 'qty'], ['sold_30d', 'ขาย 30 วัน', 'qty'], ['cost_price', 'ทุน/ชิ้น', 'money']], $q(
                         'SELECT p.name AS product, p.qty_stock AS qty, p.cost_price,
                                 (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
                                   WHERE si.product_id = p.id AND s.business_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)) AS sold_30d
-                         FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= ?
+                         FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= ' . LowStockService::lineSql($this->db) . '
                          ORDER BY sold_30d DESC, p.qty_stock ASC LIMIT 100',
                         [$lowAt]
                     )),
@@ -286,14 +286,14 @@ class DashboardService
         }
 
         $lowAt = (new SettingsService($this->db))->lowStockThreshold();
-        $stmt = $this->db->prepare('SELECT COUNT(*) FROM products WHERE consignor_id IS NULL AND qty_stock <= ? AND qty_sold > 0'
-            . (\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? ' AND discontinued_at IS NULL' : ''));
+        $stmt = $this->db->prepare('SELECT COUNT(*) FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= ' . LowStockService::lineSql($this->db) . ' AND p.qty_sold > 0'
+            . (\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? ' AND p.discontinued_at IS NULL' : ''));
         $stmt->execute([$lowAt]);
         $lowStore = $stmt->fetchColumn();
         if ((int) $lowStore > 0) {
             $alerts[] = [
                 'title' => 'สินค้าของร้านใกล้หมดสต๊อก ' . $lowStore . ' รายการ',
-                'detail' => 'เหลือไม่เกิน ' . $lowAt . ' ชิ้น ควรสั่งซื้อเพิ่ม',
+                'detail' => 'เหลือถึงเกณฑ์ใกล้หมดของสินค้านั้น (ไม่มีเกณฑ์ใช้ ' . $lowAt . ' ชิ้น) ควรสั่งซื้อเพิ่ม',
                 'action' => 'สร้างรายการซื้อสินค้าเข้าร้าน',
                 'target' => 'reorder',
                 'level' => 'warn',

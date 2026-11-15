@@ -227,6 +227,46 @@ class InventoryController
     }
 
     /**
+     * Admin / manager: the low-stock assistant's suggested line for every store product
+     * (?avg_days=&cover_days=&no_sales=; missing = the settings saved last time).
+     */
+    public function suggestLowStock(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบและผู้จัดการร้านเท่านั้น', 403);
+        }
+        $db = Db::connection();
+        $service = new \App\Services\LowStockService($db);
+        $saved = $service->params();
+        $q = $request->getQueryParams();
+        $num = fn (string $k) => isset($q[$k]) && is_numeric($q[$k]) ? (int) $q[$k] : $saved[$k];
+        return $this->json($response, ['data' => $service->suggest($num('avg_days'), $num('cover_days'), $num('no_sales')) + [
+            'threshold' => (new SettingsService($db))->lowStockThreshold(),
+        ]]);
+    }
+
+    /** Admin / manager: saves each product's running-low line (body: items [{id, low_stock_at|null}], avg_days, cover_days, no_sales). */
+    public function applyLowStock(Request $request, Response $response): Response
+    {
+        $user = $request->getAttribute('user');
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบและผู้จัดการร้านเท่านั้น', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        $items = $body['items'] ?? null;
+        if (!is_array($items) || count($items) > 20000) {
+            return $this->error($response, 'ไม่มีรายการสินค้าที่จะบันทึก', 422);
+        }
+        try {
+            $n = (new \App\Services\LowStockService(Db::connection()))->apply($items, $body, (int) $user['id']);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['saved' => $n]);
+    }
+
+    /**
      * Creates one purchase order (waiting for delivery) per supplier from products picked in stock.
      * Body: {orders: [{supplier_name, supplier_tax_id?, funding?, items: [{product_id, name, receipt_name?, barcode?, qty, pack_size, unit_cost}]}]}
      */

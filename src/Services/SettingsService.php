@@ -20,6 +20,11 @@ class SettingsService
         'waive_qty' => '20',
         'purchase_markup_percent' => '20',
         'low_stock_threshold' => '10', // store products with this many pieces or fewer count as running low (stock page / purchase list)
+        // The low-stock assistant (LowStockService): each product's own line = average sold per open day
+        // over the last low_stock_avg_days days × low_stock_cover_days, rounded up; no sales = low_stock_no_sales.
+        'low_stock_avg_days' => '14',
+        'low_stock_cover_days' => '3',
+        'low_stock_no_sales' => '5',
         'ai_cost_general' => '1',
         'ai_cost_markdown' => '3',
         'ai_cost_receipt' => '5',

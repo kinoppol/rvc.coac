@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { openLowStockAssist } from '../low-stock-assist.js';
 import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
@@ -83,9 +84,11 @@ export async function render(container, { navigate, permissions, user }) {
     // Admin / manager: set the piece sale price of the store's goods in the editor.
     const canSetPrice = canEdit && ['admin', 'manager'].includes(user?.role);
     let zeroCost = [];
-    // Store goods with this many pieces or fewer are running low (setting low_stock_threshold).
+    // Store goods with this many pieces or fewer are running low: the product's own line (set by the
+    // low-stock assistant, migration 0078), else the shop-wide setting low_stock_threshold.
     const lowAt = () => Number(res?.low_stock_threshold ?? 10);
-    const isLow = (p) => p.consignor_id == null && !p.discontinued_at && Number(p.qty_stock) <= lowAt();
+    const lineOf = (p) => (p.low_stock_at === null || p.low_stock_at === undefined ? lowAt() : Number(p.low_stock_at));
+    const isLow = (p) => p.consignor_id == null && !p.discontinued_at && Number(p.qty_stock) <= lineOf(p);
     let lowBusy = false;
     let consignors = null; // loaded the first time an admin opens the editor
     const picked = new Set(); // products ticked: store goods for a purchase order; any (admin) to merge
@@ -228,7 +231,7 @@ export async function render(container, { navigate, permissions, user }) {
             </div>
           </div>
           <div class="tabs" style="margin-top:12px" role="group" aria-label="กรองสินค้า">
-            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${k === 'low' ? `${l} (≤ ${count(lowAt())})` : l} (${count(listedUnder(k).length)})</button>`).join('')}
+            ${FILTERS.map(([k, l]) => `<button type="button" class="tab-btn ${k === filter ? 'active' : ''}" data-filter="${k}"${FILTER_TIPS[k] ? ` title="${FILTER_TIPS[k]}"` : ''}>${k === 'low' ? `${l} (ตามเกณฑ์)` : l} (${count(listedUnder(k).length)})</button>`).join('')}
           </div>
           ${lowLineHtml()}
           ${filter === 'all' || filter === 'consign' ? '<div class="muted" style="font-size:12px;margin-top:8px">ตัวเลขสรุปด้านบนเป็นของสินค้าของร้านเท่านั้น · สินค้าฝากขายแสดงเฉพาะล็อตที่ยังมีของเหลือ — ค้นหาชื่อ/บาร์โค้ดจะพบล็อตที่หมดหรือคืนผู้ฝากแล้วด้วย (ต้นทุน = ราคาที่ผู้ฝากได้, กำไร = ค่าฝากขายของร้าน)</div>' : ''}
@@ -367,6 +370,7 @@ export async function render(container, { navigate, permissions, user }) {
         }));
         container.querySelector('#go-reorder')?.addEventListener('click', () => navigate('reorder'));
         container.querySelector('#low-save')?.addEventListener('click', saveLowAt);
+        container.querySelector('#low-assist')?.addEventListener('click', () => openLowStockAssist({ onSaved: load }));
         container.querySelector('#low-at')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveLowAt(); });
         const buy = container.querySelector('#go-buy');
         if (buy) buy.addEventListener('click', () => navigate('purchase'));
@@ -872,12 +876,13 @@ export async function render(container, { navigate, permissions, user }) {
         const n = count(lowAt());
         return `<div class="actions-row" style="margin-top:10px;font-size:13px;gap:8px">
           ${canSetPrice
-              ? `<label for="low-at">เกณฑ์สินค้าใกล้หมด: คงเหลือไม่เกิน</label>
+              ? `<label for="low-at">เกณฑ์กลางสินค้าใกล้หมด: คงเหลือไม่เกิน</label>
                  <input type="number" id="low-at" min="0" step="1" value="${lowAt()}" class="num" style="width:80px" aria-label="จำนวนชิ้นที่ถือว่าใกล้หมด">
                  <span>ชิ้น</span>
-                 <button type="button" class="btn secondary sm" id="low-save" ${lowBusy ? 'disabled' : ''}>${lowBusy ? 'กำลังบันทึก...' : 'บันทึก'}</button>`
-              : `<span>เกณฑ์สินค้าใกล้หมด: คงเหลือไม่เกิน <b>${n}</b> ชิ้น</span>`}
-          <span class="muted" style="font-size:12px">ใช้กับแท็บใกล้หมด หน้ารายการซื้อสินค้าใกล้หมด และการแจ้งเตือนที่แดชบอร์ด (เฉพาะสินค้าของร้าน)</span>
+                 <button type="button" class="btn secondary sm" id="low-save" ${lowBusy ? 'disabled' : ''}>${lowBusy ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+                 <button type="button" class="btn sm" id="low-assist" title="คำนวณเกณฑ์ของแต่ละสินค้าจากยอดขายเฉลี่ย">✨ ผู้ช่วยกำหนดเกณฑ์ใกล้หมด</button>`
+              : `<span>เกณฑ์กลางสินค้าใกล้หมด: คงเหลือไม่เกิน <b>${n}</b> ชิ้น</span>`}
+          <span class="muted" style="font-size:12px">สินค้าที่มีเกณฑ์ของตัวเอง (จากผู้ช่วยกำหนดเกณฑ์) ใช้เกณฑ์นั้น ที่เหลือใช้เกณฑ์กลาง · ใช้กับแท็บใกล้หมด หน้ารายการซื้อสินค้าใกล้หมด และการแจ้งเตือนที่แดชบอร์ด (เฉพาะสินค้าของร้าน)</span>
         </div>`;
     }
 

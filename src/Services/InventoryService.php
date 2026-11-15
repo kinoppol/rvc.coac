@@ -28,7 +28,9 @@ class InventoryService
         $discontinued = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? 'p.discontinued_at' : 'NULL'; // migration 0067
         // Promotion price selling now, the normal price kept aside, the latest promotion price (migration 0070).
         $promo = \App\Support\Db::hasColumn($this->db, 'products', 'on_promo') ? 'p.on_promo, p.regular_price, p.promo_price' : '0 AS on_promo, NULL AS regular_price, NULL AS promo_price';
-        $sql = "SELECT p.id, p.name, p.barcode, {$noBarcode} AS no_barcode, {$discontinued} AS discontinued_at, p.image_token, p.consignor_id, c.name AS consignor_name,
+        // The product's own running-low line (migration 0078; none = the shop-wide setting).
+        $lowLine = LowStockService::ready($this->db) ? 'p.low_stock_at' : 'NULL';
+        $sql = "SELECT p.id, p.name, p.barcode, {$noBarcode} AS no_barcode, {$lowLine} AS low_stock_at, {$discontinued} AS discontinued_at, p.image_token, p.consignor_id, c.name AS consignor_name,
                        (SELECT a.created_at FROM attachments a WHERE a.token = p.image_token) AS image_at,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price, {$promo},
@@ -728,24 +730,25 @@ class InventoryService
     }
 
     /**
-     * Store products running low (this many pieces or fewer, not discontinued), each with the
+     * Store products running low (their own line, else this many pieces or fewer; not discontinued), each with the
      * suppliers it was bought from (cheapest per piece first, see supplierOptions), what sold in
      * the last 30 days and orders already waiting for it — for the purchase list page.
      */
     public function lowStock(int $threshold): array
     {
         $discontinued = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? ' AND p.discontinued_at IS NULL' : ''; // migration 0067
+        $line = LowStockService::lineSql($this->db);
         $stmt = $this->db->prepare(
-            "SELECT p.id,
+            "SELECT p.id, {$line} AS low_at,
                     (SELECT COALESCE(SUM(si.qty), 0) FROM sale_items si JOIN sales s ON s.id = si.sale_id
                       WHERE si.product_id = p.id AND s.business_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)) AS sold_30d,
                     (SELECT MAX(s.business_date) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = p.id) AS last_sold
-             FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= ?{$discontinued}"
+             FROM products p WHERE p.consignor_id IS NULL AND p.qty_stock <= {$line}{$discontinued}"
         );
-        $stmt->execute([$threshold]);
+        $stmt->execute([$threshold, $threshold]);
         $extra = [];
         foreach ($stmt->fetchAll() as $r) {
-            $extra[(int) $r['id']] = ['sold_30d' => (float) $r['sold_30d'], 'last_sold' => $r['last_sold']];
+            $extra[(int) $r['id']] = ['sold_30d' => (float) $r['sold_30d'], 'last_sold' => $r['last_sold'], 'low_at' => (int) $r['low_at']];
         }
         if (!$extra) {
             return [];

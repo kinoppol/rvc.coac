@@ -551,6 +551,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('purchase.create'));
     $group->put('/inventory/low-stock-threshold', [InventoryController::class, 'setLowStockThreshold'])
         ->add(new RoleGuard('reports.view'));
+    $group->get('/inventory/low-stock/suggest', [InventoryController::class, 'suggestLowStock'])
+        ->add(new RoleGuard('reports.view'));
+    $group->put('/inventory/low-stock/lines', [InventoryController::class, 'applyLowStock'])
+        ->add(new RoleGuard('reports.view'));
     $group->get('/inventory/order-check',[InventoryController::class, 'orderCheck'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/inventory/document',[InventoryController::class, 'document'])

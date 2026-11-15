@@ -3,20 +3,26 @@ import { money, count, escapeHtml, fmtDate } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { printPurchaseList } from '../print-slip.js';
 import { openSupplierModal } from '../supplier-modal.js';
+import { openLowStockAssist } from '../low-stock-assist.js';
 
-// รายการซื้อสินค้าใกล้หมด: the store's goods at or below the low-stock line (set on the stock
-// page), each with every supplier it was bought from and how far apart their costs per piece
+// รายการซื้อสินค้าใกล้หมด: the store's goods at or below their low-stock line (their own, set by
+// the low-stock assistant, else the shop-wide one set on the stock page), each with every supplier it was bought from and how far apart their costs per piece
 // are. One supplier is picked per product (the cheapest by default); the list prints as a
 // purchase list grouped by supplier, or goes onto draft purchase orders.
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const NO_SUPPLIER = 'ยังไม่ระบุผู้ขาย';
+const ANY_SUPPLIER = '';
+const NONE_SUPPLIER = '__none__';
 
 export async function render(container, { navigate, user }) {
     let threshold = 10;
     let lines = []; // { p, on, sup (index | -1 = no supplier), qty, unit_cost }
     let q = '';
     let show = 'all'; // all | multi | nosup
+    // Supplier filter: '' = any, NONE_SUPPLIER = never bought, else a supplier's (main) name.
+    let supplier = ANY_SUPPLIER;
+    const canSetLine = ['admin', 'manager'].includes(user?.role);
     let splitPages = true;
     let busy = false;
 
@@ -37,9 +43,12 @@ export async function render(container, { navigate, user }) {
         draw();
     }
 
+    /** The product's running-low line: its own, else the shop-wide one. */
+    const lineOf = (p) => (p.low_at === undefined || p.low_at === null ? threshold : Number(p.low_at));
+
     /** No supplier yet: enough pieces to get back above the line (or what sold in 30 days). */
     function suggestPieces(p) {
-        return Math.max(1, Math.ceil(Math.max(threshold + 1, Number(p.sold_30d) || 0) - Math.max(0, Number(p.qty_stock))));
+        return Math.max(1, Math.ceil(Math.max(lineOf(p) + 1, Number(p.sold_30d) || 0) - Math.max(0, Number(p.qty_stock))));
     }
 
     const supplierOf = (l) => (l.sup >= 0 ? l.p.suppliers[l.sup] : null);
@@ -76,7 +85,27 @@ export async function render(container, { navigate, user }) {
         }, 0));
     }
 
+    /** Suppliers the listed goods were bought from, with how many products each. */
+    function supplierSelectHtml() {
+        const n = new Map();
+        let none = 0;
+        lines.forEach((l) => {
+            if (!l.p.suppliers.length) none++;
+            l.p.suppliers.forEach((s) => n.set(s.supplier_name, (n.get(s.supplier_name) || 0) + 1));
+        });
+        const names = [...n.keys()].sort((a, b) => a.localeCompare(b, 'th'));
+        if (supplier !== ANY_SUPPLIER && supplier !== NONE_SUPPLIER && !n.has(supplier)) supplier = ANY_SUPPLIER;
+        const opt = (v, label) => `<option value="${escapeHtml(v)}" ${supplier === v ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        return `<select id="ro-supplier" class="cnt-supplier" title="แสดงเฉพาะสินค้าที่เคยซื้อจากผู้ขายนี้">
+            ${opt(ANY_SUPPLIER, 'ผู้ขายทั้งหมด')}
+            ${names.map((x) => opt(x, `${x} (${count(n.get(x))})`)).join('')}
+            ${none ? opt(NONE_SUPPLIER, `${NO_SUPPLIER} (${count(none)})`) : ''}
+          </select>`;
+    }
+
     function visible(l) {
+        if (supplier === NONE_SUPPLIER && l.p.suppliers.length) return false;
+        if (supplier !== ANY_SUPPLIER && supplier !== NONE_SUPPLIER && !l.p.suppliers.some((s) => s.supplier_name === supplier)) return false;
         if (show === 'multi' && l.p.suppliers.length < 2) return false;
         if (show === 'nosup' && l.p.suppliers.length) return false;
         if (!q) return true;
@@ -121,6 +150,7 @@ export async function render(container, { navigate, user }) {
           <td><input type="checkbox" data-on ${l.on ? 'checked' : ''} aria-label="ซื้อ ${escapeHtml(p.name)}"></td>
           <td style="min-width:180px"><b>${escapeHtml(p.name)}</b>${p.barcode ? `<div class="muted" style="font-size:12px">${escapeHtml(p.barcode)}</div>` : ''}
             <div style="font-size:12.5px;margin-top:2px">คงเหลือ <b style="color:${out ? 'var(--bad)' : 'var(--warn)'}">${count(p.qty_stock)}</b>
+              <span class="muted" title="เกณฑ์ใกล้หมดของสินค้านี้">(เกณฑ์ ≤ ${count(lineOf(p))})</span>
               · ขาย 30 วัน <b>${count(p.sold_30d)}</b></div>
             <div class="muted" style="font-size:12px">ทุนเฉลี่ย ฿${money(p.cost_price)} · ขาย ฿${money(p.sale_price)}${p.last_sold ? ` · ขายล่าสุด ${escapeHtml(fmtDate(p.last_sold))}` : ''}</div>${pending}</td>
           <td style="min-width:320px">${suppliersHtml(l, i)}</td>
@@ -145,7 +175,7 @@ export async function render(container, { navigate, user }) {
         const multi = lines.filter((l) => l.p.suppliers.length > 1);
         const out = lines.filter((l) => Number(l.p.qty_stock) < 1).length;
         return `<div class="kpi-grid">
-          <div class="kpi"><div class="lbl">สินค้าใกล้หมด (คงเหลือ ≤ ${count(threshold)})</div><div class="val">${count(lines.length)} รายการ</div>
+          <div class="kpi"><div class="lbl">สินค้าใกล้หมด (ถึงเกณฑ์)</div><div class="val">${count(lines.length)} รายการ</div>
             <div class="sub">หมดแล้ว ${count(out)} รายการ</div></div>
           <div class="kpi"><div class="lbl">มีผู้ขายมากกว่า 1 ราย</div><div class="val">${count(multi.length)} รายการ</div>
             <div class="sub">เปรียบเทียบต้นทุนต่อชิ้นได้</div></div>
@@ -179,13 +209,15 @@ export async function render(container, { navigate, user }) {
         container.innerHTML = `
         ${kpiHtml()}
         <section class="card card-pad">
-          <div class="hint"><div class="dot">i</div><div>สินค้าของร้านที่คงเหลือไม่เกิน <b>${count(threshold)} ชิ้น</b> (ไม่รวมสินค้าเลิกจำหน่าย) เรียงตามยอดขาย 30 วัน ·
-            เกณฑ์ใกล้หมดตั้งได้ที่หน้า <button type="button" class="link-btn" id="ro-inv">สต๊อกสินค้าของร้าน</button> ·
+          <div class="hint"><div class="dot">i</div><div>สินค้าของร้านที่คงเหลือไม่เกิน<b>เกณฑ์ใกล้หมดของสินค้านั้น</b> (สินค้าที่ไม่มีเกณฑ์ของตัวเองใช้เกณฑ์กลาง ${count(threshold)} ชิ้น · ไม่รวมสินค้าเลิกจำหน่าย) เรียงตามยอดขาย 30 วัน ·
+            เกณฑ์กลางตั้งได้ที่หน้า <button type="button" class="link-btn" id="ro-inv">สต๊อกสินค้าของร้าน</button>${canSetLine ? ' หรือให้ <button type="button" class="link-btn" id="ro-assist">ผู้ช่วยกำหนดเกณฑ์</button> คำนวณจากยอดขายเฉลี่ยของแต่ละสินค้า' : ''} ·
             ราคาผู้ขายแต่ละรายเป็นราคาจากใบซื้อครั้งล่าสุดของร้านนั้น เทียบเป็น<b>ต้นทุนต่อชิ้น</b> (แพ็คหารจำนวนชิ้นแล้ว) ระบบเลือกรายที่ถูกที่สุดไว้ให้ เปลี่ยนได้ ·
             จำนวนและราคาเริ่มจากใบซื้อครั้งล่าสุดของร้านที่เลือก แก้ได้ ·
             ผู้ขายรายเดียวกันที่บันทึกไว้หลายชื่อ รวมเป็นรายเดียวได้ที่ <button type="button" class="link-btn" id="ro-sup">รายชื่อร้าน/ผู้ขาย</button></div></div>
           <div class="actions-row" style="justify-content:space-between;margin-top:12px">
             <input type="search" id="ro-q" class="search-input" placeholder="🔍 ค้นหาชื่อสินค้า บาร์โค้ด หรือผู้ขาย" value="${escapeHtml(q)}">
+            ${supplierSelectHtml()}
+            ${canSetLine ? '<button type="button" class="btn secondary" id="ro-assist-btn" title="คำนวณเกณฑ์ใกล้หมดของแต่ละสินค้าจากยอดขายเฉลี่ย">✨ ผู้ช่วยกำหนดเกณฑ์ใกล้หมด</button>' : ''}
             <div class="tabs" role="group" aria-label="กรองรายการ">
               ${[['all', 'ทั้งหมด'], ['multi', 'มีผู้ขายหลายราย'], ['nosup', 'ยังไม่เคยมีใบซื้อ']].map(([k, label]) => `<button type="button" class="tab-btn ${k === show ? 'active' : ''}" data-show="${k}">${label}</button>`).join('')}
             </div>
@@ -195,7 +227,7 @@ export async function render(container, { navigate, user }) {
           <div class="table-wrap"><table class="po-table">
             <thead><tr><th><input type="checkbox" data-all aria-label="เลือกทั้งหมดที่แสดง" title="เลือกทั้งหมดที่แสดง"></th><th>สินค้า</th><th>เปรียบเทียบผู้ขาย (ต้นทุนต่อชิ้น)</th><th>จำนวนซื้อ</th><th>ราคา/หน่วยซื้อ</th><th class="num">รวม (บาท)</th></tr></thead>
             <tbody>${shown.map(([l, i]) => rowHtml(l, i)).join('')
-                || `<tr><td colspan="6" class="empty">${lines.length ? 'ไม่มีรายการที่ตรงกับตัวกรอง' : `ไม่มีสินค้าของร้านที่คงเหลือไม่เกิน ${count(threshold)} ชิ้น`}</td></tr>`}</tbody>
+                || `<tr><td colspan="6" class="empty">${lines.length ? 'ไม่มีรายการที่ตรงกับตัวกรอง' : 'ไม่มีสินค้าของร้านที่ถึงเกณฑ์ใกล้หมด'}</td></tr>`}</tbody>
           </table></div>
         </section>
         <section class="card card-pad">
@@ -219,6 +251,8 @@ export async function render(container, { navigate, user }) {
         });
         container.querySelector('#ro-inv').addEventListener('click', () => navigate('inventory'));
         container.querySelector('#ro-sup').addEventListener('click', () => openSupplierModal({ onChange: load }));
+        container.querySelector('#ro-supplier').addEventListener('change', (e) => { supplier = e.target.value; draw(); });
+        container.querySelectorAll('#ro-assist, #ro-assist-btn').forEach((b) => b.addEventListener('click', () => openLowStockAssist({ onSaved: load })));
         container.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => { show = b.dataset.show; draw(); }));
         container.querySelector('[data-all]')?.addEventListener('change', (e) => {
             shown.forEach(([l]) => { l.on = e.target.checked; });
