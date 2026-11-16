@@ -20,18 +20,22 @@ class ReceiptMarkdownImport
     - barcode = ตัวเลขบาร์โค้ด (เฉพาะตัวเลข ตัดวงเล็บและตัวอักษรท้ายออก) ถ้าไม่มีใช้รหัสสินค้าของร้าน
     - pack_size = จำนวนชิ้นย่อยใน 1 หน่วยที่ซื้อ ดูจากท้ายชื่อ เช่น "X6" = 6, "X12+1" = 12, "1X50" = 50 ถ้าไม่ใช่แพ็คให้ 1
     - product_name = ชื่อสำหรับขายแยกชิ้น (ตัดส่วนบอกจำนวนในแพ็คและสัญลักษณ์นำหน้าเช่น % ออก)
+    - unit_price = ราคาต่อหน่วยก่อนหักส่วนลด (ถ้าช่องราคาเป็นราคารวมของบรรทัดให้หารด้วยจำนวน)
+    - discount = ส่วนลดของสินค้ารายการนั้นรวมทุกช่อง/ทุกบรรทัด (เช่น ส่วนลดโปรฯ + ส่วนลดออนไลน์) เป็นตัวเลขบวก ถ้าไม่มีให้ 0
+      บรรทัดที่ต่อท้ายด้วย "‖ ส่วนลดของรายการนี้รวม" ให้ใช้ยอดนั้นเป็น discount
+    - line_total = ยอดของรายการหลังหักส่วนลดทั้งหมด (ยังไม่รวม VAT ถ้าใบเสร็จพิมพ์ราคาก่อน VAT) ห้ามใช้ช่องทุนต่อชิ้น/ต่อขวด
     TXT;
 
     private const ITEM_FORMAT = <<<TXT
     ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น:
-    {"items":[{"row":1,"name":"ชื่อตามใบเสร็จ","product_name":"ชื่อขายแยกชิ้น","barcode":"","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}]}
+    {"items":[{"row":1,"name":"ชื่อตามใบเสร็จ","product_name":"ชื่อขายแยกชิ้น","barcode":"","qty":1,"pack_size":1,"unit_price":0.00,"discount":0.00,"line_total":0.00}]}
     TXT;
 
     private const SUMMARY_FORMAT = <<<TXT
     ข้อความด้านล่างคือส่วนหัวและส่วนท้ายของใบเสร็จการซื้อสินค้าเข้าร้าน (ตัดตารางรายการสินค้าออกแล้ว)
     อ่านแล้วตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น:
     {"supplier_name":"ชื่อร้านที่ขาย","supplier_tax_id":"","receipt_no":"","receipt_date":"YYYY-MM-DD","subtotal":0.00,"discount":0.00,"vat":0.00,"total":0.00}
-    - discount = ส่วนลดท้ายบิลรวมทั้งหมด เป็นตัวเลขบวก
+    - discount = ส่วนลดท้ายบิลของทั้งบิล เป็นตัวเลขบวก (ถ้าเป็นเพียงผลรวมส่วนลดของแต่ละรายการสินค้า ให้ 0 เพราะหักในรายการแล้ว)
     - total = ยอดสุทธิที่ต้องชำระ, subtotal = ยอดรวมก่อนหักส่วนลด
     - ปี พ.ศ. ให้แปลงเป็น ค.ศ. (ลบ 543) วันที่ในรูป DD-MM-YYYY ให้แปลงเป็น YYYY-MM-DD
     TXT;
@@ -69,12 +73,39 @@ class ReceiptMarkdownImport
         // Total/discount/VAT rows inside the table are bill totals, not items.
         $items = [];
         $totals = [];
-        foreach ($t['rows'] as $r) {
+        $merged = []; // discount rows (with their labels) joined to the item above
+        $seen = [];   // labels of discount rows already found under items
+        $rows = $t['rows'];
+        foreach ($rows as $k => $r) {
+            $amount = self::discountAmount($r);
+            if ($amount !== null && $items) {
+                // A discount printed under an item belongs to it: between items, or labelled like
+                // the discounts found under earlier items, or not a plain total label.
+                $label = self::rowLabel($r);
+                $itemBelow = false;
+                foreach (array_slice($rows, $k + 1) as $next) {
+                    if (self::discountAmount($next) === null && !self::isTotalRow($next)) {
+                        $itemBelow = true;
+                        break;
+                    }
+                }
+                if (!$totals && ($itemBelow || isset($seen[$label]) || !self::isTotalRow($r))) {
+                    $at = count($items) - 1;
+                    $merged[$at][] = [$label, $amount];
+                    $seen[$label] = true;
+                    continue;
+                }
+            }
             if (self::isTotalRow($r)) {
                 $totals[] = $r;
             } else {
                 $items[] = $r;
             }
+        }
+        foreach ($merged as $at => $list) {
+            $sum = round(array_sum(array_column($list, 1)), 2);
+            $items[$at] .= sprintf(' ‖ ส่วนลดของรายการนี้รวม %s (%s)', number_format($sum, 2, '.', ''),
+                implode(' + ', array_map(fn ($d) => trim($d[0] . ' ' . number_format($d[1], 2, '.', '')), $list)));
         }
         $footer = trim(implode("\n", array_slice($lines, $t['end'])));
         if ($totals) {
@@ -157,6 +188,42 @@ class ReceiptMarkdownImport
         return true;
     }
 
+    /**
+     * A discount line printed under an item (every amount in it is negative, e.g.
+     * "| | ส่วนลดช่องทางออนไลน์ | -2.14 | -2.14 |"): the discount as a positive number,
+     * taken from the last amount (the line's money column), else null.
+     */
+    public static function discountAmount(string $row): ?float
+    {
+        $amounts = [];
+        foreach (explode('|', trim(trim($row), '|')) as $cell) {
+            $c = trim(str_replace(['*', '_', '฿', 'บาท', ' '], '', $cell));
+            if ($c === '') {
+                continue;
+            }
+            if (preg_match('/^\(([\d,]+(?:\.\d+)?)\)$|^-([\d,]+(?:\.\d+)?)$|^([\d,]+(?:\.\d+)?)-$/', $c, $m)) {
+                $amounts[] = (float) str_replace(',', '', $m[1] . ($m[2] ?? '') . ($m[3] ?? ''));
+            } elseif (preg_match('/^[\d,]+(?:\.\d+)?$/', $c)) {
+                return null; // a positive amount: an item (or a total), not a discount
+            }
+        }
+        $last = end($amounts);
+        return $amounts && $last > 0 ? round($last, 2) : null;
+    }
+
+    /** The text of a row without its amounts, e.g. "ส่วนลดช่องทางออนไลน์". */
+    private static function rowLabel(string $row): string
+    {
+        $labels = [];
+        foreach (explode('|', trim(trim($row), '|')) as $cell) {
+            $cell = trim(str_replace(['*', '_'], '', $cell));
+            if (preg_match('/\p{L}/u', $cell)) {
+                $labels[] = $cell;
+            }
+        }
+        return implode(' ', $labels);
+    }
+
     /** How much a table looks like a list of purchased items. */
     private static function itemScore(array $t): float
     {
@@ -212,6 +279,12 @@ class ReceiptMarkdownImport
         $items = array_values(array_filter((array) ($data['items'] ?? []), 'is_array'));
         if (count($items) !== count($rows)) {
             throw new \RuntimeException(sprintf('AI ตอบมา %d รายการ จาก %d บรรทัด', count($items), count($rows)));
+        }
+        // Discount lines joined to a row were added up here: that sum is exact, the model's may not be.
+        foreach (array_values($rows) as $i => $row) {
+            if (preg_match('/‖ ส่วนลดของรายการนี้รวม ([\d.]+)/u', $row, $m)) {
+                $items[$i]['discount'] = (float) $m[1];
+            }
         }
         $out = ReceiptExtractor::forSale(ReceiptExtractor::normalize(['items' => $items]))['items'];
         if (count($out) !== count($rows)) {

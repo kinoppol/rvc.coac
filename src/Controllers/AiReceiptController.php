@@ -9,6 +9,7 @@ use App\Services\AiClient;
 use App\Services\AiToolbox;
 use App\Services\AiUsageService;
 use App\Services\AttachmentService;
+use App\Services\ReceiptExtractor;
 use App\Services\ReceiptMarkdownImport;
 use App\Services\SettingsService;
 use App\Support\Db;
@@ -164,7 +165,8 @@ class AiReceiptController
                     'qty' => (int) ($it['qty'] ?? 1), 'pack_size' => (int) ($it['pack_size'] ?? 1),
                     'unit_cost' => (float) ($it['unit_cost'] ?? 0), 'line_total' => (float) ($it['line_total'] ?? 0),
                 ], array_values(array_filter($r['items'], 'is_array'))),
-                'discount' => (float) ($s['discount'] ?? 0),
+                // A summary may print the items' own discounts added up; those are already off each line.
+                'discount' => ReceiptExtractor::billDiscount((float) ($s['discount'] ?? 0), array_values(array_filter($r['items'], 'is_array'))),
                 'vat' => (float) ($s['vat'] ?? 0),
                 'total' => (float) ($s['total'] ?? 0),
                 'note' => ($order ? 'ใบสั่งของ นำเข้าจากไฟล์ ' : 'นำเข้าจากไฟล์ ') . mb_substr((string) ($r['file_name'] ?? ''), 0, 120),

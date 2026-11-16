@@ -37,7 +37,7 @@ function emptyItem() {
     // forceNew: the user said the line is not the matched product, so saving creates a new one (notMatch = the product it is not)
     // presetPrice: a sale price that came with an AI draft or an order, used only if the line turns out to be a new product
     // promo: this round sells at the manufacturer's promotion price (sale_price); regular_price = the normal price meanwhile
-    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, sale_price: 0, presetPrice: 0, priceTouched: false, promo: false, regular_price: 0, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
+    return { name: '', receipt_name: '', item_type: 'stock', typeTouched: false, pack_size: 1, barcode: '', qty: 1, unit_cost: 0, line_total: 0, list_price: 0, line_discount: 0, vat_added: 0, sale_price: 0, presetPrice: 0, priceTouched: false, promo: false, regular_price: 0, match: null, suggested: 0, product_id: null, origName: '', pickedId: null, forceNew: false, notMatch: '' };
 }
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const PER_PAGE = [10, 20, 50, 100];
@@ -142,7 +142,7 @@ export async function render(container, { user } = {}) {
             ...emptyItem(), name: it.product_name || it.name, receipt_name: it.name, pack_size: it.pack_size || 1,
             item_type: it.item_type === 'supply' ? 'supply' : 'stock', typeTouched: !!it.item_type,
             barcode: it.barcode || '', qty: it.qty, unit_cost: it.unit_cost,
-            line_total: it.line_total, sale_price: it.sale_price || 0, presetPrice: Number(it.sale_price) || 0,
+            line_total: it.line_total, ...costParts(it), sale_price: it.sale_price || 0, presetPrice: Number(it.sale_price) || 0,
             ...(it.promo ? { promo: true, regular_price: Number(it.regular_price) || 0, priceTouched: true } : {}),
         }));
         if (!items.length) items = [emptyItem()];
@@ -387,9 +387,9 @@ export async function render(container, { user } = {}) {
                   <td><input data-f="qty" type="number" min="1" step="1" value="${it.qty}" class="num" style="width:70px"></td>
                   <td><input data-f="pack_size" type="number" min="1" step="1" value="${it.pack_size}" class="num" style="width:62px"></td>
                   <td><input data-f="unit_cost" type="number" min="0" step="0.01" value="${it.unit_cost}" class="num" style="width:90px"></td>
-                  <td><input data-f="line_total" type="number" min="0" step="0.01" value="${it.line_total}" class="num" style="width:95px"></td>
+                  <td><input data-f="line_total" type="number" min="0" step="0.01" value="${it.line_total}" class="num" style="width:95px"><div data-break>${breakdownHtml(it)}</div></td>
                   <td class="num" data-units style="white-space:nowrap">${unitsHtml(it)}</td>
-                  <td class="num" data-piece>${money(pieceCost(it))}</td>
+                  <td class="num" data-piece style="white-space:nowrap">${pieceHtml(it)}</td>
                   <td>${it.item_type === 'supply'
                     ? '<span class="muted" title="ใช้ในกิจการ ไม่มีราคาขาย">—</span>'
                     : `${priceModeHtml(it)}
@@ -508,6 +508,37 @@ export async function render(container, { user } = {}) {
     function pieceCost(it) {
         const units = unitsOf(it);
         return units ? round2(Number(it.line_total) / units) : 0;
+    }
+    /** How a line read from a receipt was costed: printed price, its own discounts, VAT added. */
+    function costParts(r) {
+        return { list_price: Number(r.list_price) || 0, line_discount: Number(r.line_discount) || 0, vat_added: Number(r.vat_added) || 0 };
+    }
+    /** The line's cost broken down, while it still adds up (a hand edit of the amounts drops it). */
+    function breakdown(it) {
+        const qty = Number(it.qty) || 0;
+        const price = Number(it.list_price) || 0;
+        const disc = Number(it.line_discount) || 0;
+        const vat = Number(it.vat_added) || 0;
+        if (!qty || !price || (!disc && !vat)) return null;
+        const gross = round2(price * qty);
+        return Math.abs(gross - disc + vat - Number(it.line_total)) <= 0.02 + 0.005 * qty ? { qty, price, gross, disc, vat } : null;
+    }
+    function breakdownHtml(it) {
+        const b = breakdown(it);
+        if (!b) return '';
+        return `<div class="pc-break" title="ต้นทุนจริงของรายการ = ราคาตามใบเสร็จ − ส่วนลดของรายการ${b.vat ? ' + VAT' : ''}">ราคา ${b.qty > 1 ? `${b.qty} × ${money(b.price)}` : money(b.price)}${b.disc ? `<div class="pc-break-disc">− ส่วนลด ${money(b.disc)}</div>` : ''}${b.vat ? `<div>+ VAT ${money(b.vat)}</div>` : ''}</div>`;
+    }
+    /** Cost per piece; while the receipt's VAT is not yet in the lines, also what it will be with it. */
+    function pieceHtml(it) {
+        const units = unitsOf(it);
+        const b = breakdown(it);
+        const tip = units && b ? `(${money(b.gross)}${b.disc ? ` − ส่วนลด ${money(b.disc)}` : ''}${b.vat ? ` + VAT ${money(b.vat)}` : ''}) ÷ ${units} ชิ้น = ${money(pieceCost(it))}` : 'รวม ÷ จำนวนชิ้นที่เข้าสต๊อก';
+        const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
+        const net = round2(subtotal - (Number(header.discount) || 0));
+        const withVat = vatGap(subtotal) && net > 0 && units ? round2((Number(it.line_total) * (Number(header.total) || 0) / net) / units) : 0;
+        return `<span title="${escapeHtml(tip)}">${money(pieceCost(it))}</span>${withVat
+            ? `<div class="pc-break" title="ทุน/ชิ้นหลังรวม VAT (กดปุ่มรวม VAT เข้าต้นทุนด้านล่างเพื่อใช้ค่านี้)">รวม VAT ${money(withVat)}</div>`
+            : b ? `<div class="pc-break" title="${escapeHtml(tip)}">ทุนจริง${b.vat ? ' รวม VAT' : ''}</div>` : ''}`;
     }
     function unitsHtml(it) {
         const pack = Math.max(1, Number(it.pack_size) || 1);
@@ -755,7 +786,9 @@ export async function render(container, { user } = {}) {
             <ul>
               <li><b>จำนวนซื้อ</b> = จำนวนหน่วยตามใบเสร็จ (แพ็ค/ลัง) · <b>ชิ้น/แพ็ค</b> = จำนวนชิ้นในหนึ่งหน่วยซื้อ</li>
               <li><b>ทุน/หน่วยซื้อ</b> = ราคาต่อหน่วยหลังหักส่วนลดของรายการ · <b>รวม</b> = จำนวนซื้อ × ทุน/หน่วยซื้อ (ควรตรงกับช่องจำนวนเงินในใบเสร็จ)</li>
-              <li><b>เข้าสต๊อก</b> = จำนวนซื้อ × ชิ้น/แพ็ค · <b>ทุน/ชิ้น</b> = รวม ÷ จำนวนชิ้นที่เข้าสต๊อก (ใช้คิดต้นทุนและกำไร)</li>
+              <li><b>ส่วนลดหลายบรรทัดต่อสินค้า</b> (เช่น ส่วนลดโปรโมชันหลายรายการ + ส่วนลดช่องทางออนไลน์): AI รวมส่วนลดทุกบรรทัดแล้วหักออกจากรายการนั้น
+                ใต้ช่อง <b>รวม</b> แสดงที่มา ราคาตามใบเสร็จ − ส่วนลด + VAT</li>
+              <li><b>เข้าสต๊อก</b> = จำนวนซื้อ × ชิ้น/แพ็ค · <b>ทุน/ชิ้น</b> = รวม ÷ จำนวนชิ้นที่เข้าสต๊อก = ต้นทุนจริงหลังหักส่วนลดและรวม VAT (ใช้คิดต้นทุน กำไร และพิจารณาราคาขาย)</li>
               <li><b>ราคาขาย/ชิ้น</b> ระบบเสนอเป็นทุน/ชิ้น + ${escapeHtml(markup)}% (แก้ได้) สินค้าที่มีอยู่แล้วใช้ราคาขายเดิม</li>
               <li><b>VAT 7%</b>: ใบเสร็จบางร้านพิมพ์ราคาสินค้าเป็นราคาก่อน VAT แล้วบวก VAT ท้ายบิล
                 ยอดสุทธิ = รวมตามรายการ − ส่วนลดท้ายบิล + VAT · ร้านค้าสหการไม่ได้ขอคืน VAT จึงควรรวม VAT เข้าต้นทุนสินค้า (กดปุ่ม "รวม VAT เข้าต้นทุน")</li>
@@ -766,36 +799,53 @@ export async function render(container, { user } = {}) {
     }
 
     /** Receipt prices are before VAT when lines − discount + VAT = printed total; returns that VAT, else 0. */
-    function vatGap(subtotal) {
-        const vat = Number(header.vat) || 0;
-        const net = round2(subtotal - (Number(header.discount) || 0));
-        const printed = Number(header.total) || 0;
+    function vatGap(subtotal, h = header) {
+        const vat = Number(h.vat) || 0;
+        const net = round2(subtotal - (Number(h.discount) || 0));
+        const printed = Number(h.total) || 0;
         const gap = round2(printed - net);
         return vat > 0 && net > 0 && gap > 0.009 && Math.abs(gap - vat) <= 0.05 ? gap : 0;
     }
 
     /** Spreads the VAT over every line (and the bill discount) so costs include it and match the printed total. */
     function addVatToLines() {
-        const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
-        const net = round2(subtotal - (Number(header.discount) || 0));
-        const printed = Number(header.total) || 0;
-        if (!vatGap(subtotal)) return;
-        const factor = printed / net;
-        let biggest = null;
-        items.forEach((it) => {
-            it.line_total = round2(Number(it.line_total || 0) * factor);
-            if (Number(it.qty) > 0) it.unit_cost = round2(it.line_total / Number(it.qty));
-            if (!biggest || it.line_total > biggest.line_total) biggest = it;
-        });
-        header.discount = round2((Number(header.discount) || 0) * factor);
-        // Rounding leftovers go to the largest line so the lines match the printed total exactly.
-        const diff = round2(printed - (items.reduce((s, i) => s + i.line_total, 0) - header.discount));
-        if (biggest && diff !== 0) {
-            biggest.line_total = round2(biggest.line_total + diff);
-            if (Number(biggest.qty) > 0) biggest.unit_cost = round2(biggest.line_total / Number(biggest.qty));
-        }
+        if (!spreadVat(items, header)) return;
         draw();
         refreshPreview();
+    }
+
+    /**
+     * Spreads the VAT over every line (and the bill discount) of lines + header ({ discount, vat,
+     * total }) so costs include it and match the printed total. Each line keeps the VAT it got
+     * (vat_added) to show how its cost is made up. Returns the VAT added, else 0.
+     */
+    function spreadVat(lines, h) {
+        const subtotal = round2(lines.reduce((s, i) => s + Number(i.line_total || 0), 0));
+        const net = round2(subtotal - (Number(h.discount) || 0));
+        const printed = Number(h.total) || 0;
+        const gap = vatGap(subtotal, h);
+        if (!gap) return 0;
+        const factor = printed / net;
+        const add = (it, amount) => {
+            const before = Number(it.line_total || 0);
+            if (!Number(it.list_price) && Number(it.qty) > 0) {
+                it.list_price = round2(before / Number(it.qty)); // the price as printed, before VAT
+                it.line_discount = 0;
+            }
+            it.line_total = round2(before + amount);
+            it.vat_added = round2((Number(it.vat_added) || 0) + amount);
+            if (Number(it.qty) > 0) it.unit_cost = round2(it.line_total / Number(it.qty));
+        };
+        let biggest = null;
+        lines.forEach((it) => {
+            add(it, round2(Number(it.line_total || 0) * factor) - Number(it.line_total || 0));
+            if (!biggest || it.line_total > biggest.line_total) biggest = it;
+        });
+        h.discount = round2((Number(h.discount) || 0) * factor);
+        // Rounding leftovers go to the largest line so the lines match the printed total exactly.
+        const diff = round2(printed - (lines.reduce((s, i) => s + i.line_total, 0) - h.discount));
+        if (biggest && diff !== 0) add(biggest, diff);
+        return gap;
     }
 
     /** Who created, edited, received or cancelled the purchase, and what changed. */
@@ -897,6 +947,12 @@ export async function render(container, { user } = {}) {
     }
 
     function redrawSummary() {
+        // Cost per piece of every line: a changed line, VAT or printed total changes the "with VAT" figure.
+        container.querySelectorAll('tr[data-row]').forEach((tr) => {
+            const it = items[Number(tr.dataset.row)];
+            const cell = tr.querySelector('[data-piece]');
+            if (it && cell) cell.innerHTML = pieceHtml(it);
+        });
         const el = container.querySelector('#pc-summary');
         if (!el) return;
         const subtotal = round2(items.reduce((s, i) => s + Number(i.line_total || 0), 0));
@@ -1194,7 +1250,7 @@ export async function render(container, { user } = {}) {
             it.packFixed = true; // set by hand: not guessed again from the name or a pack barcode
         }
         tr.querySelector('[data-units]').innerHTML = unitsHtml(it);
-        tr.querySelector('[data-piece]').textContent = money(pieceCost(it));
+        tr.querySelector('[data-break]').innerHTML = breakdownHtml(it);
         updatePriceCell(it, tr);
         redrawSummary();
     }
@@ -1496,6 +1552,12 @@ export async function render(container, { user } = {}) {
             receipt_date: s.receipt_date || '', discount: s.discount || 0, vat: s.vat || 0, total: s.total || 0,
             items, warnings,
         };
+        // A summary may print the items' own discounts added up: those are already off each line.
+        const lineDiscounts = round2(items.reduce((t, it) => t + (Number(it.line_discount) || 0), 0));
+        if (lineDiscounts > 0 && Math.abs(Number(data.discount) - lineDiscounts) <= 0.05) data.discount = 0;
+        // Prices before VAT: the VAT goes into every line's cost (as when a photo is read directly).
+        const vatAdded = spreadVat(items, data);
+        if (vatAdded) warnings.push(`ราคาสินค้าในใบเสร็จยังไม่รวม VAT ฿${money(vatAdded)} — บวก VAT เข้าในราคาทุนของทุกรายการแล้ว`);
         step('กำลังจับคู่สินค้ากับสต๊อก...');
         const preview = (await api.post('/purchases/preview', { items })).data;
         return { data, preview };
@@ -1538,6 +1600,7 @@ export async function render(container, { user } = {}) {
                 it.qty = Number(r.qty) || it.qty;
                 it.unit_cost = Number(r.unit_cost) || it.unit_cost;
                 it.line_total = Number(r.line_total) || round2(it.qty * it.unit_cost);
+                Object.assign(it, costParts(r));
                 if (!it.barcode && r.barcode) it.barcode = String(r.barcode);
                 if (r.name && r.name !== it.name) it.receipt_name = r.name;
                 if (!it.packFixed && Number(r.pack_size) > 1 && Number(it.pack_size) <= 1) it.pack_size = Number(r.pack_size);
@@ -1551,7 +1614,7 @@ export async function render(container, { user } = {}) {
                 ...emptyItem(), name: r.product_name || r.name, receipt_name: r.name || '', pack_size: Number(r.pack_size) || 1,
                 item_type: r.item_type === 'supply' ? 'supply' : 'stock', typeTouched: !!r.item_type,
                 barcode: r.barcode || '', qty: Number(r.qty) || 1, unit_cost: Number(r.unit_cost) || 0,
-                line_total: Number(r.line_total) || 0, sale_price: Number(r.sale_price) || 0, presetPrice: Number(r.sale_price) || 0,
+                line_total: Number(r.line_total) || 0, ...costParts(r), sale_price: Number(r.sale_price) || 0, presetPrice: Number(r.sale_price) || 0,
             };
             if (res.preview?.[i]) applyPreview(it, res.preview[i]);
             added.push(it);

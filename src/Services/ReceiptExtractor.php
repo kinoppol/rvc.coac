@@ -18,7 +18,10 @@ class ReceiptExtractor
     ให้ตัดรายการที่ซ้ำจากส่วนที่ซ้อนทับออก (รายการเดียวกัน ราคาเดียวกัน ที่อยู่ท้ายรูปก่อนและต้นรูปถัดไป) แต่ถ้าใบเสร็จพิมพ์สินค้าเดียวกันซ้ำหลายบรรทัดจริง ๆ ให้นับตามจริง
     อ่านทุกบรรทัดสินค้าให้ครบ: ชื่อสินค้า จำนวน ราคาต่อหน่วย ราคารวมของบรรทัด และบาร์โค้ดถ้ามีพิมพ์ไว้
     - รูปแบบ "2 @ 15.00" หรือ "2 x 15.00" หมายถึง จำนวน 2 ราคาหน่วยละ 15.00
-    - บรรทัดส่วนลดที่อยู่ใต้สินค้า ให้หักออกจากราคารวมของสินค้านั้น
+    - สินค้าหนึ่งรายการอาจมีบรรทัดส่วนลดใต้สินค้าหลายบรรทัด (ส่วนลดโปรโมชัน ส่วนลดช่องทางออนไลน์ ฯลฯ ตัวเลขติดลบ)
+      ให้รวมยอดส่วนลดทุกบรรทัดของสินค้านั้น (ใช้ยอดในช่องจำนวนเงิน ไม่ใช่ต่อหน่วย) เป็น discount ของสินค้า เป็นตัวเลขบวก
+      unit_price = ราคาต่อหน่วยก่อนหักส่วนลด, line_total = ยอดของสินค้านั้นหลังหักส่วนลดทุกบรรทัดแล้ว
+      ห้ามนับบรรทัดส่วนลดเป็นสินค้า และห้ามนำส่วนลดของสินค้ามารวมใน discount ท้ายบิลอีก (discount ท้ายบิล = ส่วนลดของทั้งบิลเท่านั้น)
     - สินค้าที่ซื้อยกแพ็ค/ลัง/โหล แต่ร้านขายแยกชิ้น ให้ระบุ pack_size = จำนวนชิ้นย่อยใน 1 หน่วยที่ซื้อ
       สังเกตจากชื่อ เช่น "X12", "x 12", "*6", "×24", "แพ็ค 6", "6 ซอง" (ถ้าไม่ใช่แพ็คให้ pack_size = 1)
       qty และ unit_price ยังเป็นจำนวนแพ็คและราคาต่อแพ็คตามที่พิมพ์ในใบเสร็จ
@@ -34,7 +37,7 @@ class ReceiptExtractor
     private const FORMAT = <<<TXT
     ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตามโครงสร้างนี้:
     {"supplier_name":"ชื่อร้านที่ขาย","supplier_tax_id":"เลขประจำตัวผู้เสียภาษี หรือ null","receipt_no":"เลขที่ใบเสร็จ หรือ null","receipt_date":"YYYY-MM-DD หรือ null",
-     "items":[{"name":"ชื่อสินค้าตามใบเสร็จ","product_name":"ชื่อสำหรับขายแยกชิ้น","barcode":"หรือ null","qty":1,"pack_size":1,"unit_price":0.00,"line_total":0.00}],
+     "items":[{"name":"ชื่อสินค้าตามใบเสร็จ","product_name":"ชื่อสำหรับขายแยกชิ้น","barcode":"หรือ null","qty":1,"pack_size":1,"unit_price":0.00,"discount":0.00,"line_total":0.00}],
      "discount":0.00,"vat":0.00,"total":0.00,"warnings":["ข้อสังเกต"]}
     TXT;
 
@@ -115,8 +118,13 @@ class ReceiptExtractor
         $factor = $total / $net;
         $biggest = 0;
         foreach ($items as $i => &$it) {
+            $before = $it['line_total'];
             $it['line_total'] = round($it['line_total'] * $factor, 2);
             $it['unit_cost'] = round($it['line_total'] / $it['qty'], 2);
+            // The line as printed (before VAT) and the VAT it carries, to show how its cost is made up.
+            $it['list_price'] ??= round($before / $it['qty'], 2);
+            $it['line_discount'] ??= 0.0;
+            $it['vat_added'] = round($it['line_total'] - $before, 2);
             if ($it['line_total'] > $items[$biggest]['line_total']) {
                 $biggest = $i;
             }
@@ -128,9 +136,51 @@ class ReceiptExtractor
         if ($diff != 0.0) {
             $items[$biggest]['line_total'] = round($items[$biggest]['line_total'] + $diff, 2);
             $items[$biggest]['unit_cost'] = round($items[$biggest]['line_total'] / $items[$biggest]['qty'], 2);
+            $items[$biggest]['vat_added'] = round($items[$biggest]['vat_added'] + $diff, 2);
         }
         $vat = $gap;
         return $gap;
+    }
+
+    /**
+     * A line with its own discounts (often several printed under it): the price before
+     * discount, the discount and the amount after it, made consistent whichever way the
+     * model filled them in. @return array{0:float,1:float,2:float} [unit price, discount, line total]
+     */
+    public static function lineDiscount(float $unit, int $qty, float $lineTotal, float $discount): array
+    {
+        if ($discount <= 0) {
+            return [$unit, 0.0, $lineTotal];
+        }
+        $near = fn ($a, $b, $tol = 0.02) => abs($a - $b) <= $tol + 0.005 * $qty;
+        $gross = round($unit * $qty, 2);
+        if ($near($lineTotal, $gross)) {
+            $lineTotal = round($gross - $discount, 2); // the amount before the discount
+        } elseif ($near($lineTotal, $gross - $discount)) {
+            // already after the discount
+        } elseif ($qty > 1 && $near($unit, $lineTotal + $discount)) {
+            $unit = round(($lineTotal + $discount) / $qty, 2); // the line's price given as the unit price
+        } elseif ($qty > 1 && $near($unit, $lineTotal)) {
+            $unit = round($lineTotal / $qty, 2);
+            $lineTotal = round($lineTotal - $discount, 2);
+        } else {
+            // The amounts disagree: the line total is what was paid, the rest is the discount.
+            $discount = round($gross - $lineTotal, 2);
+        }
+        if ($lineTotal <= 0 || $discount <= 0) {
+            return [$unit, 0.0, $lineTotal > 0 ? $lineTotal : $gross];
+        }
+        return [$unit, $discount, $lineTotal];
+    }
+
+    /**
+     * The bill discount, unless it is just the lines' own discounts added up (a summary
+     * often prints that total), which are already taken off each line.
+     */
+    public static function billDiscount(float $discount, array $items): float
+    {
+        $lines = round(array_sum(array_map(fn ($it) => (float) ($it['line_discount'] ?? 0), $items)), 2);
+        return $lines > 0 && abs($discount - $lines) <= 0.05 ? 0.0 : $discount;
     }
 
     /** Cleans types/values so the purchase form can use them directly. */
@@ -147,12 +197,14 @@ class ReceiptExtractor
             $qty = max(1, (int) round($num($it['qty'] ?? 1)));
             $lineTotal = round($num($it['line_total'] ?? 0), 2);
             $unit = round($num($it['unit_price'] ?? 0), 2);
+            $lineDiscount = round(abs($num($it['discount'] ?? 0)), 2);
             if ($unit <= 0 && $lineTotal > 0) {
-                $unit = round($lineTotal / $qty, 2);
+                $unit = round(($lineTotal + $lineDiscount) / $qty, 2);
             }
             if ($lineTotal <= 0) {
                 $lineTotal = round($unit * $qty, 2);
             }
+            [$unit, $discount, $lineTotal] = self::lineDiscount($unit, $qty, $lineTotal, $lineDiscount);
             $name = $str($it['name']);
             [$guessName, $guessPack] = self::splitPack($name);
             $pack = (int) round($num($it['pack_size'] ?? 0));
@@ -171,9 +223,14 @@ class ReceiptExtractor
                 'barcode' => (fn ($b) => strlen($b) >= 4 ? $b : '')(preg_replace('/\D/', '', $str($it['barcode'] ?? ''))),
                 'qty' => $qty,
                 'pack_size' => $pack,
-                'unit_cost' => $unit,
+                // Cost per unit bought after the line's own discounts; the printed price is kept aside.
+                'unit_cost' => $discount > 0 ? round($lineTotal / $qty, 2) : $unit,
                 'line_total' => $lineTotal,
             ];
+            if ($discount > 0) {
+                $item['list_price'] = $unit;
+                $item['line_discount'] = $discount;
+            }
             if (!empty($it['sale_price']) && $num($it['sale_price']) > 0) {
                 $item['sale_price'] = round($num($it['sale_price']), 2);
             }
@@ -189,7 +246,7 @@ class ReceiptExtractor
 
         $warnings = array_values(array_filter(array_map($str, (array) ($d['warnings'] ?? []))));
         $sum = round(array_sum(array_column($items, 'line_total')), 2);
-        $discount = round(abs($num($d['discount'] ?? 0)), 2);
+        $discount = self::billDiscount(round(abs($num($d['discount'] ?? 0)), 2), $items);
         $total = round($num($d['total'] ?? 0), 2);
         $vat = round($num($d['vat'] ?? 0), 2);
         if ($added = self::addVat($items, $discount, $vat, $total)) {

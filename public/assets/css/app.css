@@ -462,6 +462,8 @@ label.ai-icon-btn { cursor: pointer; }
 .pc-pmode button.on { background: var(--soft); color: var(--pri); font-weight: 700; }
 .pc-pmode button.promo.on { background: var(--violet); color: var(--surface); }
 .pc-reg { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
+.pc-break { font-size: 11px; line-height: 1.35; color: var(--muted); margin-top: 3px; text-align: right; white-space: nowrap; }
+.pc-break-disc { color: var(--ok); }
 .pill.promo { background: transparent; border: 1px solid var(--violet); color: var(--violet); }
 .pc-cancelled td { color: var(--muted); }
 .pc-cancelled .pc-total { text-decoration: line-through; }
