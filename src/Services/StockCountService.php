@@ -14,6 +14,10 @@ class StockCountService
 
     public function start(int $userId): int
     {
+        // Counting the whole store in one round is retired: a round approved with lines left
+        // half-counted or counted wrong set many products' stock wrong at once. Products are counted
+        // one at a time now (itemCount), each count its own record. A round still open can be finished.
+        throw new \RuntimeException('เลิกใช้การตรวจนับทั้งร้านเป็นรอบแล้ว — นับสินค้าทีละรายการ (ปุ่ม "นับรายการ") แต่ละครั้งบันทึกเป็นการนับของสินค้านั้น');
         // A round approved after an item count waiting for a manager would be undone by certifying it.
         if ($waiting = $this->pendingItemCount()) {
             throw new \RuntimeException("มีการนับรายการรอผู้จัดการรับรอง {$waiting} รายการ ให้ผู้จัดการรับรองหรือไม่รับรองให้เสร็จก่อนจึงเปิดรอบตรวจนับได้");
@@ -751,7 +755,7 @@ class StockCountService
      * Item counts with everything recorded about them: those waiting for a manager first, then
      * the latest ones (optionally one product's only).
      */
-    public function itemCounts(?int $productId = null, int $limit = 60): array
+    public function itemCounts(?int $productId = null, int $limit = 60, ?string $from = null, ?string $to = null): array
     {
         if (!self::itemReady($this->db)) {
             return ['ready' => false, 'pending' => [], 'recent' => []];
@@ -761,6 +765,12 @@ class StockCountService
         if ($productId !== null) {
             $where .= ' AND sci.product_id = ?';
             $args[] = $productId;
+        }
+        // The count report: counts made on these days (by when they were counted).
+        if ($from !== null && $to !== null) {
+            $where .= ' AND COALESCE(sci.counted_at, sc.created_at) >= ? AND COALESCE(sci.counted_at, sc.created_at) < DATE_ADD(?, INTERVAL 1 DAY)';
+            $args[] = $from;
+            $args[] = $to;
         }
         $stmt = $this->db->prepare(
             "SELECT sc.id, sc.doc_no, sc.status, sc.count_date, sc.created_at, sc.approved_at, sc.review_note, sc.cancelled_at, sc.cancel_reason,
@@ -796,6 +806,64 @@ class StockCountService
             'pending' => array_values(array_filter($rows, fn ($r) => $r['status'] === 'submitted')),
             'recent' => array_values(array_filter($rows, fn ($r) => $r['status'] !== 'submitted')),
         ];
+    }
+
+    /**
+     * When each product was last counted (an approved count that counted it: an item count, or a
+     * line counted in a round) and how many times: product id => [last_at, times].
+     */
+    public function lastCounts(): array
+    {
+        $at = self::itemReady($this->db) ? 'COALESCE(sci.counted_at, sc.approved_at, sc.created_at)' : 'COALESCE(sc.approved_at, sc.created_at)';
+        $rows = $this->db->query(
+            "SELECT sci.product_id, MAX({$at}) AS last_at, COUNT(*) AS times
+             FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL
+             GROUP BY sci.product_id"
+        )->fetchAll();
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r['product_id']] = ['last_at' => $r['last_at'], 'times' => (int) $r['times']];
+        }
+        return $out;
+    }
+
+    /**
+     * Every count of one product, newest first: item counts (also those waiting or turned down)
+     * and the round lines that counted it, with what the system said, what was counted, who and why.
+     */
+    public function productCounts(int $productId, int $limit = 200): array
+    {
+        $item = self::itemReady($this->db);
+        $cols = $item
+            ? 'sc.kind, sci.counted_at, sci.count_system_qty, sci.count_qty, sci.count_place, sci.count_method, sci.count_note,
+               sci.diff_reason, sci.diff_detail, sc.review_note, sc.cancel_reason'
+            : "'round' AS kind, NULL AS counted_at, NULL AS count_system_qty, NULL AS count_qty, NULL AS count_place, NULL AS count_method,
+               NULL AS count_note, NULL AS diff_reason, NULL AS diff_detail, NULL AS review_note, NULL AS cancel_reason";
+        $at = $item ? 'COALESCE(sci.counted_at, sc.approved_at, sc.created_at)' : 'COALESCE(sc.approved_at, sc.created_at)';
+        $counter = $item ? 'COALESCE(sci.counted_by, sc.created_by)' : 'sc.created_by';
+        $which = $item ? "(sc.status = 'approved' OR (sc.kind = 'item' AND sc.status IN ('submitted', 'cancelled')))" : "sc.status = 'approved'";
+        $stmt = $this->db->prepare(
+            "SELECT sc.id, sc.doc_no, sc.status, sc.count_date, sc.approved_at, {$at} AS at, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.note, {$cols},
+                    cu.full_name AS counter_name, au.full_name AS approver_name
+             FROM stock_count_items sci
+             JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             LEFT JOIN users cu ON cu.id = {$counter}
+             LEFT JOIN users au ON au.id = sc.approved_by
+             WHERE sci.product_id = ? AND sci.counted_qty IS NOT NULL AND {$which}
+             ORDER BY at DESC, sc.id DESC
+             LIMIT " . (int) $limit
+        );
+        $stmt->execute([$productId]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$r) {
+            $r['system_at_count'] = $r['count_system_qty'] !== null ? (int) $r['count_system_qty'] : (int) $r['system_qty'];
+            $r['counted_at_count'] = $r['count_qty'] !== null ? (int) $r['count_qty'] : (int) $r['counted_qty'];
+            $r['diff_at_count'] = $r['counted_at_count'] - $r['system_at_count'];
+            $r['reason_label'] = $r['diff_reason'] !== null ? (self::DIFF_REASONS[$r['diff_reason']] ?? $r['diff_reason']) : null;
+        }
+        unset($r);
+        return $rows;
     }
 
     /** Item counts of a product waiting for a manager are dropped when its goods go back to the consignor. */

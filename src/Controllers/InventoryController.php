@@ -31,8 +31,12 @@ class InventoryController
         $rows = $service->products($search, !empty($params['consigned']));
         // Piece barcodes put aside at a merge, waiting for an admin / manager to check them.
         $held = (new ProductRepo($db, new AuditLogger($db)))->heldBarcodes();
+        // When each product was last counted (approved counts that counted it) and how many times.
+        $counts = (new StockCountService($db, new DocumentNumberService($db), new AuditLogger($db)))->lastCounts();
         foreach ($rows as &$r) {
             $r['held_barcodes'] = $held[(int) $r['id']] ?? [];
+            $r['last_counted_at'] = $counts[(int) $r['id']]['last_at'] ?? null;
+            $r['count_times'] = $counts[(int) $r['id']]['times'] ?? 0;
         }
         unset($r);
         return $this->json($response, [
@@ -42,6 +46,14 @@ class InventoryController
             'promo_ready' => Db::hasColumn($db, 'products', 'on_promo'),
             'low_stock_threshold' => (new SettingsService($db))->lowStockThreshold(),
         ]);
+    }
+
+    /** GET /inventory/{id}/counts — every count of one product (dates, numbers, who, why). */
+    public function counts(Request $request, Response $response, array $args): Response
+    {
+        $db = Db::connection();
+        $rows = (new StockCountService($db, new DocumentNumberService($db), new AuditLogger($db)))->productCounts((int) $args['id']);
+        return $this->json($response, ['data' => $rows]);
     }
 
     /** Marks a product as really having no barcode, or takes the mark back (body: no_barcode). Consigned goods: admin only. */

@@ -82,9 +82,19 @@ class StockCountController
     public function itemCounts(Request $request, Response $response): Response
     {
         $user = $request->getAttribute('user');
-        $pid = (int) ($request->getQueryParams()['product_id'] ?? 0);
+        $q = $request->getQueryParams();
+        $pid = (int) ($q['product_id'] ?? 0);
         $db = Db::connection();
-        $data = $this->service()->itemCounts($pid > 0 ? $pid : null);
+        // ?from=&to= (YYYY-MM-DD): the count report of those days, every count made then.
+        $day = fn ($v) => is_string($v) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) ? $v : null;
+        $from = $day($q['from'] ?? null);
+        $to = $day($q['to'] ?? null);
+        if ($from !== null && $to !== null && $from > $to) {
+            [$from, $to] = [$to, $from];
+        }
+        $data = $from !== null && $to !== null
+            ? $this->service()->itemCounts($pid > 0 ? $pid : null, 2000, $from, $to)
+            : $this->service()->itemCounts($pid > 0 ? $pid : null);
         $data['reasons'] = StockCountService::DIFF_REASONS;
         $data['approval_over'] = StockCountService::ITEM_APPROVAL_OVER;
         $data['detail_min'] = StockCountService::DIFF_DETAIL_MIN;

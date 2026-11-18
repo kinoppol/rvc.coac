@@ -1,10 +1,13 @@
 import { api } from '../api.js';
-import { money, escapeHtml, fmtDateTime } from '../util.js';
+import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
 import { openMobileCount, COUNT_PHOTO_SIZE } from './count-mobile.js';
 import { attachmentUrl, fileToDataUrl, thumbDataUrl } from '../images.js';
 import { confirmDialog, promptDialog } from '../dialog.js';
 
 const NO_SUPPLIER = '__none__';
+const dayShift = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+// The count report's days.
+const REPORT_PERIODS = [['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['7', '7 วันล่าสุด'], ['range', 'ระบุวันที่']];
 
 // Which lines the table shows, besides the search words.
 const SHOWS = [
@@ -44,6 +47,7 @@ export async function render(container, { permissions, user }) {
         } else {
             current = null;
             items = [];
+            await loadReport();
             draw(list);
         }
     }
@@ -61,27 +65,19 @@ export async function render(container, { permissions, user }) {
             ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
             ${notice ? `<div class="pill ok" style="font-size:13px;padding:8px 14px">${escapeHtml(notice)}</div>` : ''}
             ${itemsHtml(true)}
-            <section class="card card-pad" style="text-align:center">
-              <p class="muted">ยังไม่มีรอบตรวจนับที่กำลังดำเนินการ — นับทั้งร้านพร้อมกันให้เริ่มรอบตรวจนับ</p>
-              <button type="button" class="btn" id="btn-start">เริ่มรอบตรวจนับใหม่</button>
-              ${history && history.length ? `
-                <div class="table-wrap" style="margin-top:20px;text-align:left"><table>
-                  <thead><tr><th>เลขที่</th><th>วันที่</th><th>สถานะ</th></tr></thead>
-                  <tbody>${history.map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td>${h.status === 'cancelled' ? '<span class="pill">ยกเลิก</span>' : '<span class="pill ok">เสร็จสิ้น</span>'}</td></tr>`).join('')}</tbody>
-                </table></div>` : ''}
-            </section>`;
-            container.querySelector('#btn-start').addEventListener('click', async () => {
-                try {
-                    const res = await api.post('/stockcounts/start');
-                    error = null;
-                    notice = null;
-                    await loadOne(res.data.id);
-                } catch (e) {
-                    error = e.message;
-                    draw(history);
-                }
-            });
+            ${reportHtml()}
+            ${history && history.length ? `
+              <section class="card card-pad">
+                <details><summary style="cursor:pointer;font-weight:600">รอบตรวจนับทั้งร้าน (เลิกใช้แล้ว) — ${history.length} รอบล่าสุด</summary>
+                  <div class="muted" style="font-size:12.5px;margin-top:6px">การนับทั้งร้านเป็นรอบเลิกใช้แล้ว เพราะอนุมัติรอบที่นับไม่ครบหรือนับผิดทำให้สต๊อกผิดหลายรายการพร้อมกัน ตอนนี้นับทีละรายการ แต่ละครั้งเป็นการนับของสินค้านั้น ดูได้ที่หน้าสต๊อกสินค้า (คอลัมน์นับล่าสุด)</div>
+                  <div class="table-wrap" style="margin-top:10px"><table>
+                    <thead><tr><th>เลขที่</th><th>วันที่</th><th>สถานะ</th></tr></thead>
+                    <tbody>${history.map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td>${h.status === 'cancelled' ? '<span class="pill">ยกเลิก</span>' : '<span class="pill ok">เสร็จสิ้น</span>'}</td></tr>`).join('')}</tbody>
+                  </table></div>
+                </details>
+              </section>` : ''}`;
             bindItems(history);
+            bindReport(() => draw(history));
             return;
         }
 
@@ -246,7 +242,85 @@ export async function render(container, { permissions, user }) {
 
     // ---- นับรายการ: one product at a time with no round open (migration 0077) ----
     let itemData = null;   // { ready, pending, recent, reasons, approval_over, can_approve, user_id, open_round }
-    let showRecent = false;
+
+    // The count report: every item count made on the chosen days (only the products counted).
+    const rep = { period: 'today', from: todayISO(), to: todayISO(), rows: null, diffOnly: false, error: null };
+    function repSpan() {
+        const t = todayISO();
+        if (rep.period === 'today') return [t, t];
+        if (rep.period === 'yesterday') return [dayShift(t, -1), dayShift(t, -1)];
+        if (rep.period === '7') return [dayShift(t, -6), t];
+        return rep.from <= rep.to ? [rep.from, rep.to] : [rep.to, rep.from];
+    }
+    async function loadReport() {
+        const [f, t] = repSpan();
+        try {
+            const d = (await api.get(`/stockcounts/items?from=${f}&to=${t}`)).data;
+            rep.rows = d.ready ? [...d.pending, ...d.recent] : [];
+            rep.error = null;
+        } catch (e) {
+            rep.rows = [];
+            rep.error = e.message;
+        }
+    }
+
+    function reportHtml() {
+        if (!itemData || !itemData.ready) return '';
+        const [f, t] = repSpan();
+        const all = rep.rows || [];
+        const rows = rep.diffOnly ? all.filter((r) => r.diff_at_count) : all;
+        const done = all.filter((r) => r.status !== 'cancelled');
+        const products = new Set(done.map((r) => r.product_id)).size;
+        const same = done.filter((r) => !r.diff_at_count).length;
+        const diffs = done.filter((r) => r.diff_at_count);
+        const waiting = all.filter((r) => r.status === 'submitted').length;
+        const net = diffs.reduce((s, r) => s + r.diff_at_count, 0);
+        const netValue = diffs.reduce((s, r) => s + r.diff_at_count * Number(r.sale_price || 0), 0);
+        const chip = (l, v, style = '') => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="font-size:20px;${style}">${v}</div></div>`;
+        return `
+        <section class="card">
+          <div class="card-head" style="flex-wrap:wrap;gap:10px"><h2>รายงานการนับสินค้า</h2>
+            <span class="muted" style="font-size:12.5px">แสดงเฉพาะรายการที่นับในวันที่เลือก ${f === t ? escapeHtml(f) : `${escapeHtml(f)} – ${escapeHtml(t)}`}</span></div>
+          <div class="card-pad" style="padding-top:0">
+            <div class="actions-row" style="gap:6px;align-items:center">
+              ${REPORT_PERIODS.map(([k, l]) => `<button type="button" class="tab-btn ${rep.period === k ? 'active' : ''}" data-rep-period="${k}">${l}</button>`).join('')}
+              ${rep.period === 'range' ? `<label class="field" style="flex-direction:row;align-items:center;gap:6px">ตั้งแต่ <input type="date" id="rep-from" value="${escapeHtml(rep.from)}" max="${todayISO()}"></label>
+                <label class="field" style="flex-direction:row;align-items:center;gap:6px">ถึง <input type="date" id="rep-to" value="${escapeHtml(rep.to)}" max="${todayISO()}"></label>` : ''}
+              <label class="cnt-check" style="margin-left:auto"><input type="checkbox" id="rep-diff" ${rep.diffOnly ? 'checked' : ''}> เฉพาะที่มีผลต่าง</label>
+            </div>
+            ${rep.error ? `<div class="error-box" style="margin-top:10px">${escapeHtml(rep.error)}</div>` : ''}
+            <div class="stat-row" style="margin:12px 0 0">
+              ${chip('สินค้าที่นับ', `${products} รายการ`)}
+              ${chip('ตรงกับระบบ', same, 'color:var(--ok)')}
+              ${chip('มีผลต่าง', diffs.length, diffs.length ? 'color:var(--bad)' : '')}
+              ${chip('ผลต่างสุทธิ', `${signed(net)} ชิ้น`, net ? 'color:var(--bad)' : '')}
+              ${chip('มูลค่าผลต่าง (ราคาขาย)', `฿ ${money(netValue)}`)}
+              ${waiting ? chip('รอผู้จัดการรับรอง', waiting, 'color:var(--warn)') : ''}
+            </div>
+          </div>
+          ${rep.rows === null ? '<div class="card-pad muted">กำลังโหลด...</div>' : rows.length ? `
+          <div class="table-wrap" style="max-height:560px"><table>
+            <thead><tr><th>เวลานับ / เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th>ผล</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr${r.diff_at_count && r.status !== 'cancelled' ? ' style="box-shadow:inset 3px 0 0 var(--bad)"' : ''}>
+              <td style="white-space:nowrap">${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}<div class="muted" style="font-size:12px">${escapeHtml(r.doc_no)} · ${escapeHtml(r.counter_name || '-')}</div></td>
+              <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}${r.barcode ? ` · ${escapeHtml(r.barcode)}` : ''}</div></td>
+              <td class="num">${r.count_system_qty ?? r.system_qty}</td><td class="num"><b>${r.count_qty ?? r.counted_qty}</b></td>
+              <td>${r.diff_at_count ? `<span class="pill bad">${signed(r.diff_at_count)}</span>` : '<span class="pill ok">ตรง</span>'}</td>
+              <td>${itemDetail(r)}</td>
+              <td>${itemPhotos(r)}</td>
+              <td>${r.status === 'submitted' ? '<span class="pill warn">รอผู้จัดการรับรอง</span>' : itemStatus(r)}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>` : `<div class="empty" style="padding:16px">${rep.diffOnly ? 'ไม่มีรายการที่มีผลต่างในวันที่เลือก' : 'ยังไม่มีการนับในวันที่เลือก'}</div>`}
+        </section>`;
+    }
+
+    function bindReport(redraw) {
+        const reload = async () => { await loadReport(); redraw(); };
+        container.querySelectorAll('[data-rep-period]').forEach((b) => b.addEventListener('click', () => { rep.period = b.dataset.repPeriod; rep.rows = null; redraw(); reload(); }));
+        container.querySelector('#rep-from')?.addEventListener('change', (e) => { if (e.target.value) { rep.from = e.target.value; reload(); } });
+        container.querySelector('#rep-to')?.addEventListener('change', (e) => { if (e.target.value) { rep.to = e.target.value; reload(); } });
+        container.querySelector('#rep-diff')?.addEventListener('change', (e) => { rep.diffOnly = e.target.checked; redraw(); });
+    }
 
     async function loadItems() {
         try {
@@ -324,22 +398,6 @@ export async function render(container, { permissions, user }) {
                   </tr>`;
               }).join('')}</tbody>
             </table></div>` : ''}
-          ${noRound && itemData.recent.length ? `
-            <div class="card-pad" style="padding-top:${pend.length ? '12px' : '0'}">
-              <button type="button" class="btn secondary sm" id="btn-item-recent">${showRecent ? '▾' : '▸'} ประวัติการนับรายการ (${itemData.recent.length} ครั้งล่าสุด)</button>
-            </div>
-            ${showRecent ? `<div class="table-wrap"><table>
-              <thead><tr><th>เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th>ผล</th></tr></thead>
-              <tbody>${itemData.recent.map((r) => `<tr>
-                <td>${escapeHtml(r.doc_no)}<div class="muted" style="font-size:12px">${escapeHtml(r.counter_name || '-')}<br>${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}</div></td>
-                <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}</div></td>
-                <td class="num">${r.count_system_qty ?? r.system_qty}</td><td class="num">${r.count_qty ?? r.counted_qty}</td>
-                <td>${r.diff_at_count ? `<span class="pill bad">${signed(r.diff_at_count)}</span>` : '<span class="pill ok">ตรง</span>'}</td>
-                <td>${itemDetail(r)}</td>
-                <td>${itemPhotos(r)}</td>
-                <td>${itemStatus(r)}</td>
-              </tr>`).join('')}</tbody>
-            </table></div>` : ''}` : ''}
         </section>`;
     }
 
@@ -352,10 +410,6 @@ export async function render(container, { permissions, user }) {
                 return;
             }
             openMobileCount({ quick: true, stockCount: null, items: [], onClose: () => loadList() });
-        });
-        container.querySelector('#btn-item-recent')?.addEventListener('click', () => {
-            showRecent = !showRecent;
-            redraw();
         });
         container.querySelectorAll('[data-item-ok]').forEach((b) => b.addEventListener('click', () => certifyItem(itemData.pending[Number(b.dataset.itemOk)], redraw)));
         container.querySelectorAll('[data-item-no]').forEach((b) => b.addEventListener('click', () => rejectItem(itemData.pending[Number(b.dataset.itemNo)], redraw)));
@@ -376,6 +430,7 @@ export async function render(container, { permissions, user }) {
             notice = null;
         }
         await loadItems();
+        if (!current) await loadReport();
         redraw();
     }
 
@@ -395,6 +450,7 @@ export async function render(container, { permissions, user }) {
             notice = null;
         }
         await loadItems();
+        if (!current) await loadReport();
         redraw();
     }
 

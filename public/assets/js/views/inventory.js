@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { openLowStockAssist } from '../low-stock-assist.js';
-import { money, count, escapeHtml, fmtDate } from '../util.js';
+import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
@@ -28,7 +28,14 @@ const COLUMNS = [
     ['stock_cost_value', 'มูลค่าทุนคงเหลือ', '', 'num'],
     ['profit_total', 'กำไรสะสม', '', 'num'],
     ['last_purchase', 'ซื้อล่าสุด', '', 'date'],
+    ['last_counted_at', 'นับล่าสุด', 'วันที่นับสินค้านี้ครั้งล่าสุด (การนับที่มีผลแล้ว) กดเพื่อดูทุกวันที่นับ', 'date'],
 ];
+// A product not counted for longer than this (or never) is due for counting.
+const COUNT_DUE_DAYS = 14;
+/** Whole days since the product was last counted (null = never). */
+const daysSinceCount = (p) => (p.last_counted_at
+    ? Math.max(0, Math.round((Date.parse(`${todayISO()}T00:00:00Z`) - Date.parse(`${String(p.last_counted_at).slice(0, 10)}T00:00:00Z`)) / 864e5))
+    : null);
 const SORT_KEY = 'inventory.sort';
 const FILTER_KEY = 'inventory.filter';
 const FILTERS = [
@@ -42,6 +49,9 @@ const FILTERS = [
     ['low', 'ใกล้หมด', null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
     ['discontinued', 'เลิกจำหน่าย', (p) => !!p.discontinued_at],
+    // Still on sale (or still holding stock) and not counted within COUNT_DUE_DAYS days, or never.
+    ['countdue', `ยังไม่ได้นับเกิน ${COUNT_DUE_DAYS} วัน`, (p) => (!p.discontinued_at || Number(p.qty_stock) !== 0)
+        && (daysSinceCount(p) === null || daysSinceCount(p) > COUNT_DUE_DAYS)],
     ['nocost', 'ไม่ทราบต้นทุน', (p) => p.consignor_id == null && !(Number(p.cost_price) > 0)],
     // Same / almost the same name of the same owner (the test needs the loaded list: set in render).
     ['dup', 'สินค้าซ้ำซ้อน', null],
@@ -51,6 +61,7 @@ const FILTER_TIPS = {
     nobarcode: 'สินค้าที่ยังไม่ได้เก็บบาร์โค้ดชิ้น (ตัวสินค้ามีบาร์โค้ดแต่ยังไม่ได้บันทึก) — ถ้าสินค้าไม่มีบาร์โค้ดจริง กด "ไม่มีบาร์โค้ด" ในคอลัมน์บาร์โค้ดชิ้น',
     barcodeless: 'สินค้าที่ทำเครื่องหมายว่าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด',
     low: 'สินค้าของร้านที่คงเหลือไม่เกินเกณฑ์ใกล้หมด (ไม่รวมสินค้าเลิกจำหน่าย) — ตั้งเกณฑ์ได้ใต้แท็บนี้',
+    countdue: 'สินค้าที่ยังไม่ได้นับเลย หรือนับครั้งล่าสุดนานกว่า 14 วัน (ไม่รวมสินค้าเลิกจำหน่ายที่ไม่มีคงเหลือ) — นับได้ที่หน้าตรวจนับสต๊อก ปุ่มนับรายการ',
     dup: 'ชื่อเดียวกันหรือสะกดต่างกันเล็กน้อย ของเจ้าของเดียวกัน (ขนาด/ตัวเลขในชื่อตรงกัน)',
 };
 const thCollator =new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
@@ -126,6 +137,42 @@ export async function render(container, { navigate, permissions, user }) {
         const saved = localStorage.getItem(FILTER_KEY);
         if (FILTERS.some(([k]) => k === saved)) filter = saved;
     } catch (e) { /* private mode */ }
+
+    /** Last counted: the date and how long ago (due = red), a click lists every count of the product. */
+    function countCell(p) {
+        const days = daysSinceCount(p);
+        const due = days === null || days > COUNT_DUE_DAYS;
+        const label = days === null ? 'ยังไม่เคยนับ' : `${fmtDate(p.last_counted_at)}<div style="font-size:11.5px">${days === 0 ? 'วันนี้' : `${count(days)} วันก่อน`} · ${count(p.count_times)} ครั้ง</div>`;
+        return `<button type="button" class="link-btn" data-counts="${p.id}" style="text-align:right;font-weight:400;${due ? 'color:var(--bad)' : 'color:inherit'}" title="ดูทุกวันที่นับสินค้านี้">${label}</button>`;
+    }
+
+    function openCounts(id) {
+        const p = res.data.find((x) => String(x.id) === String(id));
+        const STATUS = { approved: 'มีผลแล้ว', submitted: 'รอผู้จัดการรับรอง', cancelled: 'ไม่รับรอง / ยกเลิก' };
+        openDetailModal(async () => {
+            const rows = (await api.get(`/inventory/${id}/counts`)).data;
+            const done = rows.filter((r) => r.status === 'approved');
+            return {
+                title: `การนับสินค้า: ${p ? p.name : ''}`,
+                note: rows.length
+                    ? `นับแล้ว ${done.length} ครั้ง · ล่าสุด ${done[0] ? fmtDateTime(done[0].at) : '-'} · คงเหลือตอนนี้ ${p ? count(p.qty_stock) : '-'} ชิ้น — "ในระบบ" คือยอดในระบบตอนนับ`
+                    : 'ยังไม่เคยนับสินค้านี้ — นับได้ที่หน้าตรวจนับสต๊อก ปุ่มนับรายการ',
+                sections: [{
+                    title: 'วันที่นับ',
+                    total: false,
+                    columns: [['at', 'วันเวลาที่นับ', 'datetime'], ['doc_no', 'เลขที่', 'text'], ['kind', 'แบบ', 'text'], ['counter_name', 'ผู้นับ', 'text'],
+                        ['system', 'ในระบบ', 'qty'], ['counted', 'นับได้', 'qty'], ['diff', 'ผลต่าง', 'text'], ['why', 'สาเหตุ / หมายเหตุ', 'text'], ['state', 'ผล', 'text']],
+                    rows: rows.map((r) => ({
+                        at: r.at, doc_no: r.doc_no, kind: r.kind === 'item' ? 'นับรายการ' : 'รอบทั้งร้าน', counter_name: r.counter_name,
+                        system: r.system_at_count, counted: r.counted_at_count,
+                        diff: r.diff_at_count ? `${r.diff_at_count > 0 ? '+' : ''}${r.diff_at_count}` : 'ตรง',
+                        why: [r.reason_label, r.diff_detail, r.count_place ? `นับที่ ${r.count_place}` : null, r.cancel_reason ? `เหตุผล: ${r.cancel_reason}` : null].filter(Boolean).join(' · '),
+                        state: STATUS[r.status] || r.status,
+                    })),
+                }],
+            };
+        });
+    }
 
     function sortValue(p, key) {
         if (key === 'packs') return p.pack_barcodes[0]?.barcode ?? '';
@@ -258,7 +305,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="table-wrap sticky-page"><table>
             <thead><tr>${headHtml()}</tr></thead>
             <tbody>${shown.map(row).join('')
-                || `<tr><td colspan="${canEdit ? 13 : 12}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
+                || `<tr><td colspan="${canEdit ? 14 : 13}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
           </table></div>
         </section>
         ${editing ? editHtml() : ''}
@@ -304,6 +351,7 @@ export async function render(container, { navigate, permissions, user }) {
         bindLink();
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
         container.querySelectorAll('[data-split]').forEach((b) => b.addEventListener('click', () => openSplitModal(b.dataset.split, { onDone: load })));
+        container.querySelectorAll('[data-counts]').forEach((b) => b.addEventListener('click', () => openCounts(b.dataset.counts)));
         container.querySelectorAll('[data-damage]').forEach((b) => b.addEventListener('click', () => openDamageModal(b.dataset.damage, { onDone: load })));
         container.querySelectorAll('[data-claim]').forEach((b) => b.addEventListener('click', async () => {
             const p = res.data.find((x) => String(x.id) === b.dataset.claim);
@@ -958,6 +1006,7 @@ export async function render(container, { navigate, permissions, user }) {
           <td class="num">${money(p.stock_cost_value)}</td>
           <td class="num">${money(p.profit_total)}</td>
           <td class="muted">${fmtDate(p.last_purchase)}</td>
+          <td style="white-space:nowrap">${countCell(p)}</td>
         </tr>`;
     }
 
