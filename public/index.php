@@ -673,6 +673,11 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('migrations.manage'));
     $group->post('/admin/backups/{id:[a-z0-9_-]+}/delete', [BackupController::class, 'delete'])
         ->add(new RoleGuard('migrations.manage'));
+    // Bringing a backup file back by upload (a bundle .zip, database.sql / .sql.gz, or a .zip of files).
+    $group->post('/admin/backups/import/chunk', [BackupController::class, 'importChunk'])
+        ->add(new RoleGuard('migrations.manage'));
+    $group->post('/admin/backups/import/finish', [BackupController::class, 'importFinish'])
+        ->add(new RoleGuard('migrations.manage'));
 
     // อุปกรณ์ POS (Android): pairing by code, who each device sells as, sales it could not book.
     $group->get('/devices', [DeviceAdminController::class, 'index'])
