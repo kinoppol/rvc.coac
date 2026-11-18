@@ -282,7 +282,7 @@ export async function render(container, { user, params = {} }) {
                 <label class="field">${e.swap !== null ? 'สินค้าที่ขายจริง' : e.direct ? 'เพิ่มสินค้าในบิลนี้' : 'เพิ่มสินค้าที่ขายแต่ลืมสแกน'}
                   <input id="e-search" placeholder="พิมพ์ชื่อสินค้าหรือสแกนบาร์โค้ด" value="${escapeHtml(e.search)}" autocomplete="off"></label>
                 ${e.results.length ? `<div class="card" style="margin-top:6px;max-height:220px;overflow:auto">
-                  ${e.results.map((p, i) => `<button type="button" class="nav-btn" data-add="${i}" style="display:flex;justify-content:space-between;width:100%;gap:10px;padding:8px 12px;border:0;background:none;cursor:pointer;text-align:left">
+                  ${e.results.map((p, i) => `<button type="button" class="pick-row" data-add="${i}">
                     <span>${escapeHtml(p.name)}${p.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${p.pack_size}</span>` : ''} <span class="muted" style="font-size:12px">${escapeHtml(p.consignor_name)} · คงเหลือ ${count(p.qty_stock)}</span></span>
                     <b>฿${money(p.price)}</b></button>`).join('')}</div>` : ''}
               </div>
