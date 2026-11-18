@@ -80,12 +80,12 @@ class ConsignorHoldService
         $rows = $this->db->query(
             "SELECT 'in' AS direction, w.id, w.doc_no, w.amount, w.method, w.note, w.paid_at AS at,
                     IF(w.status = 'cancelled', w.cancelled_at, NULL) AS cancelled_at, w.cancel_reason,
-                    c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name
+                    c.id AS consignor_id, c.code AS consignor_code, c.name AS consignor_name, u.full_name AS user_name
              FROM withdrawals w JOIN consignors c ON c.id = w.consignor_id LEFT JOIN users u ON u.id = w.requested_by
              WHERE w.method = 'hold' AND w.paid_at IS NOT NULL
              UNION ALL
              SELECT 'out', p.id, p.doc_no, p.amount, p.method, p.note, p.paid_at, p.cancelled_at, p.cancel_reason,
-                    c.code, c.name, u.full_name
+                    c.id, c.code, c.name, u.full_name
              FROM consignor_hold_payouts p JOIN consignors c ON c.id = p.consignor_id LEFT JOIN users u ON u.id = p.user_id
              ORDER BY at, direction, id"
         )->fetchAll();

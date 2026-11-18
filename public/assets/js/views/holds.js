@@ -1,13 +1,19 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { openViewModal } from '../view-modal.js';
 
 const signed = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${money(Math.abs(v))}`;
 const differs = (a, b) => Math.abs(a - b) >= 0.005;
 
 /** บัญชีเพื่อผู้ฝากขาย: what it should hold, paying held money out, and checks against the bank. */
-export async function render(container, { user, permissions = [] }) {
+export async function render(container, { user, permissions = [], navigate }) {
     const isAdmin = user?.role === 'admin';
+    const canPassbook = permissions.includes('passbook.view');
+    // A consignor's name opens their passbook over this page.
+    const who = (c) => canPassbook
+        ? `<a href="#" data-passbook="${c.id}" title="ดูรายการเดินบัญชี (สมุดบัญชี) ของผู้ฝากรายนี้">${escapeHtml(c.code)} - ${escapeHtml(c.name)}</a>`
+        : `${escapeHtml(c.code)} - ${escapeHtml(c.name)}`;
     let d = null;
     let pay = null; // the pay form: { consignor, amount, method, note, error, busy }
     let chk = null; // the check form: { date, expected, actual, note, error, busy }
@@ -36,7 +42,7 @@ export async function render(container, { user, permissions = [] }) {
             <thead><tr><th>ผู้ฝากขาย</th><th>ช่องทางที่สะดวก</th><th class="num">เงินที่พักไว้ (บาท)</th><th></th></tr></thead>
             <tbody>${d.consignors.map((c) => `
               <tr>
-                <td>${escapeHtml(c.code)} - ${escapeHtml(c.name)}${c.phone ? `<div class="muted" style="font-size:11.5px">${escapeHtml(c.phone)}</div>` : ''}</td>
+                <td>${who(c)}${c.phone ? `<div class="muted" style="font-size:11.5px">${escapeHtml(c.phone)}</div>` : ''}</td>
                 <td style="font-size:12.5px">${escapeHtml(d.methods[c.pay_channel] || c.pay_channel || '-')}${c.pay_account ? `<div class="muted">${escapeHtml(c.pay_account)}</div>` : ''}</td>
                 <td class="num" style="font-weight:600">${money(c.held)}</td>
                 <td style="text-align:right">${c.held > 0 ? `<button type="button" class="btn sm" data-pay="${c.id}">จ่ายเงิน</button>` : ''}</td>
@@ -93,7 +99,7 @@ export async function render(container, { user, permissions = [] }) {
               <tr${cancelled ? ' style="opacity:.6"' : ''}>
                 <td class="muted" style="white-space:nowrap;font-size:12.5px">${fmtDateTime(r.at)}</td>
                 <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(r.doc_no)}</td>
-                <td>${escapeHtml(r.consignor_code)} - ${escapeHtml(r.consignor_name)}</td>
+                <td>${who({ id: r.consignor_id, code: r.consignor_code, name: r.consignor_name })}</td>
                 <td style="font-size:12.5px">${isIn ? 'พักเงินจากลิ้นชัก' : `จ่ายให้ผู้ฝากขาย (${escapeHtml(d.methods[r.method] || r.method)})`}
                   ${r.note ? `<div class="muted" style="font-size:11.5px">${escapeHtml(r.note)}</div>` : ''}
                   ${cancelled ? `<div><span class="pill muted" style="font-size:11px">ยกเลิกแล้ว</span> <span class="muted" style="font-size:11.5px">${escapeHtml(r.cancel_reason || '')}</span></div>` : ''}
@@ -158,6 +164,15 @@ export async function render(container, { user, permissions = [] }) {
             pay = { consignor: c, amount: String(c.held), method: channel, note: '', error: null, busy: false };
             draw();
             $('#hp-amount')?.focus();
+        }));
+        container.querySelectorAll('[data-passbook]').forEach((a) => a.addEventListener('click', (e) => {
+            e.preventDefault();
+            openViewModal('passbook', {
+                title: `สมุดบัญชีผู้ฝาก ${a.textContent.replace(' - ', ' ')}`,
+                params: { id: a.dataset.passbook },
+                ctx: { navigate, permissions, user },
+                onClose: async () => { await load(); draw(); },
+            });
         }));
         container.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => cancelPayout(Number(b.dataset.cancel))));
 
