@@ -107,8 +107,10 @@ class SaleService
                 } else {
                     $insItem->execute($row);
                 }
+                $itemId = (int) $this->db->lastInsertId();
 
-                $this->products->applySale((int) $product['id'], $qty, $cashierId, $ip);
+                $left = $this->products->applySale((int) $product['id'], $qty, $cashierId, $ip);
+                self::noteStockAfter($this->db, $itemId, $left);
 
                 $totalQty += $qty;
                 $totalValue += $unitPrice * $qty;
@@ -179,6 +181,17 @@ class SaleService
                 $this->db->rollBack();
             }
             throw $e;
+        }
+    }
+
+    /**
+     * Keeps the product's stock left right after a sale line (sale_items.stock_after, migration 0080),
+     * so sales that took the stock below zero can be found in the sales history.
+     */
+    public static function noteStockAfter(PDO $db, int $saleItemId, int $left): void
+    {
+        if ($saleItemId > 0 && \App\Support\Db::hasColumn($db, 'sale_items', 'stock_after')) {
+            $db->prepare('UPDATE sale_items SET stock_after = ? WHERE id = ?')->execute([$left, $saleItemId]);
         }
     }
 

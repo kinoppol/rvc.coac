@@ -436,7 +436,7 @@ class PosImportService
             $fee = round($feeOut * $qty, 2);
             $this->db->prepare('UPDATE sale_items SET product_id = ?, consignor_id = ?, fee_amount = ?, cost_amount = ? WHERE id = ?')
                 ->execute([$productId, $new['consignor_id'], $fee, $cost, $saleItemId]);
-            $this->products->applySale($productId, $qty, $userId, $ip);
+            SaleService::noteStockAfter($this->db, (int) $saleItemId, $this->products->applySale($productId, $qty, $userId, $ip));
             if ($new['consignor_id'] !== null) {
                 $cid = (int) $new['consignor_id'];
                 $ledger->append($cid, 'sale', "ขายสินค้า 1 รายการ {$qty} ชิ้น (แก้การจับคู่ยอดขาย POS: {$new['name']})", $docNo, $value, 0, $userId, $date);

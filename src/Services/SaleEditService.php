@@ -54,12 +54,20 @@ class SaleEditService
         $direct = $this->directEnabled()
             ? "(SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.direct = 1) AS direct_edits"
             : '0 AS direct_edits';
+        // Lines that took the product's stock below zero when sold (migration 0080), and lines whose
+        // product is still below zero now, so a wrong product sold (e.g. goods without a barcode) is found fast.
+        $negative = \App\Support\Db::hasColumn($this->db, 'sale_items', 'stock_after')
+            ? '(SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id AND si.stock_after < 0) AS neg_lines,'
+            : 'NULL AS neg_lines,';
         $stmt = $this->db->prepare(
             "SELECT s.id, s.doc_no, s.sale_datetime, s.business_date, s.after_hours, s.total_qty, s.total_value,
                     s.cashier_id, (SELECT u.full_name FROM users u WHERE u.id = s.cashier_id) AS cashier_name,
                     pim.id AS pos_import, pim.source_label AS pos_source,
                     s.cash_received, s.change_amount, s.created_at,{$edited}
                     (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS line_count,
+                    {$negative}
+                    (SELECT COUNT(*) FROM sale_items si JOIN products p ON p.id = si.product_id
+                       WHERE si.sale_id = s.id AND p.qty_stock < 0) AS neg_now,
                     (SELECT GROUP_CONCAT(DISTINCT sp.method ORDER BY sp.id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
                     (SELECT r.status FROM sale_edit_requests r WHERE r.sale_id = s.id ORDER BY r.id DESC LIMIT 1) AS edit_status,
                     (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved') AS edits_approved,
@@ -114,6 +122,23 @@ class SaleEditService
             return null;
         }
         $snap = $this->snapshot($saleId);
+        // Stock left right after each line was sold, and the product's stock now (below zero = check it).
+        $hasAfter = \App\Support\Db::hasColumn($this->db, 'sale_items', 'stock_after');
+        $stock = $this->db->prepare(
+            'SELECT si.id, ' . ($hasAfter ? 'si.stock_after' : 'NULL AS stock_after') . ', p.qty_stock
+             FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?'
+        );
+        $stock->execute([$saleId]);
+        $byLine = [];
+        foreach ($stock->fetchAll() as $r) {
+            $byLine[(int) $r['id']] = $r;
+        }
+        foreach ($snap['items'] as &$it) {
+            $r = $byLine[(int) $it['sale_item_id']] ?? null;
+            $it['stock_after'] = $r && $r['stock_after'] !== null ? (int) $r['stock_after'] : null;
+            $it['stock_now'] = $r ? (int) $r['qty_stock'] : null;
+        }
+        unset($it);
         $sale['items'] = $snap['items'];
         $sale['payments'] = $snap['payments'];
         $sale['requests'] = $this->requests(['sale_id' => $saleId]);
@@ -475,7 +500,10 @@ class SaleEditService
                 $feePerUnit = (float) $row['fee_amount'] / max(1, (int) $row['qty']);
                 $costPerUnit = (float) $row['cost_amount'] / max(1, (int) $row['qty']);
                 $upd->execute([$qty, round($feePerUnit * $qty, 2), round($costPerUnit * $qty, 2), $row['id']]);
-                $products->applySale((int) $row['product_id'], $delta, $userId, $ip);
+                $left = $products->applySale((int) $row['product_id'], $delta, $userId, $ip);
+                if ($delta > 0) {
+                    SaleService::noteStockAfter($this->db, (int) $row['id'], $left);
+                }
                 $track($row['consignor_id'] !== null ? (int) $row['consignor_id'] : null,
                     (float) $row['unit_price'] * $delta, $feePerUnit * $delta, $delta);
                 continue;
@@ -492,7 +520,8 @@ class SaleEditService
                 $sale['id'], $product['id'], $product['consignor_id'], $qty, $packSize > 1 ? $packSize : null,
                 $fig['unit_price'], $fig['fee_amount'], $fig['cost_amount'],
             ]);
-            $products->applySale((int) $product['id'], $qty, $userId, $ip);
+            $itemId = (int) $this->db->lastInsertId();
+            SaleService::noteStockAfter($this->db, $itemId, $products->applySale((int) $product['id'], $qty, $userId, $ip));
             $track($product['consignor_id'] !== null ? (int) $product['consignor_id'] : null, $fig['unit_price'] * $qty, $fig['fee_per_unit'] * $qty, $qty);
             if ($product['consignor_id'] !== null) {
                 $listingFees->maybeRefund((int) $product['id'], $ledger, $docs, $userId);

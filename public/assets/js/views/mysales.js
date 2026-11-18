@@ -26,6 +26,11 @@ export async function render(container, { user }) {
     let detail = null; // the sale open on the detail modal
     let edit = null; // the correction being written: { sale, direct, items, payments, reason, ack, search, results, busy, error }
     let timer = null;
+    let onlyNeg = false; // show only sales that took a product's stock below zero
+
+    // A sale line that took the product's stock below 0 (recorded at the sale, migration 0080),
+    // or, before that migration, a product in the sale that is below 0 now.
+    const negCount = (s) => (s.neg_lines === null || s.neg_lines === undefined ? Number(s.neg_now) : Number(s.neg_lines)) || 0;
 
     const nowServer = () => Date.now() + skew;
     const left = (until) => Math.max(0, Math.floor((serverTime(until) - nowServer()) / 1000));
@@ -80,7 +85,10 @@ export async function render(container, { user }) {
 
     function draw() {
         const d = data;
-        const rows = d.data;
+        const negRows = d.data.filter((s) => negCount(s) > 0);
+        const noAfter = d.data.some((s) => s.neg_lines === null || s.neg_lines === undefined);
+        if (onlyNeg && !negRows.length) onlyNeg = false;
+        const rows = onlyNeg ? negRows : d.data;
         const self = String(d.cashier_id) === String(user.id);
         const picked = d.cashiers?.find((c) => String(c.id) === String(d.cashier_id));
         const heading = self ? 'การขายของฉัน' : d.cashier_id === 'all' ? 'การขายของพนักงานทุกคน' : `การขายของ ${picked?.full_name || 'พนักงาน'}`;
@@ -108,23 +116,28 @@ export async function render(container, { user }) {
               หากการแก้ไขกระทบยอดชำระเงิน ระบบจะแจ้งเตือนเป็นพิเศษและต้องยืนยันว่ารับทราบ` : ''}
             ${d.direct_edit_needs_migration ? '<br>การแก้ไขรายการขายโดยผู้จัดการต้องรัน migration 0079 ก่อน' : ''}
           </div>
+          ${negRows.length ? `
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px;padding:9px 12px;border-radius:9px;background:var(--bad-bg, #fdecec);color:var(--bad);font-size:13px">
+            <span>⚠ <b>${count(negRows.length)} บิล</b> ${noAfter ? 'มีสินค้าที่คงเหลือติดลบอยู่ตอนนี้' : 'ทำให้สต๊อกสินค้าติดลบ (ขายเกินคงเหลือ)'} — อาจขายผิดสินค้า เช่น สินค้าที่ไม่มีบาร์โค้ด ควรตรวจสอบ</span>
+            <button type="button" class="btn sm ${onlyNeg ? '' : 'secondary'}" id="f-neg">${onlyNeg ? 'แสดงทุกบิล' : 'แสดงเฉพาะบิลที่ต้องตรวจสอบ'}</button>
+          </div>` : ''}
         </section>
 
         <section class="card">
           <div class="card-head"><h2>${escapeHtml(heading)} ${escapeHtml(fmtDate(d.from))}${d.to !== d.from ? ` – ${escapeHtml(fmtDate(d.to))}` : ''}</h2>
-            <div style="font-weight:700">${count(rows.length)} บิล · ฿ ${money(d.total_value)}</div></div>
+            <div style="font-weight:700">${onlyNeg ? `${count(rows.length)} จาก ${count(d.data.length)} บิล` : `${count(rows.length)} บิล · ฿ ${money(d.total_value)}`}</div></div>
           <div class="table-wrap" style="max-height:620px"><table>
             <thead><tr><th>เลขที่</th><th>เวลาขาย</th>${self ? '' : '<th>พนักงาน</th>'}<th class="num">รายการ</th><th class="num">ชิ้น</th><th class="num">ยอดขาย</th><th>ชำระโดย</th><th>สถานะ</th><th></th></tr></thead>
             <tbody>${rows.map((s) => `
-              <tr>
-                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${escapeHtml(s.doc_no)}${s.pos_import ? `<div><span class="pill muted" title="${escapeHtml(s.pos_source || 'นำเข้ายอดขายจาก POS ภายนอก')}">นำเข้าจาก POS</span></div>` : ''}</td>
+              <tr${negCount(s) ? ' style="box-shadow:inset 3px 0 0 var(--bad)"' : ''}>
+                <td style="font-family:ui-monospace,monospace;font-size:12.5px">${negCount(s) ? '<span title="บิลนี้มีสินค้าที่สต๊อกติดลบ" style="color:var(--bad)">⚠ </span>' : ''}${escapeHtml(s.doc_no)}${s.pos_import ? `<div><span class="pill muted" title="${escapeHtml(s.pos_source || 'นำเข้ายอดขายจาก POS ภายนอก')}">นำเข้าจาก POS</span></div>` : ''}</td>
                 <td style="font-size:12.5px">${escapeHtml(fmtDateTime(s.sale_datetime))}${Number(s.after_hours) ? ' <span class="pill muted">นอกเวลา</span>' : ''}</td>
                 ${self ? '' : `<td style="font-size:12.5px">${escapeHtml(s.cashier_name || '-')}</td>`}
                 <td class="num">${count(s.line_count)}</td>
                 <td class="num">${count(s.total_qty)}</td>
                 <td class="num" style="font-weight:600">${money(s.total_value)}</td>
                 <td style="font-size:12.5px">${escapeHtml(s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || (s.pos_import ? 'ไม่ระบุ (POS ภายนอก)' : '-'))}</td>
-                <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}${s.payment_edited_at ? ` <span class="pill warn" title="แก้เมื่อ ${escapeHtml(fmtDateTime(s.payment_edited_at))}">แก้วิธีชำระแล้ว</span>` : ''}${Number(s.direct_edits) ? ' <span class="pill warn">แก้ไขโดยผู้จัดการ</span>' : ''}${Number(s.edits_total_changed) ? ' <span class="pill bad" title="ยอดขายหลังแก้ไขไม่เท่ากับยอดเดิม">ยอดชำระเปลี่ยน</span>' : ''}</td>
+                <td>${negPill(s)}${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}${s.payment_edited_at ? ` <span class="pill warn" title="แก้เมื่อ ${escapeHtml(fmtDateTime(s.payment_edited_at))}">แก้วิธีชำระแล้ว</span>` : ''}${Number(s.direct_edits) ? ' <span class="pill warn">แก้ไขโดยผู้จัดการ</span>' : ''}${Number(s.edits_total_changed) ? ' <span class="pill bad" title="ยอดขายหลังแก้ไขไม่เท่ากับยอดเดิม">ยอดชำระเปลี่ยน</span>' : ''}</td>
                 <td style="white-space:nowrap;text-align:right">
                   <button type="button" class="btn secondary sm" data-view="${s.id}">ดูรายละเอียด</button>
                   ${ownSale(s) && s.payment_fix_until && left(s.payment_fix_until) > 0 ? `<button type="button" class="btn secondary sm" data-fix="${s.id}" title="เลือกวิธีชำระผิด แก้ได้ภายใน 5 นาทีหลังขาย ไม่ต้องรออนุมัติ">แก้วิธีชำระ (<span data-until="${escapeHtml(s.payment_fix_until)}">${mmss(left(s.payment_fix_until))}</span>)</button>` : ''}
@@ -140,6 +153,22 @@ export async function render(container, { user }) {
         startTicks();
     }
 
+    function negPill(s) {
+        const n = negCount(s);
+        if (!n) return '';
+        return s.neg_lines === null || s.neg_lines === undefined
+            ? `<span class="pill warn" title="สินค้าในบิลนี้มีคงเหลือติดลบอยู่ตอนนี้ (รัน migration 0080 เพื่อดูว่าบิลไหนทำให้ติดลบ)">สินค้าติดลบ ${count(n)} รายการ</span> `
+            : `<span class="pill bad" title="ขายแล้วคงเหลือของสินค้าต่ำกว่า 0 — ตรวจว่าขายถูกสินค้าหรือไม่">สต๊อกติดลบ ${count(n)} รายการ</span> `;
+    }
+
+    /** Stock left after the line was sold, and now; below zero is marked. */
+    function stockCell(it) {
+        const neg = (v) => v !== null && v !== undefined && v < 0;
+        const fmt = (v) => (v === null || v === undefined ? '-' : `<span style="${neg(v) ? 'color:var(--bad);font-weight:700' : ''}">${count(v)}</span>`);
+        return `<td class="num" style="white-space:nowrap">${neg(it.stock_after) ? '⚠ ' : ''}${fmt(it.stock_after)}
+          ${it.stock_now !== null && it.stock_now !== it.stock_after ? `<div class="muted" style="font-size:11.5px">ตอนนี้ ${fmt(it.stock_now)}</div>` : ''}</td>`;
+    }
+
     function detailModal() {
         const s = detail;
         const mine = s.requests.find((r) => r.status === 'pending' && String(r.requested_by) === String(user.id));
@@ -150,11 +179,11 @@ export async function render(container, { user }) {
               <button type="button" class="modal-close" data-close title="ปิด" aria-label="ปิด">✕</button></div>
             <div class="modal-body">
               <div class="table-wrap"><table>
-                <thead><tr><th>สินค้า</th><th class="num">ราคา/ชิ้น</th><th class="num">จำนวน</th><th class="num">รวม</th></tr></thead>
-                <tbody>${s.items.map((it) => `<tr><td>${escapeHtml(it.name)}${it.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${it.pack_size}</span>` : ''}
+                <thead><tr><th>สินค้า</th><th class="num">ราคา/ชิ้น</th><th class="num">จำนวน</th><th class="num">รวม</th><th class="num" title="คงเหลือของสินค้าหลังขายรายการนี้">คงเหลือหลังขาย</th></tr></thead>
+                <tbody>${s.items.map((it) => `<tr${(it.stock_after ?? it.stock_now) < 0 ? ' style="background:var(--bad-bg, #fdecec)"' : ''}><td>${escapeHtml(it.name)}${it.barcode ? '' : ' <span class="pill muted">ไม่มีบาร์โค้ด</span>'}${it.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${it.pack_size}</span>` : ''}
                     <div class="muted" style="font-size:12px">${escapeHtml(it.consignor_name)}</div></td>
-                  <td class="num">${money(it.unit_price)}</td><td class="num">${count(it.qty)}</td><td class="num">${money(it.line_total)}</td></tr>`).join('')}</tbody>
-                <tfoot><tr><td colspan="2" style="font-weight:600">ยอดรวม</td><td class="num">${count(s.total_qty)}</td><td class="num" style="font-weight:700">฿${money(s.total_value)}</td></tr></tfoot>
+                  <td class="num">${money(it.unit_price)}</td><td class="num">${count(it.qty)}</td><td class="num">${money(it.line_total)}</td>${stockCell(it)}</tr>`).join('')}</tbody>
+                <tfoot><tr><td colspan="2" style="font-weight:600">ยอดรวม</td><td class="num">${count(s.total_qty)}</td><td class="num" style="font-weight:700">฿${money(s.total_value)}</td><td></td></tr></tfoot>
               </table></div>
               <div style="margin-top:10px;font-size:13.5px">ชำระโดย: ${escapeHtml(paymentsText(s.payments))}
                 ${s.cash_received !== null ? `<span class="muted"> · รับเงินสด ${money(s.cash_received)} ทอน ${money(s.change_amount)}</span>` : ''}</div>
@@ -329,6 +358,7 @@ export async function render(container, { user }) {
 
     function wire() {
         const $ = (s) => container.querySelector(s);
+        $('#f-neg')?.addEventListener('click', () => { onlyNeg = !onlyNeg; draw(); });
         container.querySelectorAll('[data-range]').forEach((b) => b.addEventListener('click', () => {
             const n = Number(b.dataset.range);
             if (n === 0) { from = to = todayISO(); } else if (n === 1) { from = to = daysAgo(1); } else { from = daysAgo(n - 1); to = todayISO(); }

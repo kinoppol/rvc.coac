@@ -923,14 +923,17 @@ class ProductRepo
         $this->audit->log('products', $productId, 'update', $old, $this->find($productId), $userId, $ip);
     }
 
-    public function applySale(int $productId, int $qty, ?int $userId, ?string $ip): void
+    /** Takes $qty sold pieces off the stock; returns the stock left afterwards (may be below 0). */
+    public function applySale(int $productId, int $qty, ?int $userId, ?string $ip): int
     {
         $old = $this->find($productId);
         $stmt = $this->db->prepare(
             'UPDATE products SET qty_sold = qty_sold + ?, qty_stock = qty_stock - ?, updated_at = NOW() WHERE id = ?'
         );
         $stmt->execute([$qty, $qty, $productId]);
-        $this->audit->log('products', $productId, 'update', $old, $this->find($productId), $userId, $ip);
+        $new = $this->find($productId);
+        $this->audit->log('products', $productId, 'update', $old, $new, $userId, $ip);
+        return (int) ($new['qty_stock'] ?? 0);
     }
 
     public function topSellers(int $days = 7, int $limit = 5): array
