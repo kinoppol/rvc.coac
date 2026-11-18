@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
 import { alertDialog, choiceDialog, confirmDialog } from '../dialog.js';
-import { PAYMENT_LABEL, statusPill, paymentsText, serverTime, requestHtml } from '../sale-edit.js';
+import { PAYMENT_LABEL, statusPill, paymentsText, serverTime, requestHtml, computeImpact, impactHtml } from '../sale-edit.js';
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const daysAgo = (n) => {
@@ -13,6 +13,8 @@ const daysAgo = (n) => {
  * ประวัติการขายของฉัน: the cashier's own POS sales by day. Within a few minutes of a
  * sale (admin setting) they may ask to correct it — quantities, lines out or in, how it
  * was paid; the sale changes only when a manager or admin approves.
+ * Managers and admins may also correct a cashier's sale themselves, any day, with the
+ * reason on record; a change to the amount paid is flagged and must be acknowledged.
  */
 export async function render(container, { user }) {
     let from = todayISO();
@@ -22,7 +24,7 @@ export async function render(container, { user }) {
     let data = null;
     let skew = 0; // server clock minus this browser's, for the countdowns
     let detail = null; // the sale open on the detail modal
-    let edit = null; // the correction being written: { sale, items, payments, reason, search, results, busy, error }
+    let edit = null; // the correction being written: { sale, direct, items, payments, reason, ack, search, results, busy, error }
     let timer = null;
 
     const nowServer = () => Date.now() + skew;
@@ -51,6 +53,9 @@ export async function render(container, { user }) {
     }
 
     const ownSale = (s) => String(s.cashier_id) === String(user.id);
+    /** A manager / admin correcting the sale themself (not their own sale, unless admin). */
+    const canDirect = (s) => data.direct_edit && !Number(s.pos_import) && s.edit_status !== 'pending'
+        && !(s.requests || []).some((r) => r.status === 'pending') && (!ownSale(s) || user.role === 'admin');
 
     /** A payment method picked by mistake: within a few minutes the cashier changes it alone, no approval. */
     async function fixPayment(id) {
@@ -99,6 +104,9 @@ export async function render(container, { user }) {
             ${d.edit_enabled
                 ? `ขอแก้ไขการขายได้ภายใน <b>${count(d.edit_minutes)} นาที</b> หลังขายเสร็จ การแก้ไขจะมีผลเมื่อผู้จัดการหรือผู้ดูแลระบบอนุมัติ`
                 : 'ผู้ดูแลระบบปิดการแก้ไขการขายย้อนหลังไว้ หากขายผิดกรุณาแจ้งผู้จัดการ'}
+            ${d.direct_edit ? `<br>ผู้จัดการ/ผู้ดูแลระบบ: กด <b>แก้ไข (ผู้จัดการ)</b> เพื่อแก้รายการขายของพนักงานได้ทันทีโดยต้องระบุสาเหตุ
+              หากการแก้ไขกระทบยอดชำระเงิน ระบบจะแจ้งเตือนเป็นพิเศษและต้องยืนยันว่ารับทราบ` : ''}
+            ${d.direct_edit_needs_migration ? '<br>การแก้ไขรายการขายโดยผู้จัดการต้องรัน migration 0079 ก่อน' : ''}
           </div>
         </section>
 
@@ -116,11 +124,12 @@ export async function render(container, { user }) {
                 <td class="num">${count(s.total_qty)}</td>
                 <td class="num" style="font-weight:600">${money(s.total_value)}</td>
                 <td style="font-size:12.5px">${escapeHtml(s.methods.map((m) => PAYMENT_LABEL[m] || m).join(' + ') || (s.pos_import ? 'ไม่ระบุ (POS ภายนอก)' : '-'))}</td>
-                <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}${s.payment_edited_at ? ` <span class="pill warn" title="แก้เมื่อ ${escapeHtml(fmtDateTime(s.payment_edited_at))}">แก้วิธีชำระแล้ว</span>` : ''}</td>
+                <td>${s.edit_status ? statusPill(s.edit_status) : ''}${Number(s.edits_approved) && s.edit_status !== 'approved' ? ' <span class="pill ok">แก้ไขแล้ว</span>' : ''}${s.payment_edited_at ? ` <span class="pill warn" title="แก้เมื่อ ${escapeHtml(fmtDateTime(s.payment_edited_at))}">แก้วิธีชำระแล้ว</span>` : ''}${Number(s.direct_edits) ? ' <span class="pill warn">แก้ไขโดยผู้จัดการ</span>' : ''}${Number(s.edits_total_changed) ? ' <span class="pill bad" title="ยอดขายหลังแก้ไขไม่เท่ากับยอดเดิม">ยอดชำระเปลี่ยน</span>' : ''}</td>
                 <td style="white-space:nowrap;text-align:right">
                   <button type="button" class="btn secondary sm" data-view="${s.id}">ดูรายละเอียด</button>
                   ${ownSale(s) && s.payment_fix_until && left(s.payment_fix_until) > 0 ? `<button type="button" class="btn secondary sm" data-fix="${s.id}" title="เลือกวิธีชำระผิด แก้ได้ภายใน 5 นาทีหลังขาย ไม่ต้องรออนุมัติ">แก้วิธีชำระ (<span data-until="${escapeHtml(s.payment_fix_until)}">${mmss(left(s.payment_fix_until))}</span>)</button>` : ''}
                   ${ownSale(s) && s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn sm" data-edit="${s.id}">แก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
+                  ${canDirect(s) && !(ownSale(s) && s.editable_until && left(s.editable_until) > 0) ? `<button type="button" class="btn secondary sm" data-direct="${s.id}" title="แก้ไขรายการขายทันทีโดยระบุสาเหตุ">แก้ไข (ผู้จัดการ)</button>` : ''}
                 </td>
               </tr>`).join('') || `<tr><td colspan="${self ? 8 : 9}" class="empty">ไม่มีการขายในช่วงนี้</td></tr>`}</tbody>
           </table></div>
@@ -149,12 +158,13 @@ export async function render(container, { user }) {
               </table></div>
               <div style="margin-top:10px;font-size:13.5px">ชำระโดย: ${escapeHtml(paymentsText(s.payments))}
                 ${s.cash_received !== null ? `<span class="muted"> · รับเงินสด ${money(s.cash_received)} ทอน ${money(s.change_amount)}</span>` : ''}</div>
-              ${s.requests.length ? `<h3 style="margin:18px 0 0;font-size:15px">คำขอแก้ไข</h3>${s.requests.map(requestHtml).join('')}` : ''}
+              ${s.requests.length ? `<h3 style="margin:18px 0 0;font-size:15px">ประวัติการแก้ไข</h3>${s.requests.map(requestHtml).join('')}` : ''}
             </div>
             <div class="modal-foot">
               ${mine ? `<button type="button" class="btn secondary" data-cancel-req="${mine.id}">ยกเลิกคำขอแก้ไข</button>` : '<span></span>'}
               <div style="display:flex;gap:8px">
                 ${ownSale(s) && s.editable_until && left(s.editable_until) > 0 ? `<button type="button" class="btn" data-edit="${s.id}">ขอแก้ไข (<span data-until="${escapeHtml(s.editable_until)}">${mmss(left(s.editable_until))}</span>)</button>` : ''}
+                ${canDirect(s) ? `<button type="button" class="btn ${ownSale(s) && s.editable_until ? 'secondary' : ''}" data-direct="${s.id}">แก้ไขรายการขาย (ผู้จัดการ)</button>` : ''}
                 <button type="button" class="btn secondary" data-close>ปิด</button>
               </div>
             </div>
@@ -164,18 +174,30 @@ export async function render(container, { user }) {
 
     const editTotal = () => Math.round(edit.items.reduce((t, it) => t + it.unit_price * it.qty, 0) * 100) / 100;
     const paidTotal = () => Math.round(edit.payments.reduce((t, p) => t + (Number(p.amount) || 0), 0) * 100) / 100;
+    /** The payments as they would be saved (one method = the whole new total). */
+    const editPayments = () => (edit.payments.length === 1
+        ? [{ method: edit.payments[0].method, amount: editTotal() }]
+        : edit.payments.map((p) => ({ method: p.method, amount: Number(p.amount) || 0 })));
+    /** What this correction does to the amount paid; a changed figure asks for the acknowledgement again. */
+    function liveImpact() {
+        const impact = computeImpact(edit.sale, { payments: editPayments(), total_value: editTotal() });
+        const key = JSON.stringify([impact.total_diff, impact.methods]);
+        if (key !== edit.ackKey) { edit.ackKey = key; edit.ack = false; }
+        return impact;
+    }
 
     function editModal() {
         const e = edit;
         const total = editTotal();
         const methods = data.payment_methods;
         const single = e.payments.length === 1;
+        const impact = liveImpact();
         return `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" style="width:860px">
-            <div class="modal-head"><h2>ขอแก้ไขการขาย ${escapeHtml(e.sale.doc_no)}</h2>
+            <div class="modal-head"><h2>${e.direct ? 'แก้ไขรายการขาย' : 'ขอแก้ไขการขาย'} ${escapeHtml(e.sale.doc_no)}${e.direct ? ` <span class="muted" style="font-size:13px;font-weight:400">ขายโดย ${escapeHtml(e.sale.cashier_name || '-')} · ${escapeHtml(fmtDateTime(e.sale.sale_datetime))}</span>` : ''}</h2>
               <div style="display:flex;align-items:center;gap:10px">
-                ${e.sale.editable_until ? `<span class="pill warn">เหลือเวลา <span data-until="${escapeHtml(e.sale.editable_until)}">${mmss(left(e.sale.editable_until))}</span></span>` : ''}
+                ${!e.direct && e.sale.editable_until ? `<span class="pill warn">เหลือเวลา <span data-until="${escapeHtml(e.sale.editable_until)}">${mmss(left(e.sale.editable_until))}</span></span>` : ''}
                 <button type="button" class="modal-close" data-close-edit title="ปิด" aria-label="ปิด">✕</button></div></div>
             <div class="modal-body">
               <div class="table-wrap"><table>
@@ -199,7 +221,7 @@ export async function render(container, { user }) {
               </table></div>
 
               <div style="margin-top:14px;position:relative">
-                <label class="field">เพิ่มสินค้าที่ขายแต่ลืมสแกน
+                <label class="field">${e.direct ? 'เพิ่มสินค้าในบิลนี้' : 'เพิ่มสินค้าที่ขายแต่ลืมสแกน'}
                   <input id="e-search" placeholder="พิมพ์ชื่อสินค้าหรือสแกนบาร์โค้ด" value="${escapeHtml(e.search)}" autocomplete="off"></label>
                 ${e.results.length ? `<div class="card" style="margin-top:6px;max-height:220px;overflow:auto">
                   ${e.results.map((p, i) => `<button type="button" class="nav-btn" data-add="${i}" style="display:flex;justify-content:space-between;width:100%;gap:10px;padding:8px 12px;border:0;background:none;cursor:pointer;text-align:left">
@@ -218,14 +240,19 @@ export async function render(container, { user }) {
                 ${!single && Math.abs(paidTotal() - total) > 0.004 ? `<div class="muted" style="color:var(--bad);font-size:12.5px">ยอดชำระรวม ฿${money(paidTotal())} ต้องเท่ากับยอดขายใหม่ ฿${money(total)}</div>` : ''}
               </div>
 
-              <label class="field" style="margin-top:16px">เหตุผลที่ขอแก้ไข *
-                <textarea id="e-reason" rows="2" maxlength="500" placeholder="เช่น สแกนสินค้าซ้ำ ลูกค้าเปลี่ยนใจ เลือกวิธีชำระผิด">${escapeHtml(e.reason)}</textarea></label>
+              ${impact.affected ? `${impactHtml(impact)}
+                ${e.direct ? `<label class="impact-ack"><input type="checkbox" id="e-ack" ${e.ack ? 'checked' : ''}>
+                  รับทราบว่าการแก้ไขนี้กระทบยอดชำระเงิน และได้ตรวจสอบ/ดำเนินการเรื่องเงินกับลูกค้าและลิ้นชักแล้ว</label>` : ''}` : ''}
+              <label class="field" style="margin-top:16px">${e.direct ? 'สาเหตุที่แก้ไข *' : 'เหตุผลที่ขอแก้ไข *'}
+                <textarea id="e-reason" rows="2" maxlength="500" placeholder="${e.direct ? 'เช่น พนักงานสแกนสินค้าซ้ำ ตรวจพบตอนนับสต๊อก ลูกค้าคืนสินค้า' : 'เช่น สแกนสินค้าซ้ำ ลูกค้าเปลี่ยนใจ เลือกวิธีชำระผิด'}">${escapeHtml(e.reason)}</textarea></label>
               ${e.error ? `<div class="error-box" style="margin-top:12px">${escapeHtml(e.error)}</div>` : ''}
-              <div class="muted" style="font-size:12.5px;margin-top:10px">ระบบจะบันทึกคำขอไว้ การขาย สต๊อก และยอดเงินจะเปลี่ยนเมื่อผู้จัดการหรือผู้ดูแลระบบอนุมัติแล้วเท่านั้น</div>
+              <div class="muted" style="font-size:12.5px;margin-top:10px">${e.direct
+                ? 'เมื่อบันทึก รายการขาย สต๊อกสินค้า สมุดบัญชีผู้ฝากขาย และยอดเงินในลิ้นชักจะถูกปรับทันที พร้อมบันทึกสาเหตุและผู้แก้ไขไว้ในประวัติการแก้ไขของบิลนี้ (สต๊อกอาจติดลบได้)'
+                : 'ระบบจะบันทึกคำขอไว้ การขาย สต๊อก และยอดเงินจะเปลี่ยนเมื่อผู้จัดการหรือผู้ดูแลระบบอนุมัติแล้วเท่านั้น'}</div>
             </div>
             <div class="modal-foot">
               <button type="button" class="btn secondary" data-close-edit>ยกเลิก</button>
-              <button type="button" class="btn" id="e-save" ${e.busy ? 'disabled' : ''}>${e.busy ? 'กำลังส่ง...' : 'ส่งคำขอแก้ไข'}</button>
+              <button type="button" class="btn" id="e-save" ${e.busy || (e.direct && impact.affected && !e.ack) ? 'disabled' : ''}>${e.busy ? 'กำลังบันทึก...' : e.direct ? 'บันทึกการแก้ไข' : 'ส่งคำขอแก้ไข'}</button>
             </div>
           </div>
         </div>`;
@@ -240,12 +267,18 @@ export async function render(container, { user }) {
         } catch (err) { alertDialog(err.message, { tone: 'error' }); }
     }
 
-    async function openEdit(id) {
+    async function openEdit(id, direct = false) {
         try {
             const res = await api.get(`/sales/${id}`);
             skew = serverTime(res.now) - Date.now();
             const sale = res.data;
-            if (!sale.editable_until) {
+            if (direct && !canDirect(sale)) {
+                alertDialog(sale.requests.some((r) => r.status === 'pending')
+                    ? 'การขายนี้มีคำขอแก้ไขของพนักงานรออนุมัติอยู่ กรุณาอนุมัติหรือไม่อนุมัติคำขอนั้นก่อน (เมนูอนุมัติแก้ไขการขาย)'
+                    : 'แก้ไขรายการขายนี้ไม่ได้', { tone: 'error' });
+                return load();
+            }
+            if (!direct && !sale.editable_until) {
                 alertDialog('การขายนี้แก้ไขไม่ได้แล้ว (เกินเวลา หรือมีคำขอรออนุมัติอยู่)', { tone: 'error' });
                 return load();
             }
@@ -254,6 +287,9 @@ export async function render(container, { user }) {
             detail = null;
             edit = {
                 sale,
+                direct,
+                ack: false,
+                ackKey: null,
                 items: sale.items.map((it) => ({ ...it })),
                 payments: payments.length ? payments : [{ method: enabled[0], amount: sale.total_value }],
                 reason: '', search: '', results: [], busy: false, error: null,
@@ -303,6 +339,7 @@ export async function render(container, { user }) {
         $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; if (from > to) from = to; load(); } });
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openDetail(b.dataset.view)));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.edit)));
+        container.querySelectorAll('[data-direct]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.direct, true)));
         container.querySelectorAll('[data-fix]').forEach((b) => b.addEventListener('click', () => fixPayment(b.dataset.fix)));
         container.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => { detail = null; draw(); }));
         container.querySelectorAll('[data-cancel-req]').forEach((b) => b.addEventListener('click', async () => {
@@ -356,6 +393,7 @@ export async function render(container, { user }) {
             draw();
         });
         $('#e-reason').addEventListener('input', (e) => { edit.reason = e.target.value; });
+        $('#e-ack')?.addEventListener('change', (e) => { edit.ack = e.target.checked; draw(); });
         $('#e-save').addEventListener('click', save);
     }
 
@@ -364,8 +402,9 @@ export async function render(container, { user }) {
         e.error = null;
         syncSinglePayment();
         if (!e.items.some((it) => it.qty > 0)) { e.error = 'การขายต้องมีสินค้าอย่างน้อย 1 รายการ (ถ้าต้องการยกเลิกทั้งบิล กรุณาแจ้งผู้จัดการ)'; return draw(); }
-        if (!e.reason.trim()) { e.error = 'กรุณาระบุเหตุผลที่ขอแก้ไข'; return draw(); }
+        if (!e.reason.trim()) { e.error = e.direct ? 'กรุณาระบุสาเหตุที่แก้ไขรายการขาย' : 'กรุณาระบุเหตุผลที่ขอแก้ไข'; return draw(); }
         if (Math.abs(paidTotal() - editTotal()) > 0.004) { e.error = `ยอดชำระรวมต้องเท่ากับยอดขายใหม่ ฿${money(editTotal())}`; return draw(); }
+        if (e.direct) return saveDirect();
         const ok = await confirmDialog(`ส่งคำขอแก้ไข ${e.sale.doc_no}: ยอดขาย ฿${money(e.sale.total_value)} → ฿${money(editTotal())}`, { title: 'ส่งคำขอแก้ไขการขาย?', okText: 'ส่งคำขอ' });
         if (!ok) return;
         e.busy = true;
@@ -379,6 +418,46 @@ export async function render(container, { user }) {
             edit = null;
             await load();
             alertDialog('ส่งคำขอแก้ไขแล้ว รอผู้จัดการหรือผู้ดูแลระบบอนุมัติ', { title: 'ส่งคำขอแล้ว' });
+        } catch (err) {
+            e.busy = false;
+            e.error = err.message;
+            draw();
+        }
+    }
+
+    /** A manager's own correction: the server's view of the impact (drawer counted? day summed up?) before saving. */
+    async function saveDirect() {
+        const e = edit;
+        const body = {
+            items: e.items.map((it) => ({ sale_item_id: it.sale_item_id, product_id: it.product_id, qty: it.qty, pack_size: it.pack_size })),
+            payments: editPayments(),
+            reason: e.reason.trim(),
+        };
+        if (liveImpact().affected && !e.ack) { e.error = 'การแก้ไขนี้กระทบยอดชำระเงิน กรุณาติ๊กยืนยันว่ารับทราบก่อนบันทึก'; return draw(); }
+        let impact;
+        try {
+            impact = (await api.post(`/sales/${e.sale.id}/edit-impact`, body)).data;
+        } catch (err) { e.error = err.message; return draw(); }
+        const ok = await confirmDialog(
+            `แก้ไข ${e.sale.doc_no} ของ ${e.sale.cashier_name || 'พนักงาน'}: ยอดขาย ฿${money(e.sale.total_value)} → ฿${money(editTotal())}\nสาเหตุ: ${body.reason}`,
+            {
+                title: impact.affected ? 'ยืนยันการแก้ไขที่กระทบยอดชำระ' : 'ยืนยันการแก้ไขรายการขาย',
+                okText: 'บันทึกการแก้ไข',
+                danger: impact.affected,
+                html: impactHtml(impact),
+                width: impact.affected ? 640 : 0,
+            },
+        );
+        if (!ok) return;
+        e.busy = true;
+        draw();
+        try {
+            await api.post(`/sales/${e.sale.id}/direct-edit`, { ...body, ack_payment: impact.affected ? e.ack : false });
+            edit = null;
+            await load();
+            alertDialog(impact.affected
+                ? 'บันทึกการแก้ไขแล้ว การแก้ไขนี้กระทบยอดชำระเงิน — ระบบบันทึกข้อสังเกตไว้ในประวัติการแก้ไข กรุณาตรวจยอดเงินในลิ้นชัก/สรุปบัญชีของวันนั้น'
+                : 'บันทึกการแก้ไขแล้ว', { title: 'แก้ไขรายการขายแล้ว', tone: impact.affected ? 'error' : 'info' });
         } catch (err) {
             e.busy = false;
             e.error = err.message;

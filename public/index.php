@@ -340,6 +340,10 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.edit.approve'));
     $group->post('/sale-edits/{id:[0-9]+}/reject', [SaleEditController::class, 'reject'])
         ->add(new RoleGuard('sales.edit.approve'));
+    $group->post('/sales/{id:[0-9]+}/direct-edit', [SaleEditController::class, 'direct'])
+        ->add(new RoleGuard('sales.edit.approve'));
+    $group->post('/sales/{id:[0-9]+}/edit-impact', [SaleEditController::class, 'impact'])
+        ->add(new RoleGuard('sales.edit.approve'));
     $group->put('/sales/{id:[0-9]+}/payments', [DrawerController::class, 'editPayments'])
         ->add(new RoleGuard('drawer.manage'));
 

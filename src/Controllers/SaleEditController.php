@@ -13,7 +13,7 @@ use App\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
-/** ประวัติการขายของฉัน / ขอแก้ไขการขาย, and their approval by a manager or admin. */
+/** ประวัติการขายของฉัน / ขอแก้ไขการขาย, their approval by a manager or admin, and a manager's own corrections. */
 class SaleEditController
 {
     use JsonResponse;
@@ -42,6 +42,9 @@ class SaleEditController
             'total_value' => round(array_sum(array_column($rows, 'total_value')), 2),
             'edit_enabled' => $service->enabled(),
             'edit_minutes' => $service->minutes(),
+            // Managers / admins correct a cashier's sale themselves (with a reason), any day.
+            'direct_edit' => $this->canApprove($db, $user) && $service->directEnabled(),
+            'direct_edit_needs_migration' => $this->canApprove($db, $user) && !$service->directEnabled(),
             'payment_methods' => array_map(fn ($m) => ['key' => $m, 'label' => SettingsService::PAYMENT_METHODS[$m]], $settings->paymentMethods()),
             'payment_mixed' => $settings->posRoleAllows('pos_mixed_roles', $user['role'] ?? null),
             'now' => date('Y-m-d H:i:s'),
@@ -78,6 +81,43 @@ class SaleEditController
         return $this->json($response, ['data' => $result], 201);
     }
 
+    /** A manager / admin corrects the sale themself: applied at once, with the reason on record. */
+    public function direct(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        try {
+            $result = $this->service(Db::connection())->directEdit(
+                (int) $args['id'],
+                is_array($body['items'] ?? null) ? $body['items'] : [],
+                is_array($body['payments'] ?? null) ? $body['payments'] : [],
+                (string) ($body['reason'] ?? ''),
+                in_array($body['ack_payment'] ?? false, [true, 1, '1', 'true'], true),
+                $request->getAttribute('user'),
+                $this->ip($request)
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    /** What a correction not yet saved would do to the amount paid (for the manager's edit form). */
+    public function impact(Request $request, Response $response, array $args): Response
+    {
+        $body = (array) $request->getParsedBody();
+        try {
+            $impact = $this->service(Db::connection())->previewImpact(
+                (int) $args['id'],
+                is_array($body['items'] ?? null) ? $body['items'] : [],
+                is_array($body['payments'] ?? null) ? $body['payments'] : [],
+                $request->getAttribute('user')
+            );
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $impact]);
+    }
+
     public function cancel(Request $request, Response $response, array $args): Response
     {
         try {
@@ -93,10 +133,16 @@ class SaleEditController
     {
         $status = (string) ($request->getQueryParams()['status'] ?? 'pending');
         $service = $this->service(Db::connection());
-        $rows = $status === 'done'
-            ? array_values(array_filter($service->requests([], 300), fn ($r) => $r['status'] !== 'pending'))
-            : $service->requests(['status' => 'pending']);
-        return $this->json($response, ['data' => $rows, 'pending_count' => $service->pendingCount()]);
+        $rows = match ($status) {
+            'done' => array_values(array_filter($service->requests([], 300), fn ($r) => $r['status'] !== 'pending')),
+            'direct' => $service->directEnabled() ? $service->requests(['direct' => true], 300) : [],
+            default => $service->requests(['status' => 'pending']),
+        };
+        return $this->json($response, [
+            'data' => $rows,
+            'pending_count' => $service->pendingCount(),
+            'direct_enabled' => $service->directEnabled(),
+        ]);
     }
 
     public function approve(Request $request, Response $response, array $args): Response

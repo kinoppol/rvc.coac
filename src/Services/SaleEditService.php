@@ -51,6 +51,9 @@ class SaleEditService
     {
         $edited = \App\Support\Db::hasColumn($this->db, 'sales', 'payment_edited_at')
             ? ' s.payment_edited_at, s.payment_original,' : ' NULL AS payment_edited_at, NULL AS payment_original,';
+        $direct = $this->directEnabled()
+            ? "(SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.direct = 1) AS direct_edits"
+            : '0 AS direct_edits';
         $stmt = $this->db->prepare(
             "SELECT s.id, s.doc_no, s.sale_datetime, s.business_date, s.after_hours, s.total_qty, s.total_value,
                     s.cashier_id, (SELECT u.full_name FROM users u WHERE u.id = s.cashier_id) AS cashier_name,
@@ -59,7 +62,9 @@ class SaleEditService
                     (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS line_count,
                     (SELECT GROUP_CONCAT(DISTINCT sp.method ORDER BY sp.id) FROM sale_payments sp WHERE sp.sale_id = s.id) AS methods,
                     (SELECT r.status FROM sale_edit_requests r WHERE r.sale_id = s.id ORDER BY r.id DESC LIMIT 1) AS edit_status,
-                    (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved') AS edits_approved
+                    (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved') AS edits_approved,
+                    (SELECT COUNT(*) FROM sale_edit_requests r WHERE r.sale_id = s.id AND r.status = 'approved' AND r.total_before <> r.total_after) AS edits_total_changed,
+                    {$direct}
              FROM sales s
              LEFT JOIN pos_imports pim ON pim.sale_id = s.id
              WHERE (? IS NULL OR s.cashier_id = ?) AND s.business_date BETWEEN ? AND ?
@@ -261,116 +266,273 @@ class SaleEditService
                 throw new \RuntimeException('รายการขายนี้เปลี่ยนไปหลังจากยื่นคำขอแล้ว กรุณาไม่อนุมัติ แล้วให้พนักงานยื่นคำขอใหม่');
             }
 
-            $audit = $this->audit;
-            $products = new ProductRepo($this->db, $audit);
-            $ledger = new LedgerService($this->db);
-            $docs = new DocumentNumberService($this->db);
-            $listingFees = new ListingFeeService($this->db, $this->settings);
-            $sales = new SaleService($this->db, $products, $ledger, $docs, $listingFees, $audit);
-
-            $stmt = $this->db->prepare('SELECT * FROM sale_items WHERE sale_id = ?');
-            $stmt->execute([$sale['id']]);
-            $old = [];
-            foreach ($stmt->fetchAll() as $r) {
-                $old[(int) $r['id']] = $r;
-            }
-
-            $perConsignor = []; // consignor id => [value, fee, added qty, removed qty]
-            $track = function (?int $cid, float $value, float $fee, int $qty) use (&$perConsignor) {
-                if ($cid === null) {
-                    return;
-                }
-                $perConsignor[$cid] ??= ['value' => 0.0, 'fee' => 0.0, 'added' => 0, 'removed' => 0];
-                $perConsignor[$cid]['value'] += $value;
-                $perConsignor[$cid]['fee'] += $fee;
-                $perConsignor[$cid][$qty >= 0 ? 'added' : 'removed'] += abs($qty);
-            };
-            $upd = $this->db->prepare('UPDATE sale_items SET qty = ?, fee_amount = ?, cost_amount = ? WHERE id = ?');
-            $ins = $this->db->prepare(
-                'INSERT INTO sale_items (sale_id, product_id, consignor_id, qty, pack_size, unit_price, fee_amount, cost_amount)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-            );
-
-            foreach ($after['items'] as $line) {
-                $qty = (int) $line['qty'];
-                if (!empty($line['sale_item_id'])) {
-                    $row = $old[(int) $line['sale_item_id']];
-                    unset($old[(int) $line['sale_item_id']]);
-                    $delta = $qty - (int) $row['qty'];
-                    if ($delta === 0) {
-                        continue;
-                    }
-                    $feePerUnit = (float) $row['fee_amount'] / max(1, (int) $row['qty']);
-                    $costPerUnit = (float) $row['cost_amount'] / max(1, (int) $row['qty']);
-                    $upd->execute([$qty, round($feePerUnit * $qty, 2), round($costPerUnit * $qty, 2), $row['id']]);
-                    $products->applySale((int) $row['product_id'], $delta, $userId, $ip);
-                    $track($row['consignor_id'] !== null ? (int) $row['consignor_id'] : null,
-                        (float) $row['unit_price'] * $delta, $feePerUnit * $delta, $delta);
-                    continue;
-                }
-                $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
-                $stmt->execute([$line['product_id']]);
-                $product = $stmt->fetch();
-                if (!$product) {
-                    throw new \RuntimeException('ไม่พบสินค้า ' . $line['name']);
-                }
-                $packSize = (int) $line['pack_size'];
-                $fig = $sales->lineFigures($product, $qty, $packSize > 1 ? null : (float) $line['unit_price'], $packSize);
-                $ins->execute([
-                    $sale['id'], $product['id'], $product['consignor_id'], $qty, $packSize > 1 ? $packSize : null,
-                    $fig['unit_price'], $fig['fee_amount'], $fig['cost_amount'],
-                ]);
-                $products->applySale((int) $product['id'], $qty, $userId, $ip);
-                $track($product['consignor_id'] !== null ? (int) $product['consignor_id'] : null, $fig['unit_price'] * $qty, $fig['fee_per_unit'] * $qty, $qty);
-                if ($product['consignor_id'] !== null) {
-                    $listingFees->maybeRefund((int) $product['id'], $ledger, $docs, $userId);
-                }
-            }
-            // Lines left out of the request are taken off the sale.
-            $del = $this->db->prepare('DELETE FROM sale_items WHERE id = ?');
-            foreach ($old as $row) {
-                $qty = (int) $row['qty'];
-                $del->execute([$row['id']]);
-                $products->applySale((int) $row['product_id'], -$qty, $userId, $ip);
-                $track($row['consignor_id'] !== null ? (int) $row['consignor_id'] : null,
-                    -(float) $row['unit_price'] * $qty, -(float) $row['fee_amount'], -$qty);
-            }
-
+            $totals = $this->apply($sale, $after, $userId, $ip);
             $docNo = (string) $sale['doc_no'];
-            $date = (string) $sale['business_date'];
-            foreach ($perConsignor as $cid => $agg) {
-                $value = round($agg['value'], 2);
-                $fee = round($agg['fee'], 2);
-                $what = trim(($agg['added'] ? "เพิ่ม {$agg['added']} ชิ้น " : '') . ($agg['removed'] ? "นำออก {$agg['removed']} ชิ้น" : ''));
-                if ($value > 0) {
-                    $ledger->append($cid, 'sale', "แก้ไขการขาย {$docNo}: {$what}", $docNo, $value, 0, $userId, $date);
-                } elseif ($value < 0) {
-                    $ledger->append($cid, 'sale', "แก้ไขการขาย {$docNo}: {$what}", $docNo, 0, -$value, $userId, $date);
-                }
-                if ($fee > 0) {
-                    $ledger->append($cid, 'fee', "หักค่าฝากขาย (แก้ไขการขาย {$docNo})", $docs->next('FEE', 'ledger_entries', 'ref_no'), 0, $fee, $userId, $date);
-                } elseif ($fee < 0) {
-                    $ledger->append($cid, 'fee', "คืนค่าฝากขาย (แก้ไขการขาย {$docNo})", $docNo, -$fee, 0, $userId, $date);
-                }
-            }
-
-            $totals = $this->snapshot((int) $sale['id']);
-            $this->db->prepare('UPDATE sales SET total_qty = ?, total_value = ? WHERE id = ?')
-                ->execute([$totals['total_qty'], $totals['total_value'], $sale['id']]);
-            if (!$this->samePayments($totals['payments'], $after['payments']) || abs($totals['total_value'] - (float) $sale['total_value']) > 0.004) {
-                (new CashDrawerService($this->db, $audit))->editPayments((int) $sale['id'], $after['payments'], $userId, $ip);
-            }
-
             $this->db->prepare("UPDATE sale_edit_requests SET status = 'approved', reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ?")
                 ->execute([$userId, date('Y-m-d H:i:s'), trim($note) !== '' ? mb_substr(trim($note), 0, 500) : null, $id]);
-            $audit->log('sales', (int) $sale['id'], 'update', $before, $this->snapshot((int) $sale['id']) + ['edit_request_id' => $id], $userId, $ip);
-            $audit->log('sale_edit_requests', $id, 'update', ['status' => 'pending'], ['status' => 'approved'], $userId, $ip);
+            $this->audit->log('sales', (int) $sale['id'], 'update', $before, $this->snapshot((int) $sale['id']) + ['edit_request_id' => $id], $userId, $ip);
+            $this->audit->log('sale_edit_requests', $id, 'update', ['status' => 'pending'], ['status' => 'approved'], $userId, $ip);
             $this->db->commit();
             return ['id' => $id, 'doc_no' => $docNo, 'total_value' => $totals['total_value']];
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /** Whether managers / admins may correct a sale themselves (migration 0079 adds the record of it). */
+    public function directEnabled(): bool
+    {
+        return \App\Support\Db::hasColumn($this->db, 'sale_edit_requests', 'direct');
+    }
+
+    /**
+     * A manager or admin corrects a cashier's sale themself: any day, no waiting for approval,
+     * but always with a reason. It is recorded as an approved correction (direct = 1) and
+     * applied as an approval would be. When the amount paid changes (the bill's total, or how
+     * much went to each payment method), $ackPayment must say the editor saw what it means.
+     */
+    public function directEdit(int $saleId, array $items, array $payments, string $reason, bool $ackPayment, array $user, ?string $ip): array
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('กรุณาระบุสาเหตุที่แก้ไขรายการขาย');
+        }
+        if (!$this->directEnabled()) {
+            throw new \RuntimeException('ต้องรัน migration 0079 ก่อน จึงจะแก้ไขรายการขายโดยผู้จัดการได้');
+        }
+        $userId = (int) $user['id'];
+
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM sales WHERE id = ? FOR UPDATE');
+            $stmt->execute([$saleId]);
+            $sale = $stmt->fetch();
+            $detail = $sale ? $this->detail($saleId) : null;
+            if (!$sale || !$detail) {
+                throw new \RuntimeException('ไม่พบรายการขาย');
+            }
+            if ($detail['pos_import']) {
+                throw new \RuntimeException('ยอดขายที่นำเข้าจาก POS ภายนอกแก้ไขที่หน้านำเข้ายอดขาย');
+            }
+            if ((int) $sale['cashier_id'] === $userId && ($user['role'] ?? null) !== 'admin') {
+                throw new \RuntimeException('แก้ไขการขายของตัวเองโดยตรงไม่ได้ กรุณายื่นคำขอแก้ไขให้ผู้จัดการคนอื่นหรือผู้ดูแลระบบอนุมัติ');
+            }
+            if (array_filter($detail['requests'], fn ($r) => $r['status'] === 'pending')) {
+                throw new \RuntimeException('การขายนี้มีคำขอแก้ไขของพนักงานรออนุมัติอยู่ กรุณาอนุมัติหรือไม่อนุมัติคำขอนั้นก่อน');
+            }
+
+            $before = $this->snapshot($saleId);
+            $after = $this->proposed($before, $items, $payments, $user['role'] ?? null);
+            if ($this->sameSale($before, $after)) {
+                throw new \RuntimeException('ไม่มีการเปลี่ยนแปลงจากรายการเดิม');
+            }
+            $impact = $this->paymentImpact($before, $after, (string) $sale['business_date']);
+            if ($impact['affected'] && !$ackPayment) {
+                throw new \RuntimeException('การแก้ไขนี้กระทบยอดชำระเงิน กรุณาตรวจสอบและยืนยันว่ารับทราบก่อนบันทึก');
+            }
+            // Kept with the record: what the drawer / day summary looked like when it was changed.
+            $after['impact'] = $impact;
+
+            $now = date('Y-m-d H:i:s');
+            $this->db->prepare(
+                'INSERT INTO sale_edit_requests (sale_id, requested_by, requested_at, reason, before_data, after_data, total_before, total_after,
+                                                 status, reviewed_by, reviewed_at, direct)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'approved\', ?, ?, 1)'
+            )->execute([
+                $saleId, $userId, $now, mb_substr($reason, 0, 500),
+                json_encode($before, JSON_UNESCAPED_UNICODE), json_encode($after, JSON_UNESCAPED_UNICODE),
+                $before['total_value'], $after['total_value'], $userId, $now,
+            ]);
+            $id = (int) $this->db->lastInsertId();
+
+            $totals = $this->apply($sale, $after, $userId, $ip);
+            $this->audit->log('sale_edit_requests', $id, 'create', null, [
+                'doc_no' => $sale['doc_no'], 'direct' => true, 'reason' => $reason,
+                'total_before' => $before['total_value'], 'total_after' => $after['total_value'],
+                'payment_affected' => $impact['affected'],
+            ], $userId, $ip);
+            $this->audit->log('sales', $saleId, 'update', $before, $this->snapshot($saleId) + ['edit_request_id' => $id, 'reason' => $reason], $userId, $ip);
+            $this->db->commit();
+            return ['id' => $id, 'doc_no' => $sale['doc_no'], 'total_value' => $totals['total_value'], 'impact' => $impact];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * What a correction does to the money taken for the sale: the bill's total, each payment
+     * method (cash = what the drawer should hold), and whether that day's drawer was already
+     * counted / its summary already made, so those figures move after the fact.
+     * @return array{affected:bool, total_diff:float, methods:array<int,array{method:string,before:float,after:float,diff:float}>,
+     *               cash_diff:float, drawer_closed:bool, closing_done:bool, closing_verified:bool}
+     */
+    public function paymentImpact(array $before, array $after, ?string $businessDate): array
+    {
+        $sum = function (array $ps) {
+            $out = [];
+            foreach ($ps as $p) {
+                $out[$p['method']] = round(($out[$p['method']] ?? 0) + (float) $p['amount'], 2);
+            }
+            return $out;
+        };
+        $b = $sum($before['payments'] ?? []);
+        $a = $sum($after['payments'] ?? []);
+        $methods = [];
+        foreach (array_unique(array_merge(array_keys($b), array_keys($a))) as $m) {
+            $diff = round(($a[$m] ?? 0) - ($b[$m] ?? 0), 2);
+            if (abs($diff) > 0.004) {
+                $methods[] = ['method' => $m, 'before' => $b[$m] ?? 0.0, 'after' => $a[$m] ?? 0.0, 'diff' => $diff];
+            }
+        }
+        $totalDiff = round((float) $after['total_value'] - (float) $before['total_value'], 2);
+        $cashDiff = round(($a['cash'] ?? 0) - ($b['cash'] ?? 0), 2);
+        $drawerClosed = $closingDone = $closingVerified = false;
+        if ($businessDate) {
+            $stmt = $this->db->prepare('SELECT closed_at FROM cash_drawers WHERE business_date = ?');
+            $stmt->execute([$businessDate]);
+            $drawerClosed = ($stmt->fetchColumn() ?: null) !== null;
+            try {
+                $stmt = $this->db->prepare('SELECT verified_at FROM daily_closings WHERE business_date = ?');
+                $stmt->execute([$businessDate]);
+                $row = $stmt->fetch();
+                $closingDone = (bool) $row;
+                $closingVerified = $row && $row['verified_at'] !== null;
+            } catch (\PDOException) {
+                // Before the daily summary existed.
+            }
+        }
+        return [
+            'affected' => abs($totalDiff) > 0.004 || (bool) $methods,
+            'total_diff' => $totalDiff,
+            'methods' => $methods,
+            'cash_diff' => $cashDiff,
+            'drawer_closed' => $drawerClosed,
+            'closing_done' => $closingDone,
+            'closing_verified' => $closingVerified,
+        ];
+    }
+
+    /** Impact of a correction not yet saved (the manager's edit form shows it before saving). */
+    public function previewImpact(int $saleId, array $items, array $payments, array $user): array
+    {
+        $stmt = $this->db->prepare('SELECT business_date FROM sales WHERE id = ?');
+        $stmt->execute([$saleId]);
+        $date = $stmt->fetchColumn();
+        if ($date === false) {
+            throw new \RuntimeException('ไม่พบรายการขาย');
+        }
+        $before = $this->snapshot($saleId);
+        return $this->paymentImpact($before, $this->proposed($before, $items, $payments, $user['role'] ?? null), (string) $date);
+    }
+
+    /**
+     * Changes the sale (locked FOR UPDATE by the caller, inside its transaction) to $after.
+     * @return array the sale's snapshot afterwards
+     */
+    private function apply(array $sale, array $after, int $userId, ?string $ip): array
+    {
+        $audit = $this->audit;
+        $products = new ProductRepo($this->db, $audit);
+        $ledger = new LedgerService($this->db);
+        $docs = new DocumentNumberService($this->db);
+        $listingFees = new ListingFeeService($this->db, $this->settings);
+        $sales = new SaleService($this->db, $products, $ledger, $docs, $listingFees, $audit);
+
+        $stmt = $this->db->prepare('SELECT * FROM sale_items WHERE sale_id = ?');
+        $stmt->execute([$sale['id']]);
+        $old = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $old[(int) $r['id']] = $r;
+        }
+
+        $perConsignor = []; // consignor id => [value, fee, added qty, removed qty]
+        $track = function (?int $cid, float $value, float $fee, int $qty) use (&$perConsignor) {
+            if ($cid === null) {
+                return;
+            }
+            $perConsignor[$cid] ??= ['value' => 0.0, 'fee' => 0.0, 'added' => 0, 'removed' => 0];
+            $perConsignor[$cid]['value'] += $value;
+            $perConsignor[$cid]['fee'] += $fee;
+            $perConsignor[$cid][$qty >= 0 ? 'added' : 'removed'] += abs($qty);
+        };
+        $upd = $this->db->prepare('UPDATE sale_items SET qty = ?, fee_amount = ?, cost_amount = ? WHERE id = ?');
+        $ins = $this->db->prepare(
+            'INSERT INTO sale_items (sale_id, product_id, consignor_id, qty, pack_size, unit_price, fee_amount, cost_amount)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+
+        foreach ($after['items'] as $line) {
+            $qty = (int) $line['qty'];
+            if (!empty($line['sale_item_id'])) {
+                $row = $old[(int) $line['sale_item_id']];
+                unset($old[(int) $line['sale_item_id']]);
+                $delta = $qty - (int) $row['qty'];
+                if ($delta === 0) {
+                    continue;
+                }
+                $feePerUnit = (float) $row['fee_amount'] / max(1, (int) $row['qty']);
+                $costPerUnit = (float) $row['cost_amount'] / max(1, (int) $row['qty']);
+                $upd->execute([$qty, round($feePerUnit * $qty, 2), round($costPerUnit * $qty, 2), $row['id']]);
+                $products->applySale((int) $row['product_id'], $delta, $userId, $ip);
+                $track($row['consignor_id'] !== null ? (int) $row['consignor_id'] : null,
+                    (float) $row['unit_price'] * $delta, $feePerUnit * $delta, $delta);
+                continue;
+            }
+            $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$line['product_id']]);
+            $product = $stmt->fetch();
+            if (!$product) {
+                throw new \RuntimeException('ไม่พบสินค้า ' . $line['name']);
+            }
+            $packSize = (int) $line['pack_size'];
+            $fig = $sales->lineFigures($product, $qty, $packSize > 1 ? null : (float) $line['unit_price'], $packSize);
+            $ins->execute([
+                $sale['id'], $product['id'], $product['consignor_id'], $qty, $packSize > 1 ? $packSize : null,
+                $fig['unit_price'], $fig['fee_amount'], $fig['cost_amount'],
+            ]);
+            $products->applySale((int) $product['id'], $qty, $userId, $ip);
+            $track($product['consignor_id'] !== null ? (int) $product['consignor_id'] : null, $fig['unit_price'] * $qty, $fig['fee_per_unit'] * $qty, $qty);
+            if ($product['consignor_id'] !== null) {
+                $listingFees->maybeRefund((int) $product['id'], $ledger, $docs, $userId);
+            }
+        }
+        // Lines left out of the request are taken off the sale.
+        $del = $this->db->prepare('DELETE FROM sale_items WHERE id = ?');
+        foreach ($old as $row) {
+            $qty = (int) $row['qty'];
+            $del->execute([$row['id']]);
+            $products->applySale((int) $row['product_id'], -$qty, $userId, $ip);
+            $track($row['consignor_id'] !== null ? (int) $row['consignor_id'] : null,
+                -(float) $row['unit_price'] * $qty, -(float) $row['fee_amount'], -$qty);
+        }
+
+        $docNo = (string) $sale['doc_no'];
+        $date = (string) $sale['business_date'];
+        foreach ($perConsignor as $cid => $agg) {
+            $value = round($agg['value'], 2);
+            $fee = round($agg['fee'], 2);
+            $what = trim(($agg['added'] ? "เพิ่ม {$agg['added']} ชิ้น " : '') . ($agg['removed'] ? "นำออก {$agg['removed']} ชิ้น" : ''));
+            if ($value > 0) {
+                $ledger->append($cid, 'sale', "แก้ไขการขาย {$docNo}: {$what}", $docNo, $value, 0, $userId, $date);
+            } elseif ($value < 0) {
+                $ledger->append($cid, 'sale', "แก้ไขการขาย {$docNo}: {$what}", $docNo, 0, -$value, $userId, $date);
+            }
+            if ($fee > 0) {
+                $ledger->append($cid, 'fee', "หักค่าฝากขาย (แก้ไขการขาย {$docNo})", $docs->next('FEE', 'ledger_entries', 'ref_no'), 0, $fee, $userId, $date);
+            } elseif ($fee < 0) {
+                $ledger->append($cid, 'fee', "คืนค่าฝากขาย (แก้ไขการขาย {$docNo})", $docNo, -$fee, 0, $userId, $date);
+            }
+        }
+
+        $totals = $this->snapshot((int) $sale['id']);
+        $this->db->prepare('UPDATE sales SET total_qty = ?, total_value = ? WHERE id = ?')
+            ->execute([$totals['total_qty'], $totals['total_value'], $sale['id']]);
+        if (!$this->samePayments($totals['payments'], $after['payments']) || abs($totals['total_value'] - (float) $sale['total_value']) > 0.004) {
+            (new CashDrawerService($this->db, $audit))->editPayments((int) $sale['id'], $after['payments'], $userId, $ip);
+        }
+        return $totals;
     }
 
     /**
@@ -381,6 +543,11 @@ class SaleEditService
     {
         $where = [];
         $params = [];
+        $direct = $this->directEnabled();
+        if (isset($filters['direct']) && $direct) {
+            $where[] = 'r.direct = ?';
+            $params[] = $filters['direct'] ? 1 : 0;
+        }
         foreach (['status' => 'r.status', 'sale_id' => 'r.sale_id', 'requested_by' => 'r.requested_by'] as $key => $col) {
             if (isset($filters[$key]) && $filters[$key] !== '') {
                 $where[] = "{$col} = ?";
@@ -388,11 +555,13 @@ class SaleEditService
             }
         }
         $stmt = $this->db->prepare(
-            'SELECT r.*, s.doc_no, s.sale_datetime, s.business_date, ru.full_name AS requested_by_name, vu.full_name AS reviewed_by_name
+            'SELECT r.*, ' . ($direct ? '' : '0 AS direct, ') . 's.doc_no, s.sale_datetime, s.business_date, s.cashier_id,
+                    cu.full_name AS cashier_name, ru.full_name AS requested_by_name, vu.full_name AS reviewed_by_name
              FROM sale_edit_requests r
              JOIN sales s ON s.id = r.sale_id
              LEFT JOIN users ru ON ru.id = r.requested_by
-             LEFT JOIN users vu ON vu.id = r.reviewed_by'
+             LEFT JOIN users vu ON vu.id = r.reviewed_by
+             LEFT JOIN users cu ON cu.id = s.cashier_id'
             . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
             . ' ORDER BY r.id DESC LIMIT ' . max(1, $limit)
         );
@@ -401,6 +570,13 @@ class SaleEditService
             $r['before'] = json_decode((string) $r['before_data'], true);
             $r['after'] = json_decode((string) $r['after_data'], true);
             unset($r['before_data'], $r['after_data']);
+            $r['direct'] = (int) $r['direct'];
+            // A manager's own correction keeps the impact as it was when saved; a request waiting
+            // for approval shows it as it would be now (the drawer may have been counted since).
+            $r['impact'] = $r['after']['impact'] ?? $this->paymentImpact(
+                $r['before'], $r['after'], $r['status'] === 'pending' ? (string) $r['business_date'] : null
+            );
+            unset($r['after']['impact']);
             return $r;
         }, $stmt->fetchAll());
     }

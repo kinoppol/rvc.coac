@@ -1,11 +1,13 @@
 import { api } from '../api.js';
 import { count, escapeHtml, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
-import { requestHtml } from '../sale-edit.js';
+import { requestHtml, impactHtml } from '../sale-edit.js';
 
 /**
  * อนุมัติแก้ไขการขาย: managers and admins decide on cashiers' requests to correct a
  * sale. Approving applies it (sale lines, stock, consignor passbooks, cash drawer).
+ * The third tab lists the corrections managers made themselves (with their reason);
+ * those that changed the amount paid are flagged.
  */
 export async function render(container, { user }) {
     let tab = 'pending';
@@ -24,20 +26,23 @@ export async function render(container, { user }) {
           <div class="actions-row">
             <button type="button" class="tab-btn ${tab === 'pending' ? 'active' : ''}" data-tab="pending">รออนุมัติ (${count(data.pending_count)})</button>
             <button type="button" class="tab-btn ${tab === 'done' ? 'active' : ''}" data-tab="done">พิจารณาแล้ว</button>
+            ${data.direct_enabled ? `<button type="button" class="tab-btn ${tab === 'direct' ? 'active' : ''}" data-tab="direct">แก้ไขโดยผู้จัดการ</button>` : ''}
           </div>
+          ${tab === 'direct' ? `<div style="margin-top:10px;font-size:13px">การแก้ไขรายการขายที่ผู้จัดการ/ผู้ดูแลระบบทำเองที่หน้าประวัติการขาย พร้อมสาเหตุ
+            · <span class="pill bad">กระทบยอดชำระ</span> ${count(rows.filter((r) => r.impact?.affected).length)} รายการ จาก ${count(rows.length)} รายการ</div>` : ''}
           <div class="muted" style="font-size:12.5px;margin-top:10px">เมื่ออนุมัติ ระบบจะปรับรายการขาย สต๊อกสินค้า สมุดบัญชีผู้ฝากขาย และยอดเงินในลิ้นชักตามคำขอทันที
             (สต๊อกอาจติดลบได้ เพราะสินค้าออกจากร้านไปแล้ว)</div>
         </section>
         ${rows.map((r) => `
           <section class="card card-pad">
             <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
-              <h2 style="margin:0">${escapeHtml(r.doc_no)} <span class="muted" style="font-size:13px;font-weight:400">ขายเมื่อ ${escapeHtml(fmtDateTime(r.sale_datetime))} · พนักงาน ${escapeHtml(r.requested_by_name || '-')}</span></h2>
+              <h2 style="margin:0">${escapeHtml(r.doc_no)} <span class="muted" style="font-size:13px;font-weight:400">ขายเมื่อ ${escapeHtml(fmtDateTime(r.sale_datetime))} · พนักงาน ${escapeHtml(r.cashier_name || r.requested_by_name || '-')}</span></h2>
               ${r.status === 'pending' ? `<div style="display:flex;gap:8px">
                 <button type="button" class="btn secondary" data-reject="${r.id}" ${busy ? 'disabled' : ''}>ไม่อนุมัติ</button>
                 <button type="button" class="btn" data-approve="${r.id}" ${busy ? 'disabled' : ''}>${busy === String(r.id) ? 'กำลังบันทึก...' : 'อนุมัติ'}</button></div>` : ''}
             </div>
             ${requestHtml(r)}
-          </section>`).join('') || `<section class="card card-pad"><div class="empty">${tab === 'pending' ? 'ไม่มีคำขอรออนุมัติ' : 'ยังไม่มีคำขอที่พิจารณาแล้ว'}</div></section>`}`;
+          </section>`).join('') || `<section class="card card-pad"><div class="empty">${tab === 'pending' ? 'ไม่มีคำขอรออนุมัติ' : tab === 'direct' ? 'ยังไม่มีการแก้ไขโดยผู้จัดการ' : 'ยังไม่มีคำขอที่พิจารณาแล้ว'}</div></section>`}`;
         wire();
     }
 
@@ -53,7 +58,14 @@ export async function render(container, { user }) {
             alertDialog('อนุมัติคำขอของตัวเองไม่ได้ ต้องให้ผู้จัดการคนอื่นหรือผู้ดูแลระบบอนุมัติ', { tone: 'error' });
             return;
         }
-        if (!await confirmDialog(`อนุมัติการแก้ไข ${r.doc_no}? รายการขาย สต๊อก และยอดเงินจะถูกปรับตามคำขอ`, { title: 'อนุมัติการแก้ไขการขาย', okText: 'อนุมัติ' })) return;
+        const affected = r.impact?.affected;
+        if (!await confirmDialog(`อนุมัติการแก้ไข ${r.doc_no}? รายการขาย สต๊อก และยอดเงินจะถูกปรับตามคำขอ`, {
+            title: affected ? 'อนุมัติการแก้ไขที่กระทบยอดชำระ' : 'อนุมัติการแก้ไขการขาย',
+            okText: 'อนุมัติ',
+            danger: affected,
+            html: impactHtml(r.impact, { title: 'ถ้าอนุมัติ จะกระทบยอดชำระเงิน' }),
+            width: affected ? 640 : 0,
+        })) return;
         busy = String(id);
         draw();
         try {

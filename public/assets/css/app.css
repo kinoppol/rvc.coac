@@ -227,6 +227,12 @@ td { padding: 10px 14px; border-top: 1px solid var(--border); }
 .search-box input { border: 0; outline: none; background: transparent; color: inherit; font-size: 14px; width: 100%; }
 
 .error-box { background: var(--bad-bg); color: var(--bad); border-radius: 9px; padding: 10px 14px; font-size: 13.5px; }
+/* A sale correction that changes the amount paid. */
+.impact-box { background: var(--bad-bg); border: 1px solid var(--bad); border-radius: 10px; padding: 10px 14px; margin: 10px 0; font-size: 13.5px; }
+.impact-box .impact-title { color: var(--bad); font-weight: 700; margin-bottom: 4px; }
+.impact-box ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+.impact-ack { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; font-weight: 600; cursor: pointer; }
+.impact-ack input { margin-top: 3px; }
 .muted { color: var(--muted); }
 .empty { padding: 30px; text-align: center; color: var(--muted); font-size: 13.5px; }
 
