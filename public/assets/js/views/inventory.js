@@ -55,6 +55,22 @@ const FILTER_TIPS = {
 };
 const thCollator =new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
+/**
+ * Sale price colour by profit on the price: at least 20% green, above 0% yellow, at or below cost red.
+ * No colour while the cost is unknown (0).
+ */
+function marginStyle(price, cost) {
+    price = Number(price);
+    cost = Number(cost);
+    if (!(cost > 0)) return '';
+    if (!(price > 0)) return 'color:var(--bad);font-weight:600';
+    const m = ((price - cost) / price) * 100;
+    const c = m >= 20 - 1e-9 ? 'var(--ok)' : m > 0 ? 'var(--warn)' : 'var(--bad)';
+    return `color:${c};font-weight:600`;
+}
+const marginTitle = (price, cost) => (Number(cost) > 0 && Number(price) > 0
+    ? `กำไร ${(((Number(price) - Number(cost)) / Number(price)) * 100).toFixed(1)}% ของราคาขาย (เขียว ≥ 20% · เหลือง ต่ำกว่า 20% · แดง เท่าทุนหรือขาดทุน)` : '');
+
 export async function render(container, { navigate, permissions, user }) {
     let search = '';
     let res = null;
@@ -924,7 +940,7 @@ export async function render(container, { navigate, permissions, user }) {
               <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
               ${canMerge ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>
           <td style="white-space:nowrap">
-            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
+            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill muted" style="${marginStyle(b.sale_price, Number(p.cost_price) * b.pack_size)}" title="ราคาขายยกแพ็ค · ${escapeHtml(marginTitle(b.sale_price, Number(p.cost_price) * b.pack_size))}">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
             ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขราคาฝากขายและบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
           </td>
@@ -937,8 +953,8 @@ export async function render(container, { navigate, permissions, user }) {
               ? `<div><button type="button" class="btn secondary sm" data-edit="${p.id}" style="margin-top:4px" title="ใส่ต้นทุนที่สืบทราบภายหลัง กำไรย้อนหลังจะคำนวณใหม่">ระบุต้นทุน</button></div>`
               : canSetPrice && p.consignor_id == null && !p.last_purchase
                 ? `<div><button type="button" class="link-btn" data-edit="${p.id}" style="font-size:12px" title="ต้นทุนนี้ระบุเอง (ยังไม่มีใบซื้อ) แก้ได้ กำไรย้อนหลังจะคำนวณใหม่">แก้ต้นทุน</button></div>` : ''}</td>
-          <td class="num">${money(p.sale_price)}${Number(p.on_promo) ? `<div><span class="pill promo" title="ขายราคาโปรโมชัน ราคาปกติ ฿${money(p.regular_price)}">โปร · ปกติ ${money(p.regular_price)}</span></div>` : ''}</td>
-          <td class="num">${p.margin_percent}%</td>
+          <td class="num"><span style="${marginStyle(p.sale_price, p.cost_price)}" title="${escapeHtml(marginTitle(p.sale_price, p.cost_price))}">${money(p.sale_price)}</span>${Number(p.on_promo) ? `<div><span class="pill promo" title="ขายราคาโปรโมชัน ราคาปกติ ฿${money(p.regular_price)}">โปร · ปกติ ${money(p.regular_price)}</span></div>` : ''}</td>
+          <td class="num" style="${marginStyle(p.sale_price, p.cost_price)}">${p.margin_percent}%</td>
           <td class="num">${money(p.stock_cost_value)}</td>
           <td class="num">${money(p.profit_total)}</td>
           <td class="muted">${fmtDate(p.last_purchase)}</td>
