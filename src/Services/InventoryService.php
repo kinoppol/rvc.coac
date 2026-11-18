@@ -890,6 +890,8 @@ class InventoryService
                 return [
                     'title' => ($d['source_label'] !== null || $kind === 'pos' ? 'ยอดขายนำเข้าจาก POS ' : 'บิลขาย ') . $d['doc_no'],
                     'link' => $kind === 'pos' ? 'posimport' : null,
+                    'sale_id' => (int) $d['id'],
+                    'pos_import' => $d['source_label'] !== null,
                     'note' => sprintf(
                         'วันที่ขาย %s · เวลาขาย %s · ยอดรวม ฿%s%s · บันทึกโดย %s เมื่อ %s%s%s',
                         $date($d['business_date'] ?? $d['sale_datetime']), $dateTime($d['sale_datetime']), number_format((float) $d['total_value'], 2),

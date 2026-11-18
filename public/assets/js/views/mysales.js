@@ -16,7 +16,19 @@ const daysAgo = (n) => {
  * Managers and admins may also correct a cashier's sale themselves, any day, with the
  * reason on record; a change to the amount paid is flagged and must be acknowledged.
  */
-export async function render(container, { user }) {
+/**
+ * Correct one sale from anywhere (e.g. a bill opened from a product's stock card), with the same
+ * editor as the sales history. onDone(saved) runs when the editor closes.
+ */
+export async function openSaleEditor(saleId, { user, onDone = () => {} }) {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    await render(host, { user, params: { editSale: saleId, onDone } });
+}
+
+export async function render(container, { user, params = {} }) {
+    // Solo: only the editor for params.editSale (no list); the host goes away when it closes.
+    const solo = params.editSale ? { id: params.editSale, onDone: params.onDone || (() => {}), saved: false, opened: false } : null;
     let from = todayISO();
     let to = from;
     // Admins and managers may look at other cashiers' sales: '' = mine, 'all', or a user id.
@@ -84,6 +96,17 @@ export async function render(container, { user }) {
     }
 
     function draw() {
+        if (solo) {
+            if (!edit) {
+                if (solo.opened) { container.remove(); solo.onDone(solo.saved); }
+                return;
+            }
+            solo.opened = true;
+            container.innerHTML = editModal();
+            wire();
+            startTicks();
+            return;
+        }
         const d = data;
         const negRows = d.data.filter((s) => negCount(s) > 0);
         const noAfter = d.data.some((s) => s.neg_lines === null || s.neg_lines === undefined);
@@ -398,8 +421,8 @@ export async function render(container, { user }) {
             load();
         }));
         $('#f-cashier')?.addEventListener('change', (e) => { cashier = e.target.value; load(); });
-        $('#f-from').addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; if (to < from) to = from; load(); } });
-        $('#f-to').addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; if (from > to) from = to; load(); } });
+        $('#f-from')?.addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; if (to < from) to = from; load(); } });
+        $('#f-to')?.addEventListener('change', (e) => { if (e.target.value) { to = e.target.value; if (from > to) from = to; load(); } });
         container.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openDetail(b.dataset.view)));
         container.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.edit)));
         container.querySelectorAll('[data-direct]').forEach((b) => b.addEventListener('click', () => openEdit(b.dataset.direct, true)));
@@ -492,6 +515,7 @@ export async function render(container, { user }) {
                 reason: e.reason.trim(),
             });
             edit = null;
+            if (solo) solo.saved = true;
             await load();
             alertDialog('ส่งคำขอแก้ไขแล้ว รอผู้จัดการหรือผู้ดูแลระบบอนุมัติ', { title: 'ส่งคำขอแล้ว' });
         } catch (err) {
@@ -530,6 +554,7 @@ export async function render(container, { user }) {
         try {
             await api.post(`/sales/${e.sale.id}/direct-edit`, { ...body, ack_payment: impact.affected ? e.ack : false });
             edit = null;
+            if (solo) solo.saved = true;
             await load();
             alertDialog(impact.affected
                 ? 'บันทึกการแก้ไขแล้ว การแก้ไขนี้กระทบยอดชำระเงิน — ระบบบันทึกข้อสังเกตไว้ในประวัติการแก้ไข กรุณาตรวจยอดเงินในลิ้นชัก/สรุปบัญชีของวันนั้น'
@@ -542,4 +567,8 @@ export async function render(container, { user }) {
     }
 
     await load();
+    if (solo) {
+        await openEdit(solo.id, true);
+        if (!edit) container.remove(); // could not be edited (the reason was shown)
+    }
 }

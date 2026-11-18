@@ -325,9 +325,19 @@ class InventoryController
     public function document(Request $request, Response $response): Response
     {
         $q = $request->getQueryParams();
-        $data = (new InventoryService(Db::connection()))->document((string) ($q['kind'] ?? ''), trim((string) ($q['doc_no'] ?? '')));
+        $db = Db::connection();
+        $data = (new InventoryService($db))->document((string) ($q['kind'] ?? ''), trim((string) ($q['doc_no'] ?? '')));
         if ($data === null) {
             return $this->error($response, 'ไม่พบเอกสาร', 404);
+        }
+        // A POS sale bill: whoever may correct sales (approve permission) edits it right from the bill.
+        if (isset($data['sale_id'])) {
+            $user = $request->getAttribute('user');
+            $edits = new \App\Services\SaleEditService($db, new SettingsService($db), new AuditLogger($db));
+            $data['sale_edit'] = empty($data['pos_import']) && $edits->directEnabled()
+                && (new \App\Repositories\UserRepo($db))->hasPermission((string) ($user['role'] ?? ''), 'sales.edit.approve')
+                ? ['id' => $data['sale_id'], 'user' => ['id' => (int) $user['id'], 'role' => (string) $user['role']]]
+                : null;
         }
         return $this->json($response, ['data' => $data]);
     }

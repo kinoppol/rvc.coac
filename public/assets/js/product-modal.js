@@ -133,12 +133,12 @@ export async function openProductModal(productId, navigate) {
         alertDialog(e.message, { tone: 'error' });
         return;
     }
-    const p = d.product;
-    const t = d.totals;
+    let p = d.product;
+    let t = d.totals;
     let group = 'all';
     let newestFirst = false; // a stock card reads oldest first, in document-date order
     // Which days' movements to show: 'all', 'today', 'yesterday' or 'range' (from..to), by document date.
-    let period = 'all';
+    let period = 'today';
     let from = todayISO();
     let to = from;
     const span = () => (period === 'today' ? [todayISO(), todayISO()]
@@ -343,7 +343,7 @@ export async function openProductModal(productId, navigate) {
           <div class="muted" style="font-size:11.5px;margin-top:4px">มูลค่าคงเหลือคิดจากต้นทุนเฉลี่ยปัจจุบัน ฿${money(p.cost_price)}/ชิ้น · ต้นทุนขายตามที่บันทึกไว้ในแต่ละบิล</div>`;
     }
 
-    const series = dailySeries(d);
+    let series = dailySeries(d);
     let trendRange = 30;
     let trendMetric = 'qty';
 
@@ -608,6 +608,21 @@ export async function openProductModal(productId, navigate) {
             </details>`;
     }
 
+    /** Re-read the card after a document was corrected from it, keeping where the reader was. */
+    async function refresh() {
+        try {
+            const fresh = (await api.get(`/inventory/${productId}/movements`)).data;
+            if (!box.isConnected) return;
+            d = fresh;
+            p = d.product;
+            t = d.totals;
+            series = dailySeries(d);
+            const y = box.querySelector('.modal-body')?.scrollTop || 0;
+            draw();
+            const m = box.querySelector('.modal-body'); if (m) m.scrollTop = y;
+        } catch (e) { /* keep what is shown */ }
+    }
+
     function draw() {
         const photo = p.image_token
             ? `<img class="pm-photo" src="${api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${encodeURIComponent(p.image_token)}`)}" alt="">`
@@ -663,6 +678,7 @@ export async function openProductModal(productId, navigate) {
             openDetailModal(
                 async () => (await api.get(`/inventory/document?kind=${encodeURIComponent(kind)}&doc_no=${encodeURIComponent(docNo)}`)).data,
                 navigate && ((page) => { close(); navigate(page); }),
+                { onChange: refresh },
             );
         }));
         box.querySelector('[data-order]').addEventListener('click', () => { newestFirst = !newestFirst; draw(); });

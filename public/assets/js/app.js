@@ -8,6 +8,7 @@ import { skPage } from './skeleton.js';
 import { initResponsive } from './responsive.js';
 import { initKeyboard } from './osk.js';
 import { initBarcodeKeys } from './barcode-keys.js';
+import { initKeepScroll } from './keep-scroll.js';
 
 const ROUTE_PERMS = {
     dashboard: 'dashboard.view', sales: 'sales.create', receive: 'receive.create',
@@ -322,6 +323,7 @@ window.addEventListener('app:unauthorized', () => { unmountAssistant(); if (!app
 initResponsive();
 initKeyboard();
 initBarcodeKeys();
+initKeepScroll();
 
 (async function boot() {
     try {

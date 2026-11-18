@@ -36,7 +36,11 @@ function sectionHtml(sec) {
       </table></div>` : '<div class="empty" style="padding:14px">ไม่มีรายการ</div>'}`;
 }
 
-export async function openDetailModal(load, navigate) {
+/**
+ * opts.onChange runs after something was changed from this dialog (a sale bill corrected here),
+ * so the page below can refresh in place.
+ */
+export async function openDetailModal(load, navigate, opts = {}) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:880px"><div class="modal-body">' + skBlock(5, 8) + '</div></div>';
@@ -54,6 +58,8 @@ export async function openDetailModal(load, navigate) {
         alertDialog(e.message, { tone: 'error' });
         return;
     }
+    const draw = () => {
+    const y = box.querySelector('.modal-body')?.scrollTop || 0;
     box.querySelector('.modal').innerHTML = `
       <div class="modal-head"><h2>${escapeHtml(d.title)}</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
       <div class="modal-body" style="padding-top:0">
@@ -62,13 +68,29 @@ export async function openDetailModal(load, navigate) {
       </div>
       <div class="modal-foot">
         <button type="button" class="btn secondary" data-x>ปิด</button>
+        ${d.sale_edit ? '<button type="button" class="btn" data-sale-edit title="แก้รายการขายนี้ทันที โดยระบุสาเหตุ (เช่น พนักงานขายผิดสินค้า)">แก้ไขรายการขาย</button>' : ''}
         ${d.link && navigate ? `<button type="button" class="btn" data-link>${escapeHtml(LINK_LABEL[d.link] || 'ไปที่หน้าที่เกี่ยวข้อง')}</button>` : ''}
       </div>`;
     box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
     box.querySelector('[data-link]')?.addEventListener('click', () => { close(); navigate(d.link); });
     box.querySelectorAll('[data-source]').forEach((tr) => {
-        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page) => { close(); navigate(page); }));
+        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page) => { close(); navigate(page); }), opts);
         tr.addEventListener('click', open);
         tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
     });
+    box.querySelector('[data-sale-edit]')?.addEventListener('click', async () => {
+        const { openSaleEditor } = await import('./views/mysales.js');
+        openSaleEditor(d.sale_edit.id, {
+            user: d.sale_edit.user,
+            onDone: async (saved) => {
+                if (!saved) return;
+                try { d = await load(); draw(); } catch (e) { /* keep what is shown */ }
+                opts.onChange?.();
+            },
+        });
+    });
+    const m = box.querySelector('.modal-body');
+    if (m) m.scrollTop = y;
+    };
+    draw();
 }
