@@ -137,12 +137,43 @@ export async function openProductModal(productId, navigate) {
     const t = d.totals;
     let group = 'all';
     let newestFirst = false; // a stock card reads oldest first, in document-date order
+    // Which days' movements to show: 'all', 'today', 'yesterday' or 'range' (from..to), by document date.
+    let period = 'all';
+    let from = todayISO();
+    let to = from;
+    const span = () => (period === 'today' ? [todayISO(), todayISO()]
+        : period === 'yesterday' ? [addDays(todayISO(), -1), addDays(todayISO(), -1)]
+        : period === 'range' ? [from <= to ? from : to, from <= to ? to : from] : null);
+    const inPeriod = (r) => { const sp = span(); return !sp || (r.date && r.date >= sp[0] && r.date <= sp[1]); };
+    const shown = () => d.movements.filter(inPeriod);
+
+    /** The chosen days: stock brought forward, in, out, and left at the end. */
+    function periodSummaryHtml() {
+        const sp = span();
+        if (!sp) return '';
+        let opening = 0;
+        for (const r of d.movements) { if (r.date && r.date < sp[0]) opening = r.balance; }
+        const rows = shown();
+        const qIn = rows.reduce((t, r) => t + (Number(r.qty_in) || 0), 0);
+        const qOut = rows.reduce((t, r) => t + (Number(r.qty_out) || 0), 0);
+        const sold = rows.filter((r) => r.kind === 'sale' || r.kind === 'pos');
+        const soldQty = sold.reduce((t, r) => t + (Number(r.qty_out) || 0) - (Number(r.qty_in) || 0), 0);
+        const closing = rows.length ? rows[rows.length - 1].balance : opening;
+        const item = (l, v, style = '') => `<span>${l} <b style="${style}">${v}</b></span>`;
+        return `<div class="pm-period-sum" style="display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;margin:0 0 8px;padding:8px 12px;border-radius:9px;background:var(--soft, #eef3fd)">
+          ${item('ยกมา', count(opening), opening < 0 ? 'color:var(--bad)' : '')}
+          ${item('รับ', count(qIn), 'color:var(--ok)')}
+          ${item('จ่าย', count(qOut), 'color:var(--bad)')}
+          ${item('ขาย', `${count(soldQty)} ชิ้น · ${count(new Set(sold.map((r) => r.doc_no).filter(Boolean)).size)} บิล`)}
+          ${item('คงเหลือสิ้นวัน' + (sp[0] !== sp[1] ? 'สุดท้าย' : ''), count(closing), closing < 0 ? 'color:var(--bad)' : '')}
+        </div>`;
+    }
 
     function tableHtml() {
         const fn = GROUPS.find(([k]) => k === group)[2];
-        const rows = d.movements.filter(fn);
+        const rows = shown().filter(fn);
         if (newestFirst) rows.reverse();
-        if (!rows.length) return '<div class="empty" style="padding:14px">ไม่มีรายการ</div>';
+        if (!rows.length) return `<div class="empty" style="padding:14px">${period === 'all' ? 'ไม่มีรายการ' : 'ไม่มีรายการในวันที่เลือก'}</div>`;
         return `<div class="table-wrap" style="max-height:420px;border:1px solid var(--border);border-radius:10px"><table>
           <thead><tr><th>วันที่เอกสาร</th><th>รายการ</th><th>เลขที่เอกสาร</th><th>คู่ค้า / หมายเหตุ</th>
             <th class="num">รับ</th><th class="num">จ่าย</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">มูลค่าทุน</th></tr></thead>
@@ -603,19 +634,30 @@ export async function openProductModal(productId, navigate) {
             ${summaryHtml()}
             ${trendHtml()}
             ${priceChangesHtml()}
-            <div class="actions-row" style="justify-content:space-between;margin:14px 0 8px">
+            <div class="actions-row" style="margin:14px 0 0;gap:6px;align-items:center" role="group" aria-label="เลือกวันที่">
+              ${[['all', 'ทุกวัน'], ['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['range', 'ระบุวันที่']].map(([k, l]) => `<button type="button" class="tab-btn ${period === k ? 'active' : ''}" data-period="${k}">${l}</button>`).join('')}
+              ${period === 'range' ? `<label class="field" style="flex-direction:row;align-items:center;gap:6px">ตั้งแต่ <input type="date" data-pfrom value="${escapeHtml(from)}" max="${todayISO()}"></label>
+                <label class="field" style="flex-direction:row;align-items:center;gap:6px">ถึง <input type="date" data-pto value="${escapeHtml(to)}" max="${todayISO()}"></label>` : ''}
+            </div>
+            <div class="actions-row" style="justify-content:space-between;margin:10px 0 8px">
               <div class="tabs" role="group" aria-label="กรองความเคลื่อนไหว">
-                ${GROUPS.filter(([k, , fn]) => !['split', 'damage'].includes(k) || d.movements.some(fn)).map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(d.movements.filter(fn).length)})</button>`).join('')}
+                ${GROUPS.filter(([k, , fn]) => !['split', 'damage'].includes(k) || d.movements.some(fn)).map(([k, l, fn]) => `<button type="button" class="tab-btn ${k === group ? 'active' : ''}" data-group="${k}">${l} (${count(shown().filter(fn).length)})</button>`).join('')}
               </div>
               <button type="button" class="btn secondary sm" data-order>${newestFirst ? 'ล่าสุดก่อน ▼' : 'เก่าสุดก่อน ▲'}</button>
             </div>
+            ${periodSummaryHtml()}
             ${tableHtml()}
             <div class="muted" style="font-size:12px;margin-top:8px">เรียงตามวันที่ในเอกสาร (วันเดียวกัน: รับก่อนจ่าย แล้วปรับปรุงตรวจนับท้ายวัน) · รายการที่บันทึกล่าช้ายังอยู่ในวันที่ของเอกสาร · ตรวจนับ (อนุมัติแล้ว) ตั้งยอดคงเหลือเท่ากับจำนวนที่นับได้ · ใบซื้อ/การนำเข้าที่ถูกยกเลิกไม่แสดง</div>
           </div>
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         if (series) bindTrend();
-        box.querySelectorAll('[data-group]').forEach((b) => b.addEventListener('click', () => { group = b.dataset.group; draw(); }));
+        box.querySelectorAll('[data-group]').forEach((b) => b.addEventListener('click', () => {
+            const y = box.querySelector('.modal-body')?.scrollTop || 0;
+            group = b.dataset.group;
+            draw();
+            const m = box.querySelector('.modal-body'); if (m) m.scrollTop = y;
+        }));
         box.querySelectorAll('[data-doc]').forEach((b) => b.addEventListener('click', () => {
             const [kind, docNo] = b.dataset.doc.split('|');
             openDetailModal(
@@ -624,6 +666,11 @@ export async function openProductModal(productId, navigate) {
             );
         }));
         box.querySelector('[data-order]').addEventListener('click', () => { newestFirst = !newestFirst; draw(); });
+        // Filters redraw the card where it is, without jumping back to the top.
+        const stay = (fn) => () => { const y = box.querySelector('.modal-body')?.scrollTop || 0; fn(); draw(); const m = box.querySelector('.modal-body'); if (m) m.scrollTop = y; };
+        box.querySelectorAll('[data-period]').forEach((b) => b.addEventListener('click', stay(() => { period = b.dataset.period; })));
+        box.querySelector('[data-pfrom]')?.addEventListener('change', (e) => { if (e.target.value) stay(() => { from = e.target.value; })(); });
+        box.querySelector('[data-pto]')?.addEventListener('change', (e) => { if (e.target.value) stay(() => { to = e.target.value; })(); });
         box.querySelectorAll('[data-adj-new]').forEach((b) => b.addEventListener('click', () => newFix(d.movements[+b.dataset.adjNew])));
         box.querySelectorAll('[data-adj-edit]').forEach((b) => b.addEventListener('click', () => editFix(d.movements[+b.dataset.adjEdit])));
         box.querySelectorAll('[data-adj-cancel]').forEach((b) => b.addEventListener('click', () => cancelFix(d.movements[+b.dataset.adjCancel])));
