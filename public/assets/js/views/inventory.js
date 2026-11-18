@@ -16,9 +16,7 @@ const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
 /** [key, header, tooltip, type] — type picks how the column sorts and which way it starts. */
 const COLUMNS = [
-    ['name', 'สินค้า', '', 'text'],
-    ['barcode', 'บาร์โค้ดชิ้น', 'บาร์โค้ดบนตัวสินค้า 1 ชิ้น ใช้สแกนตอนขาย', 'text'],
-    ['packs', 'บาร์โค้ดแพ็ค', 'บาร์โค้ดของแพ็ค/ลังที่ซื้อเข้า สินค้าเดียวกันมีได้หลายขนาดแพ็ค', 'text'],
+    ['name', 'สินค้า', 'ชื่อสินค้า ใต้ชื่อคือบาร์โค้ดชิ้น ตามด้วย (บาร์โค้ดแพ็ค ×ชิ้นต่อแพ็ค ราคายกแพ็ค)', 'text'],
     ['qty_received', 'รับเข้า', '', 'num'],
     ['qty_sold', 'ขายแล้ว', '', 'num'],
     ['qty_stock', 'คงเหลือ', '', 'num'],
@@ -305,7 +303,7 @@ export async function render(container, { navigate, permissions, user }) {
           <div class="table-wrap sticky-page"><table>
             <thead><tr>${headHtml()}</tr></thead>
             <tbody>${shown.map(row).join('')
-                || `<tr><td colspan="${canEdit ? 14 : 13}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
+                || `<tr><td colspan="${canEdit ? 12 : 11}" class="empty">${filter === 'all' ? 'ยังไม่มีสินค้าของร้าน — เริ่มจากเมนู ซื้อสินค้าเข้าร้าน' : 'ไม่มีสินค้าในกลุ่มนี้'}</td></tr>`}</tbody>
           </table></div>
         </section>
         ${editing ? editHtml() : ''}
@@ -894,14 +892,24 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     /** No piece barcode: not collected yet, or marked as an item that really has none (either can be switched). */
+    /** Under the name: piece barcode, then (pack barcode ×pieces ฿pack price, ...), and the edit link. */
+    function barcodeLine(p) {
+        const packs = p.pack_barcodes.map((b) => `${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} ×${b.pack_size}${b.sale_price != null
+            ? ` <span style="${marginStyle(b.sale_price, Number(p.cost_price) * b.pack_size) || 'font-weight:600'}" title="ราคาขายยกแพ็ค · ${escapeHtml(marginTitle(b.sale_price, Number(p.cost_price) * b.pack_size))}">฿${money(b.sale_price)}</span>` : ''}`);
+        const edit = (canEdit && p.consignor_id == null) || (canConsign && p.consignor_id != null)
+            ? ` · <button type="button" class="link-btn" data-edit="${p.id}" style="font-size:12px;font-weight:400" title="${p.consignor_id == null ? 'แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค' : 'แก้ไขราคาฝากขายและบาร์โค้ดชิ้นของสินค้าฝากขาย'}">แก้ไข</button>` : '';
+        return `<div class="muted inv-codes" style="font-size:12px;margin-top:2px">${p.barcode ? escapeHtml(p.barcode) : noBarcodeCell(p)}${packs.length
+            ? ` <span title="บาร์โค้ดแพ็ค ×ชิ้นต่อแพ็ค ราคายกแพ็ค">(${packs.join(', ')})</span>` : ''}${edit}</div>`;
+    }
+
     function noBarcodeCell(p) {
         const can = canEdit && (p.consignor_id == null || canConsign);
         if (Number(p.no_barcode)) {
-            return `<span class="pill muted" style="font-size:11.5px;white-space:nowrap" title="สินค้านี้ไม่มีบาร์โค้ดจริง ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</span>
-              ${can ? `<div><button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="0" style="font-size:12px;font-weight:400" title="ย้ายกลับไปเป็นสินค้าที่ยังต้องเก็บบาร์โค้ด">ยกเลิก</button></div>` : ''}`;
+            return `<span class="pill muted" style="font-size:11px;white-space:nowrap" title="สินค้านี้ไม่มีบาร์โค้ดจริง ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</span>${can
+                ? ` <button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="0" style="font-size:12px;font-weight:400" title="ย้ายกลับไปเป็นสินค้าที่ยังต้องเก็บบาร์โค้ด">ยกเลิก</button>` : ''}`;
         }
-        return `<span title="ยังไม่ได้เก็บบาร์โค้ดชิ้น">—</span>
-          ${can ? `<div><button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ตัวสินค้าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</button></div>` : ''}`;
+        return `<span title="ยังไม่ได้เก็บบาร์โค้ดชิ้น">ยังไม่มีบาร์โค้ด</span>${can
+            ? ` · <button type="button" class="link-btn" data-no-barcode="${p.id}" data-on="1" style="font-size:12px;font-weight:400" title="ตัวสินค้าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด">ไม่มีบาร์โค้ด</button>` : ''}`;
     }
 
     async function setNoBarcode(id, on) {
@@ -978,20 +986,15 @@ export async function render(container, { navigate, permissions, user }) {
         const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canMerge
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
         return `<tr data-row="${p.id}">${pick}
-          <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
+          <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>
+            ${barcodeLine(p)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
+            ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
+              <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
+              ${canMerge ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}
             ${canConsign && p.consignor_id != null && Number(p.store_sold_qty) > 0
                 ? `<button type="button" class="btn secondary sm" data-claim="${p.id}" style="margin-top:4px" title="ยอดขายนี้เกิดก่อนเปลี่ยนเป็นสินค้าฝากขาย จึงยังเป็นของร้าน">โอนยอดขายเดิม ${count(p.store_sold_qty)} ชิ้น เข้าบัญชีผู้ฝาก</button>` : ''}
             ${dups.length > 1
                 ? `<div><button type="button" class="btn ${dups[0].id === p.id ? '' : 'secondary'} sm" data-merge="${p.id}" style="margin-top:4px" title="สินค้าชื่อเดียวกัน (หรือสะกดต่างกันเล็กน้อย) ของเจ้าของเดียวกันมี ${dups.length} รายการ รวมรายการอื่นเข้ามาที่รายการนี้">${dups[0].id === p.id ? `รวมรายการซ้ำ (${dups.length}) เข้ารายการนี้ · เก่ากว่า` : 'รวมเข้ารายการนี้แทน'}</button></div>` : ''}</td>
-          <td class="muted">${p.barcode ? escapeHtml(p.barcode) : noBarcodeCell(p)}
-            ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
-              <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
-              ${canMerge ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>
-          <td style="white-space:nowrap">
-            ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill muted" style="${marginStyle(b.sale_price, Number(p.cost_price) * b.pack_size)}" title="ราคาขายยกแพ็ค · ${escapeHtml(marginTitle(b.sale_price, Number(p.cost_price) * b.pack_size))}">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
-            ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}
-            ${canConsign && p.consignor_id != null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขราคาฝากขายและบาร์โค้ดชิ้นของสินค้าฝากขาย">แก้ไข</button>` : ''}
-          </td>
           <td class="num">${count(p.qty_received)}</td>
           <td class="num">${count(p.qty_sold)}</td>
           <td class="num" style="${low ? 'color:var(--warn);font-weight:600' : ''}">${count(p.qty_stock)}${discontinuedCell(p)}${canEdit && p.consignor_id == null
