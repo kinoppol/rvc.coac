@@ -911,9 +911,14 @@ export async function render(container, { user, permissions = [] } = {}) {
         const amount = pfAmount(m);
         const diff = Math.round((amount - pfSales(m)) * 100) / 100;
         const after = Math.round((d.balance - amount) * 100) / 100;
+        const differs = Math.abs(diff) >= 0.005;
+        // Paying past the balance needs a reason too, even when the amount matches the sales
+        // (e.g. an earlier payout already went over for lost goods).
+        const over = after < -0.005;
         return `
-          ${Math.abs(diff) >= 0.005 ? `<div class="chip" style="margin-top:6px">ต่างจากยอดขาย <b>&nbsp;${signed(diff)}</b></div>
-            <input data-pf="reason" maxlength="150" placeholder="เหตุผลที่จ่ายต่างจากยอดขาย (จำเป็น) เช่น สินค้าสูญหาย 2 ชิ้น ร้านรับผิดชอบ" value="${escapeHtml(p.reason)}" style="width:100%;margin-top:6px">` : ''}
+          ${differs ? `<div class="chip" style="margin-top:6px">ต่างจากยอดขาย <b>&nbsp;${signed(diff)}</b></div>` : ''}
+          ${!differs && over ? `<div class="chip" style="margin-top:6px">จ่ายเกินยอดคงเหลือในบัญชีผู้ฝาก <b>&nbsp;฿${money(-after)}</b></div>` : ''}
+          ${differs || over ? `<input data-pf="reason" maxlength="150" placeholder="${differs ? 'เหตุผลที่จ่ายต่างจากยอดขาย' : 'เหตุผลที่จ่ายเกินยอดคงเหลือ'} (จำเป็น) เช่น สินค้าสูญหาย 2 ชิ้น ร้านรับผิดชอบ" value="${escapeHtml(p.reason)}" style="width:100%;margin-top:6px">` : ''}
           <div class="muted" style="font-size:12px;margin-top:6px">ยอดคงเหลือในบัญชีผู้ฝาก ฿${money(d.balance)} → หลังจ่าย
             <b style="${after < 0 ? 'color:var(--bad)' : ''}">${after < 0 ? '-' : ''}฿${money(Math.abs(after))}</b>${after < 0 ? ' (ติดลบ หักคืนจากยอดขายครั้งต่อไป)' : ''}</div>`;
     }
@@ -1152,7 +1157,9 @@ export async function render(container, { user, permissions = [] } = {}) {
         const fail = (msg) => { m.payError = { kind: 'payouts', msg }; drawDay(); };
         if (!c || !d) return fail('กรุณาเลือกผู้ฝากขาย');
         if (!(amount > 0)) return fail('จำนวนเงินที่จ่ายต้องมากกว่า 0');
+        const over = d.balance - amount < -0.005;
         if (differs && !p.reason.trim()) return fail('ยอดที่จ่ายไม่ตรงกับยอดขาย กรุณาระบุเหตุผล');
+        if (over && !p.reason.trim()) return fail('จำนวนเงินที่จ่ายเกินยอดคงเหลือในบัญชีผู้ฝาก กรุณาระบุเหตุผล (เช่น สินค้าสูญหาย ร้านรับผิดชอบ)');
         const stock = [];
         const returns = [...p.returns].filter((id) => pfLeft(d, id) > 0);
         for (const [id, st] of Object.entries(p.stock)) {
@@ -1169,7 +1176,7 @@ export async function render(container, { user, permissions = [] } = {}) {
             `จ่ายเงิน ${c.code} - ${c.name} ฿${money(amount)} (${PAY_METHOD[p.method]}${p.method === 'hold' ? ' ดึงจากเงินในลิ้นชักวันนี้' : p.method === 'cash' ? (fromDrawer ? ' จากเงินในลิ้นชักวันนี้' : ' ไม่ได้ใช้เงินจากลิ้นชัก') : ''})`
             + ` · รายการขาย ${from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`} ฿${money(sales)}`
             + (differs ? ` · ต่างจากยอดขาย ${signed(amount - sales)}: ${p.reason.trim()}` : '')
-            + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}` : '')
+            + (after < 0 ? ` · บัญชีผู้ฝากจะติดลบ ฿${money(-after)}${!differs ? `: ${p.reason.trim()}` : ''}` : '')
             + (stock.length ? ` · ปรับคงเหลือ ${stock.map((x) => `${names(x.product_id)} เป็น ${x.qty} ชิ้น`).join(', ')}` : '')
             + (returns.length ? ` · คืนสินค้าให้ผู้ฝาก (ปรับยอดคงเหลือเป็น 0): ${returns.map((id) => `${names(id)} ${pfLeft(d, id)} ชิ้น`).join(', ')}` : ''),
             { title: 'ยืนยันการจ่ายเงินผู้ฝากขาย?', okText: 'บันทึก' }
@@ -1180,7 +1187,7 @@ export async function render(container, { user, permissions = [] } = {}) {
         drawDay();
         try {
             const res = await api.post(`/closing/${m.date}/payouts`, {
-                consignor_id: c.id, from, to, product_ids: [...p.picked], amount, reason: differs ? p.reason.trim() : '',
+                consignor_id: c.id, from, to, product_ids: [...p.picked], amount, reason: differs || over ? p.reason.trim() : '',
                 stock, returns, method: p.method, from_drawer: fromDrawer,
             });
             if (docModalGone(m)) return;
