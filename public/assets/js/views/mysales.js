@@ -235,22 +235,28 @@ export async function render(container, { user }) {
                     const orig = it.sale_item_id ? e.sale.items.find((x) => x.sale_item_id === it.sale_item_id) : null;
                     const changed = !orig || orig.qty !== it.qty;
                     return `<tr style="${it.qty === 0 ? 'opacity:.5' : changed ? 'background:var(--warn-bg)' : ''}">
-                      <td>${escapeHtml(it.name)}${it.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${it.pack_size}</span>` : ''}${orig ? '' : ' <span class="pill ok">เพิ่ม</span>'}
-                        ${orig && orig.qty !== it.qty ? `<div class="muted" style="font-size:12px">เดิม ${count(orig.qty)} ชิ้น</div>` : ''}</td>
+                      <td>${escapeHtml(it.name)}${it.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${it.pack_size}</span>` : ''}${orig ? '' : it.replaces ? ' <span class="pill ok">ขายจริง</span>' : ' <span class="pill ok">เพิ่ม</span>'}
+                        ${it.replaces ? `<div class="muted" style="font-size:12px">แทน ${escapeHtml(it.replaces)}</div>` : ''}
+                        ${it.swappedTo && it.qty === 0 ? `<div class="muted" style="font-size:12px">เปลี่ยนเป็น ${escapeHtml(it.swappedTo)}</div>`
+                          : orig && orig.qty !== it.qty ? `<div class="muted" style="font-size:12px">เดิม ${count(orig.qty)} ชิ้น</div>` : ''}</td>
                       <td class="num">${money(it.unit_price)}</td>
                       <td class="num"><div style="display:inline-flex;gap:4px;align-items:center">
                         <button type="button" class="btn secondary sm" data-dec="${i}" aria-label="ลด">−</button>
                         <input type="number" data-qty="${i}" value="${it.qty}" min="0" step="${it.pack_size}" style="width:70px;text-align:right">
                         <button type="button" class="btn secondary sm" data-inc="${i}" aria-label="เพิ่ม">+</button></div></td>
                       <td class="num">${money(it.unit_price * it.qty)}</td>
-                      <td style="text-align:right">${it.qty > 0 ? `<button type="button" class="btn secondary sm" data-remove="${i}">นำออก</button>` : ''}</td></tr>`;
+                      <td style="text-align:right;white-space:nowrap">${it.qty > 0 ? `<button type="button" class="btn ${e.swap === i ? '' : 'secondary'} sm" data-swap="${i}" title="ขายผิดสินค้า: เลือกสินค้าที่ขายจริงแทนรายการนี้ จำนวนเท่าเดิม">เปลี่ยนสินค้า</button>
+                        <button type="button" class="btn secondary sm" data-remove="${i}">นำออก</button>` : ''}</td></tr>`;
                 }).join('')}</tbody>
                 <tfoot><tr><td colspan="3" style="font-weight:600">ยอดรวมใหม่ <span class="muted" style="font-weight:400">(เดิม ฿${money(e.sale.total_value)})</span></td>
                   <td class="num" style="font-weight:700">฿${money(total)}</td><td></td></tr></tfoot>
               </table></div>
 
               <div style="margin-top:14px;position:relative">
-                <label class="field">${e.direct ? 'เพิ่มสินค้าในบิลนี้' : 'เพิ่มสินค้าที่ขายแต่ลืมสแกน'}
+                ${e.swap !== null && e.items[e.swap] ? `<div class="hint" style="margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+                  <div>เลือกสินค้าที่ขายจริง แทน <b>${escapeHtml(e.items[e.swap].name)}</b> (${count(e.items[e.swap].qty)} ชิ้น) — ค้นหาด้านล่างแล้วกดเลือก</div>
+                  <button type="button" class="btn secondary sm" id="e-swap-cancel">ยกเลิกการเปลี่ยน</button></div>` : ''}
+                <label class="field">${e.swap !== null ? 'สินค้าที่ขายจริง' : e.direct ? 'เพิ่มสินค้าในบิลนี้' : 'เพิ่มสินค้าที่ขายแต่ลืมสแกน'}
                   <input id="e-search" placeholder="พิมพ์ชื่อสินค้าหรือสแกนบาร์โค้ด" value="${escapeHtml(e.search)}" autocomplete="off"></label>
                 ${e.results.length ? `<div class="card" style="margin-top:6px;max-height:220px;overflow:auto">
                   ${e.results.map((p, i) => `<button type="button" class="nav-btn" data-add="${i}" style="display:flex;justify-content:space-between;width:100%;gap:10px;padding:8px 12px;border:0;background:none;cursor:pointer;text-align:left">
@@ -322,9 +328,36 @@ export async function render(container, { user }) {
                 items: sale.items.map((it) => ({ ...it })),
                 payments: payments.length ? payments : [{ method: enabled[0], amount: sale.total_value }],
                 reason: '', search: '', results: [], busy: false, error: null,
+                swap: null, // index of the line being changed to another product (sold the wrong product)
             };
             draw();
         } catch (err) { alertDialog(err.message, { tone: 'error' }); }
+    }
+
+    /**
+     * Sold the wrong product: the line being changed goes to 0 (an added line is dropped) and the
+     * product sold for real comes in with the same number of pieces (whole packs for a pack price).
+     */
+    function swapTo(p) {
+        const old = edit.items[edit.swap];
+        const pack = p.pack_size;
+        const qty = Math.max(pack, Math.round(old.qty / pack) * pack);
+        if (old.sale_item_id) {
+            old.qty = 0;
+            old.swappedTo = p.name;
+        } else {
+            edit.items.splice(edit.swap, 1);
+        }
+        const replaces = old.replaces || old.name;
+        const same = edit.items.find((it) => !it.sale_item_id && it.product_id === Number(p.id) && it.pack_size === pack);
+        if (same) same.qty += qty;
+        else edit.items.push({ sale_item_id: null, product_id: Number(p.id), name: p.name, pack_size: pack, unit_price: p.price, qty, replaces });
+        if (!edit.reason.trim()) edit.reason = `ขายผิดสินค้า: ${replaces} → ${p.name}`;
+        edit.swap = null;
+        edit.search = '';
+        edit.results = [];
+        syncSinglePayment();
+        draw();
     }
 
     let searchSeq = 0;
@@ -387,7 +420,7 @@ export async function render(container, { user }) {
         const setQty = (i, qty) => {
             const it = edit.items[i];
             qty = Math.max(0, Math.round(qty / it.pack_size) * it.pack_size);
-            if (!it.sale_item_id && qty === 0) edit.items.splice(i, 1); // an added line taken back out
+            if (!it.sale_item_id && qty === 0) { edit.items.splice(i, 1); edit.swap = null; } // an added line taken back out
             else it.qty = qty;
             syncSinglePayment();
             draw();
@@ -398,8 +431,21 @@ export async function render(container, { user }) {
         container.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => setQty(+b.dataset.remove, 0)));
         let t = null;
         $('#e-search').addEventListener('input', (e) => { clearTimeout(t); const q = e.target.value; edit.search = q; t = setTimeout(() => search(q), 250); });
+        container.querySelectorAll('[data-swap]').forEach((b) => b.addEventListener('click', () => {
+            const i = +b.dataset.swap;
+            edit.swap = edit.swap === i ? null : i;
+            edit.search = '';
+            edit.results = [];
+            draw();
+            if (edit.swap !== null) container.querySelector('#e-search')?.focus();
+        }));
+        $('#e-swap-cancel')?.addEventListener('click', () => { edit.swap = null; draw(); });
         container.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
             const p = edit.results[+b.dataset.add];
+            if (edit.swap !== null && edit.items[edit.swap]) {
+                swapTo(p);
+                return;
+            }
             const same = edit.items.find((it) => !it.sale_item_id && it.product_id === Number(p.id) && it.pack_size === p.pack_size);
             if (same) same.qty += p.pack_size;
             else edit.items.push({ sale_item_id: null, product_id: Number(p.id), name: p.name, pack_size: p.pack_size, unit_price: p.price, qty: p.pack_size });
