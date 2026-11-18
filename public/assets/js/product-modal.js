@@ -383,6 +383,7 @@ export async function openProductModal(productId, navigate) {
           <div class="pm-trend-legend muted">
             <span><i style="background:var(--pri)"></i>ยอดขายต่อวัน</span>
             <span><i style="height:2px;background:var(--warn)"></i>เฉลี่ย 7 วัน</span>
+            <span><i style="height:2px;background:var(--ok)"></i>คงเหลือสิ้นวัน (ชิ้น · แกนขวา)</span>
             <span><i style="background:var(--bad);opacity:.18"></i>สินค้าหมด (คงเหลือ 0)</span>
             <span><i style="width:0;border-left:1.5px dashed var(--muted)"></i>ปรับราคาขาย</span>
           </div>
@@ -398,7 +399,7 @@ export async function openProductModal(productId, navigate) {
         const avg = (b) => (trendMetric === 'qty' ? b.avgQty : b.avgAmount);
         const W = Math.max(host.clientWidth, 280);
         const H = 190;
-        const m = { l: 40, r: 8, t: 16, b: 24 };
+        const m = { l: 40, r: 40, t: 16, b: 24 };
         const pw = W - m.l - m.r;
         const ph = H - m.t - m.b;
         const max = Math.max(0, ...bs.map((b) => Math.max(val(b), avg(b))));
@@ -409,6 +410,15 @@ export async function openProductModal(productId, navigate) {
         const base = m.t + ph;
         const today = todayISO();
         const every = Math.max(1, Math.ceil(44 / band));
+        // Stock left at the end of each day, on its own axis at the right (it may go below zero).
+        const bals = bs.map((b) => Number(b.balance) || 0);
+        const hi2 = niceScale(Math.max(4, ...bals)).top;
+        const lo2 = Math.min(...bals) < 0 ? -niceScale(-Math.min(...bals)).top : 0;
+        const y2 = (v) => m.t + ph - ((v - lo2) / (hi2 - lo2)) * ph;
+        const axis2 = [...new Set([hi2, hi2 / 2, 0, lo2])].map((v) => `<text x="${W - m.r + 6}" y="${y2(v) + 4}" font-size="11" fill="${v < 0 ? 'var(--bad)' : 'var(--ok)'}">${compact(v)}</text>`).join('')
+            + (lo2 < 0 ? `<line x1="${m.l}" x2="${W - m.r}" y1="${y2(0)}" y2="${y2(0)}" stroke="var(--bad)" stroke-width="1" stroke-dasharray="2 3" opacity=".6"/>` : '');
+        const balLine = bs.map((b, i) => `${i ? 'L' : 'M'}${(m.l + band * i + band / 2).toFixed(1)},${y2(bals[i]).toFixed(1)}`).join(' ');
+        const balDots = band >= 9 ? bs.map((b, i) => `<circle cx="${(m.l + band * i + band / 2).toFixed(1)}" cy="${y2(bals[i]).toFixed(1)}" r="2.2" fill="${bals[i] < 0 ? 'var(--bad)' : 'var(--ok)'}"/>`).join('') : '';
         const fmtV = (v) => (trendMetric === 'qty' ? `${v.toFixed(1)} ชิ้น` : `฿${money(v)}`);
 
         const grid = [];
@@ -450,6 +460,8 @@ export async function openProductModal(productId, navigate) {
             <rect class="pt-hover" x="0" y="${m.t}" width="0" height="${ph}" fill="var(--hover)" pointer-events="none"/>
             ${cols}
             ${bs.length > 1 ? `<path d="${line}" fill="none" stroke="var(--warn)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" pointer-events="none"/>` : ''}
+            ${axis2}
+            <g pointer-events="none">${bs.length > 1 ? `<path d="${balLine}" fill="none" stroke="var(--ok)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : ''}${balDots}</g>
             <line x1="${m.l}" x2="${W - m.r}" y1="${base}" y2="${base}" stroke="var(--border)" stroke-width="1"/>
             ${hits}
           </svg>
@@ -467,7 +479,7 @@ export async function openProductModal(productId, navigate) {
               ${kv('ยอดเงิน', `฿${money(b.amount)}`)}
               ${b.bills ? kv('บิล', count(b.bills)) : ''}
               ${kv('เฉลี่ย 7 วัน', fmtV(avg(b)))}
-              ${kv('คงเหลือสิ้นวัน', b.balance <= 0 ? '<span style="color:var(--bad);font-weight:600">หมด</span>' : `${count(b.balance)} ชิ้น`)}
+              ${kv('คงเหลือสิ้นวัน', b.balance < 0 ? `<span style="color:var(--bad);font-weight:600">ติดลบ ${count(b.balance)} ชิ้น</span>` : b.balance === 0 ? '<span style="color:var(--bad);font-weight:600">หมด</span>' : `<span style="color:var(--ok);font-weight:600">${count(b.balance)} ชิ้น</span>`)}
               ${b.prices.map((c) => `<div style="margin-top:3px">ปรับราคา ฿${money(c.old_price)} → <b>฿${money(c.new_price)}</b></div>`).join('')}`;
             tip.style.display = 'block';
             const cx = m.l + band * i + band / 2;
