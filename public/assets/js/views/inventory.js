@@ -77,6 +77,8 @@ export async function render(container, { navigate, permissions, user }) {
     }
     const canEdit = permissions.includes('purchase.create');
     const canConsign = canEdit && user?.role === 'admin';
+    // Admin / manager: merge duplicate rows of one item (store goods or consigned goods alike).
+    const canMerge = canEdit && ['admin', 'manager'].includes(user?.role);
     // Counting one product at a time with no round open (นับรายการ): over 10 pieces off waits for a manager.
     const canCount = permissions.includes('stockcount.create');
     // Admin / manager: sales booked with no cost (sold before the first purchase) that can now be costed.
@@ -91,7 +93,7 @@ export async function render(container, { navigate, permissions, user }) {
     const isLow = (p) => p.consignor_id == null && !p.discontinued_at && Number(p.qty_stock) <= lineOf(p);
     let lowBusy = false;
     let consignors = null; // loaded the first time an admin opens the editor
-    const picked = new Set(); // products ticked: store goods for a purchase order; any (admin) to merge
+    const picked = new Set(); // products ticked: store goods for a purchase order; any (admin / manager) to merge
     /** Ticked store goods (consigned goods are never bought from suppliers). */
     const pickedStore = () => [...picked].filter((id) => res?.data.some((p) => Number(p.id) === id && p.consignor_id == null));
     let sort = { key: 'name', dir: 'asc' };
@@ -220,8 +222,8 @@ export async function render(container, { navigate, permissions, user }) {
             <input type="search" id="q" class="search-input" placeholder="🔍 ค้นหาชื่อหรือบาร์โค้ด (ชิ้น/แพ็ค) แล้วกด Enter" value="${escapeHtml(search)}">
             <div class="actions-row">
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
-              ${canConsign ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
-              ${canConsign ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
+              ${canMerge ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
+              ${canMerge ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
               ${canEdit ? `<button type="button" class="btn secondary" id="compare-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง 2–${COMPARE_MAX} รายการ แล้วดูกราฟแนวโน้มการขายรายวันเทียบกัน">เปรียบเทียบแนวโน้มการขาย (${picked.size})</button>` : ''}
               ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
               ${user?.role === 'admin' ? `<button type="button" class="btn secondary" id="order-check" title="หาสินค้าที่ยอดอาจเพี้ยนจากการบันทึกเอกสารล่าช้าหรือสลับลำดับ">ตรวจสอบข้อมูลล่าช้า / สลับลำดับ</button>` : ''}
@@ -574,7 +576,7 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     // Duplicate rows of one item (same owner + same or almost the same name, e.g. a repeat deposit
-    // booked as a new listing, or "สตรอเบอร์รี่" / "สตรอว์เบอร์รี่"): admins can merge them.
+    // booked as a new listing, or "สตรอเบอร์รี่" / "สตรอว์เบอร์รี่"): admins and managers can merge them.
     // The oldest row is the usual one to keep.
     let dupGroups = { data: null, byId: new Map() };
     function dupsOf(p) {
@@ -764,7 +766,7 @@ export async function render(container, { navigate, permissions, user }) {
             · ต้นทุนเดิมเก็บเป็นประวัติในเอกสารซื้อ/รับแต่ละใบ (ดูในบัตรสต๊อก) และกำไรของยอดที่ขายไปแล้วคิดตามต้นทุนของช่วงเวลานั้น ไม่เปลี่ยน</div></div>` : ''}
           ${salesDiffer ? `<div class="error-box" style="margin-top:8px;font-size:13px">ราคาขายไม่เท่ากัน — หลังรวมขายที่ ฿${money(after.sale_price)} (ราคาที่ขีดฆ่าจะไม่ใช้ต่อ)</div>` : ''}
           ${heldCodes.length ? `<div class="error-box" style="margin-top:8px;font-size:13px">บาร์โค้ดชิ้นไม่ตรงกัน ${codes.length} อัน — <b>เลือกบาร์โค้ดที่จะใช้ต่อ</b> ในคอลัมน์บาร์โค้ด (ตั้งไว้เป็นของรายการที่ซื้อ/รับล่าสุด)
-            · บาร์โค้ดที่เหลือเก็บไว้ทั้งหมด (รอตรวจสอบที่รายการนี้) ไม่หาย และใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบจะตรวจสอบและลบออก</div>` : ''}
+            · บาร์โค้ดที่เหลือเก็บไว้ทั้งหมด (รอตรวจสอบที่รายการนี้) ไม่หาย และใช้กับสินค้าอื่นไม่ได้จนกว่าผู้ดูแลระบบหรือผู้จัดการร้านจะตรวจสอบและลบออก</div>` : ''}
           ${group.some((x) => x.name !== p.name) ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>ชื่อสินค้าสะกดต่างกันเล็กน้อย — ตรวจให้แน่ใจว่าเป็นสินค้าเดียวกัน หลังรวมใช้ชื่อ <b>«${escapeHtml(p.name)}»</b> ของรายการหลัก
             (ถ้าต้องการชื่ออื่น กด "ใช้เป็นรายการหลัก" ที่รายการนั้น หรือแก้ชื่อภายหลัง)</div></div>` : ''}
           ${withPhoto.length > 1 ? `<div class="hint" style="margin:10px 0 0;font-size:13px"><div class="dot">i</div><div>มีรูปสินค้า ${withPhoto.length} รูป — หลังรวมใช้รูปล่าสุด (รายการ ${usePhoto.id}) รูปอื่นเก็บเป็นรูปสำรอง ไม่ลบ ดูหรือเปลี่ยนกลับได้ในหน้ารายละเอียดสินค้า</div></div>` : ''}
@@ -906,10 +908,10 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     function row(p) {
-        const dups = canConsign ? dupsOf(p) : [];
+        const dups = canMerge ? dupsOf(p) : [];
         const low = p.consignor_id == null ? isLow(p) : Number(p.qty_stock) <= 3;
         // Only the store's own goods are bought from suppliers.
-        const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canConsign
+        const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canMerge
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
         return `<tr data-row="${p.id}">${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
@@ -920,7 +922,7 @@ export async function render(container, { navigate, permissions, user }) {
           <td class="muted">${p.barcode ? escapeHtml(p.barcode) : noBarcodeCell(p)}
             ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
               <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
-              ${user?.role === 'admin' ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>
+              ${canMerge ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}</td>
           <td style="white-space:nowrap">
             ${p.pack_barcodes.map((b) => `<div class="muted" style="font-size:12px">${b.barcode ? escapeHtml(b.barcode) : 'ไม่มีบาร์โค้ด'} <span class="pill muted">×${b.pack_size}</span>${b.sale_price != null ? ` <span class="pill ok" title="ราคาขายยกแพ็ค">฿${money(b.sale_price)}</span>` : ''}</div>`).join('')}
             ${canEdit && p.consignor_id == null ? `<button type="button" class="btn secondary sm" data-edit="${p.id}" title="แก้ไขชื่อสินค้า บาร์โค้ดชิ้น/แพ็ค">แก้ไข</button>` : ''}

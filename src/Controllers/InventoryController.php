@@ -29,7 +29,7 @@ class InventoryController
         $params = $request->getQueryParams();
         $search = trim((string) ($params['q'] ?? ''));
         $rows = $service->products($search, !empty($params['consigned']));
-        // Piece barcodes put aside at a merge, waiting for an admin to check them.
+        // Piece barcodes put aside at a merge, waiting for an admin / manager to check them.
         $held = (new ProductRepo($db, new AuditLogger($db)))->heldBarcodes();
         foreach ($rows as &$r) {
             $r['held_barcodes'] = $held[(int) $r['id']] ?? [];
@@ -66,8 +66,8 @@ class InventoryController
     public function releaseHeldBarcode(Request $request, Response $response, array $args): Response
     {
         $user = $request->getAttribute('user');
-        if (($user['role'] ?? '') !== 'admin') {
-            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่ลบบาร์โค้ดที่เก็บไว้ตรวจสอบได้', 403);
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบหรือผู้จัดการร้านเท่านั้นที่ลบบาร์โค้ดที่เก็บไว้ตรวจสอบได้', 403);
         }
         $db = Db::connection();
         try {
@@ -513,12 +513,12 @@ class InventoryController
         return $this->json($response, ['ok' => true, 'claimed' => $claimed]);
     }
 
-    /** Admin only: merge duplicate product rows into the chosen one (default: the oldest). */
+    /** Admin / manager: merge duplicate product rows into the chosen one (default: the oldest). */
     public function merge(Request $request, Response $response): Response
     {
         $user = $request->getAttribute('user');
-        if (($user['role'] ?? '') !== 'admin') {
-            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้นที่รวมรายการสินค้าได้', 403);
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบหรือผู้จัดการร้านเท่านั้นที่รวมรายการสินค้าได้', 403);
         }
         $body = (array) $request->getParsedBody();
         $ids = array_map('intval', (array) ($body['ids'] ?? []));
