@@ -113,6 +113,34 @@ class MigrationRunner
         return $max + 1;
     }
 
+    /** Name of the database lock held while migrations run or roll back. */
+    private const LOCK = 'rvc_coac_migrations';
+
+    /**
+     * Runs $work holding a database-wide lock, so two runs (a double click, a retry after the page
+     * timed out while a slow migration was still running) never apply the same migration twice.
+     */
+    private function locked(PDO $db, callable $work): array
+    {
+        $got = (int) $db->query("SELECT GET_LOCK('" . self::LOCK . "', 0)")->fetchColumn();
+        if ($got !== 1) {
+            throw new \RuntimeException('กำลังรัน migration อยู่แล้ว (อาจเป็นรายการที่ใช้เวลานาน) รอสักครู่แล้วรีเฟรชหน้านี้เพื่อดูสถานะ');
+        }
+        try {
+            return $work();
+        } finally {
+            $db->query("SELECT RELEASE_LOCK('" . self::LOCK . "')");
+        }
+    }
+
+    /** Whether a migration is recorded as applied (checked again right before each one runs). */
+    private function isApplied(PDO $db, string $name): bool
+    {
+        $stmt = $db->prepare('SELECT 1 FROM migrations WHERE migration = ?');
+        $stmt->execute([$name]);
+        return (bool) $stmt->fetchColumn();
+    }
+
     /**
      * Runs every pending migration in one new batch.
      * @return string[] names of migrations that were applied
@@ -120,6 +148,11 @@ class MigrationRunner
     public function runPending(PDO $db): array
     {
         $this->ensureMigrationsTable($db);
+        return $this->locked($db, fn () => $this->runPendingLocked($db));
+    }
+
+    private function runPendingLocked(PDO $db): array
+    {
         $pending = $this->pendingNames($db);
         if (empty($pending)) {
             return [];
@@ -127,6 +160,9 @@ class MigrationRunner
         $batch = $this->nextBatch($db);
         $ran = [];
         foreach ($pending as $name) {
+            if ($this->isApplied($db, $name)) {
+                continue; // applied meanwhile by another run
+            }
             $migration = $this->load($name);
             try {
                 // Migrations are typically DDL (CREATE TABLE...), which causes
@@ -134,7 +170,8 @@ class MigrationRunner
                 // in an explicit PDO transaction here (that would just throw
                 // "no active transaction" on the later commit()).
                 $migration->up($db);
-                $stmt = $db->prepare('INSERT INTO migrations (migration, batch, run_at) VALUES (?, ?, NOW())');
+                // IGNORE: never fail a migration that did its work just because it is already recorded.
+                $stmt = $db->prepare('INSERT IGNORE INTO migrations (migration, batch, run_at) VALUES (?, ?, NOW())');
                 $stmt->execute([$name, $batch]);
                 $ran[] = $name;
             } catch (\Throwable $e) {
@@ -151,6 +188,11 @@ class MigrationRunner
     public function rollbackLastBatch(PDO $db): array
     {
         $this->ensureMigrationsTable($db);
+        return $this->locked($db, fn () => $this->rollbackLocked($db));
+    }
+
+    private function rollbackLocked(PDO $db): array
+    {
         $lastBatch = (int) $db->query('SELECT COALESCE(MAX(batch), 0) FROM migrations')->fetchColumn();
         if ($lastBatch === 0) {
             return [];

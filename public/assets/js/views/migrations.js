@@ -40,9 +40,14 @@ export async function render(container) {
           </table></div>
         </section>`;
 
-        container.querySelector('#btn-run').addEventListener('click', async () => {
+        container.querySelector('#btn-run').addEventListener('click', async (ev) => {
+            // Some migrations take minutes (they fill in past data): keep the button off until it ends.
+            const btn = ev.currentTarget;
+            if (btn.disabled) return;
+            btn.disabled = true;
+            btn.textContent = 'กำลังรัน migration... (อย่าปิดหรือรีเฟรชหน้านี้)';
             try { await api.post('/admin/migrations/run'); error = null; await load(); }
-            catch (e) { error = e.message; draw(rows); }
+            catch (e) { error = e.message; await load().catch(() => draw(rows)); }
         });
         container.querySelector('#btn-rollback').addEventListener('click', async () => {
             if (!(await confirmDialog('การกระทำนี้จะรันคำสั่ง down() ของแต่ละไฟล์ในชุดนั้น', { title: 'ย้อนกลับ migration ชุดล่าสุด?', okText: 'ย้อนกลับ', danger: true }))) return;
