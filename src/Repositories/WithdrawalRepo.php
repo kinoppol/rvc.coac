@@ -168,6 +168,130 @@ class WithdrawalRepo
         return (int) $this->db->query("SELECT COUNT(*) FROM withdrawals WHERE status = 'pending'")->fetchColumn();
     }
 
+    /**
+     * One payment with what it paid for: the consignor's passbook since the payment before it up to this one
+     * (sales, fees, adjustments) and the products those sales were, with who asked, approved or cancelled.
+     */
+    public function detail(int $id): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT w.*, c.code AS consignor_code, c.name AS consignor_name,
+                    ru.full_name AS requested_by_name, au.full_name AS approved_by_name, cu.full_name AS cancelled_by_name
+             FROM withdrawals w
+             JOIN consignors c ON c.id = w.consignor_id
+             LEFT JOIN users ru ON ru.id = w.requested_by
+             LEFT JOIN users au ON au.id = w.approved_by
+             LEFT JOIN users cu ON cu.id = w.cancelled_by
+             WHERE w.id = ?"
+        );
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+        $row = $this->withEdits([$row])[0];
+        $row['id'] = (int) $row['id'];
+        $row['consignor_id'] = (int) $row['consignor_id'];
+        $row['amount'] = (float) $row['amount'];
+        $own = $this->db->prepare(
+            "SELECT id FROM ledger_entries
+             WHERE consignor_id = ? AND type = 'withdrawal' AND ref_no = ? AND amount_out > 0 ORDER BY id LIMIT 1"
+        );
+        $own->execute([(int) $row['consignor_id'], (string) $row['doc_no']]);
+        $entryId = $own->fetchColumn();
+        return ['withdrawal' => $row] + $this->accrued((int) $row['consignor_id'], $entryId ? (int) $entryId : null, (string) $row['doc_no']);
+    }
+
+    /**
+     * What a consignor has earned since their last payment, up to (not including) passbook entry $uptoEntryId,
+     * or up to now: the entries, the products sold (pieces, value, the store's fee, the consignor's share) and totals.
+     *
+     * @return array{previous: ?array, entries: array, items: array, totals: array}
+     */
+    public function accrued(int $consignorId, ?int $uptoEntryId = null, ?string $excludeDoc = null): array
+    {
+        $sql = "SELECT id, entry_date, ref_no, amount_out FROM ledger_entries
+                WHERE consignor_id = ? AND type = 'withdrawal' AND amount_out > 0";
+        $params = [$consignorId];
+        if ($uptoEntryId !== null) {
+            $sql .= ' AND id < ?';
+            $params[] = $uptoEntryId;
+        }
+        if ($excludeDoc !== null) {
+            $sql .= ' AND ref_no <> ?';
+            $params[] = $excludeDoc;
+        }
+        $prev = $this->db->prepare($sql . ' ORDER BY id DESC LIMIT 1');
+        $prev->execute($params);
+        $previous = $prev->fetch() ?: null;
+
+        $sql = 'SELECT id, entry_date, description, ref_no, type, amount_in, amount_out, balance_after
+                FROM ledger_entries WHERE consignor_id = ? AND id > ?';
+        $params = [$consignorId, $previous ? (int) $previous['id'] : 0];
+        if ($uptoEntryId !== null) {
+            $sql .= ' AND id < ?';
+            $params[] = $uptoEntryId;
+        }
+        $stmt = $this->db->prepare($sql . ' ORDER BY id LIMIT 1000');
+        $stmt->execute($params);
+        $entries = [];
+        $refs = [];
+        $in = 0.0;
+        $out = 0.0;
+        foreach ($stmt->fetchAll() as $e) {
+            $e['id'] = (int) $e['id'];
+            $e['amount_in'] = (float) $e['amount_in'];
+            $e['amount_out'] = (float) $e['amount_out'];
+            $e['balance_after'] = (float) $e['balance_after'];
+            $in += $e['amount_in'];
+            $out += $e['amount_out'];
+            if ($e['type'] === 'sale' && (string) $e['ref_no'] !== '') {
+                $refs[(string) $e['ref_no']] = true;
+            }
+            $entries[] = $e;
+        }
+
+        $items = [];
+        if ($refs) {
+            $marks = implode(',', array_fill(0, count($refs), '?'));
+            $q = $this->db->prepare(
+                "SELECT si.product_id, p.name, p.barcode, SUM(si.qty) AS qty,
+                        ROUND(SUM(si.qty * si.unit_price), 2) AS value, ROUND(SUM(si.fee_amount), 2) AS fee,
+                        COUNT(DISTINCT s.id) AS bills, MIN(s.business_date) AS first_date, MAX(s.business_date) AS last_date
+                 FROM sale_items si
+                 JOIN sales s ON s.id = si.sale_id
+                 JOIN products p ON p.id = si.product_id
+                 WHERE si.consignor_id = ? AND s.doc_no IN ($marks)
+                 GROUP BY si.product_id, p.name, p.barcode
+                 ORDER BY value DESC, p.name"
+            );
+            $q->execute(array_merge([$consignorId], array_keys($refs)));
+            foreach ($q->fetchAll() as $r) {
+                $value = (float) $r['value'];
+                $fee = (float) $r['fee'];
+                $items[] = [
+                    'product_id' => (int) $r['product_id'], 'name' => $r['name'], 'barcode' => $r['barcode'],
+                    'qty' => (int) $r['qty'], 'value' => $value, 'fee' => $fee, 'net' => round($value - $fee, 2),
+                    'bills' => (int) $r['bills'], 'first_date' => $r['first_date'], 'last_date' => $r['last_date'],
+                ];
+            }
+        }
+
+        return [
+            'previous' => $previous ? ['doc_no' => $previous['ref_no'], 'date' => $previous['entry_date'], 'amount' => (float) $previous['amount_out']] : null,
+            'entries' => $entries,
+            'items' => $items,
+            'totals' => [
+                'in' => round($in, 2), 'out' => round($out, 2), 'net' => round($in - $out, 2),
+                'sales_value' => round(array_sum(array_column($items, 'value')), 2),
+                'fee' => round(array_sum(array_column($items, 'fee')), 2),
+                'qty' => array_sum(array_column($items, 'qty')),
+                'from' => $entries[0]['entry_date'] ?? null,
+                'to' => $entries ? $entries[count($entries) - 1]['entry_date'] : null,
+            ],
+        ];
+    }
+
     public function find(int $id): ?array
     {
         $stmt = $this->db->prepare('SELECT * FROM withdrawals WHERE id = ?');

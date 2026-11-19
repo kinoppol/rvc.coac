@@ -444,6 +444,8 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.import'));
 
     $group->get('/withdrawals', [WithdrawController::class, 'index']);
+    $group->get('/withdrawals/{id:[0-9]+}', [WithdrawController::class, 'show']);
+    $group->get('/consignors/{id:[0-9]+}/accrued', [WithdrawController::class, 'accrued']);
     $group->post('/withdrawals', [WithdrawController::class, 'store'])
         ->add(new RoleGuard('withdraw.create'));
     $group->post('/withdrawals/{id}/approve', [WithdrawController::class, 'approve'])

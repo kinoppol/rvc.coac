@@ -47,6 +47,20 @@ class WithdrawController
         ] + ($limit !== null ? ['limit' => $limit] : []));
     }
 
+    /** One payment and what it paid for (the passbook since the payment before it, the products sold). */
+    public function show(Request $request, Response $response, array $args): Response
+    {
+        $detail = $this->repo()->detail((int) $args['id']);
+        return $detail ? $this->json($response, $detail) : $this->error($response, 'ไม่พบรายการเบิกจ่าย', 404);
+    }
+
+    /** What a consignor has earned since their last payment, shown before paying them. */
+    public function accrued(Request $request, Response $response, array $args): Response
+    {
+        $id = (int) $args['id'];
+        return $this->json($response, $this->repo()->accrued($id) + ['balance' => (new LedgerService(Db::connection()))->balanceOf($id)]);
+    }
+
     public function store(Request $request, Response $response): Response
     {
         $body = (array) $request->getParsedBody();
