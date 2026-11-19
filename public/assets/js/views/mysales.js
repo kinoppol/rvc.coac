@@ -204,9 +204,10 @@ export async function render(container, { user, params = {} }) {
               <div class="table-wrap"><table>
                 <thead><tr><th>สินค้า</th><th class="num">ราคา/ชิ้น</th><th class="num">จำนวน</th><th class="num">รวม</th><th class="num" title="คงเหลือของสินค้าหลังขายรายการนี้">คงเหลือหลังขาย</th></tr></thead>
                 <tbody>${s.items.map((it) => `<tr${(it.stock_after ?? it.stock_now) < 0 ? ' style="background:var(--bad-bg, #fdecec)"' : ''}><td>${escapeHtml(it.name)}${it.barcode ? '' : ' <span class="pill muted">ไม่มีบาร์โค้ด</span>'}${it.pack_size > 1 ? ` <span class="pill muted">ยกแพ็ค ${it.pack_size}</span>` : ''}
-                    <div class="muted" style="font-size:12px">${escapeHtml(it.consignor_name)}</div></td>
+                    <div class="muted" style="font-size:12px">${escapeHtml(it.consignor_name)}</div>
+                    ${it.promo_discount > 0 ? `<div style="font-size:12px;color:var(--ok)">🏷 ${escapeHtml(it.promo_name || 'โปรโมชั่นจับคู่')} ลด ฿${money(it.promo_discount)}</div>` : ''}</td>
                   <td class="num">${money(it.unit_price)}</td><td class="num">${count(it.qty)}</td><td class="num">${money(it.line_total)}</td>${stockCell(it)}</tr>`).join('')}</tbody>
-                <tfoot><tr><td colspan="2" style="font-weight:600">ยอดรวม</td><td class="num">${count(s.total_qty)}</td><td class="num" style="font-weight:700">฿${money(s.total_value)}</td><td></td></tr></tfoot>
+                <tfoot>${Number(s.promo_discount) > 0 ? `<tr><td colspan="3" style="color:var(--ok)">รวมส่วนลดโปรโมชั่นจับคู่สินค้า (ราคาต่อชิ้นหักส่วนลดแล้ว)</td><td class="num" style="color:var(--ok)">−฿${money(s.promo_discount)}</td><td></td></tr>` : ''}<tr><td colspan="2" style="font-weight:600">ยอดรวม</td><td class="num">${count(s.total_qty)}</td><td class="num" style="font-weight:700">฿${money(s.total_value)}</td><td></td></tr></tfoot>
               </table></div>
               <div style="margin-top:10px;font-size:13.5px">ชำระโดย: ${escapeHtml(paymentsText(s.payments))}
                 ${s.cash_received !== null ? `<span class="muted"> · รับเงินสด ${money(s.cash_received)} ทอน ${money(s.change_amount)}</span>` : ''}</div>

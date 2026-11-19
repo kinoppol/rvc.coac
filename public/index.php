@@ -7,6 +7,7 @@ use App\Controllers\AiReceiptController;
 use App\Controllers\AiUsageController;
 use App\Controllers\AppReleaseController;
 use App\Controllers\CapitalController;
+use App\Controllers\PromoController;
 use App\Controllers\ClosingController;
 use App\Controllers\DrawerController;
 use App\Controllers\WageController;
@@ -315,6 +316,17 @@ $app->group('/api', function ($group) {
     $group->get('/sales/options', [SalesController::class, 'options']);
     $group->post('/sales', [SalesController::class, 'store'])
         ->add(new RoleGuard('sales.create'));
+    // Bundle promotions (migration 0086): the POS asks for the cart's discount as it changes.
+    $group->post('/sales/promo-quote', [PromoController::class, 'quote'])
+        ->add(new RoleGuard('sales.create'));
+    $group->get('/promos', [PromoController::class, 'index'])
+        ->add(new RoleGuard('reports.view'));
+    $group->get('/promos/items', [PromoController::class, 'items'])
+        ->add(new RoleGuard('reports.view'));
+    $group->post('/promos', [PromoController::class, 'create']);
+    $group->put('/promos/{id:[0-9]+}', [PromoController::class, 'update']);
+    $group->post('/promos/{id:[0-9]+}/active', [PromoController::class, 'setActive']);
+    $group->post('/promos/{id:[0-9]+}/delete', [PromoController::class, 'delete']);
     $group->get('/sales/mine', [SaleEditController::class, 'mine'])
         ->add(new RoleGuard('sales.create'));
     $group->get('/sales/{id:[0-9]+}', [SaleEditController::class, 'show']);

@@ -210,7 +210,11 @@ class SalesController
                 'payments' => $payments,
                 // The cashier's own switch, honoured only for roles the admin allows.
                 'allow_short_stock' => $settings->sellShortStock($user['role'] ?? null, !empty($body['allow_short'])),
-            ]);
+                // Bundle promotions (migration 0086): the web POS asks for them, with the discount it showed.
+                'promos' => !empty($body['promos']),
+            ] + (isset($body['promo_discount']) && is_numeric($body['promo_discount']) ? ['expect_discount' => (float) $body['promo_discount']] : []));
+        } catch (\App\Services\PromoChangedException $e) {
+            return $this->error($response, $e->getMessage(), 409);
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

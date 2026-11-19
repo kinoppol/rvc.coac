@@ -48,6 +48,16 @@ class SaleService
             $this->db->beginTransaction();
         }
         try {
+            // Bundle promotions (migration 0086), web POS only: worked out on the cart as the cashier saw it
+            // (a sale group as one line), then carried onto the member lines below.
+            $promoTotal = 0.0;
+            if (!empty($opts['promos']) && PromoService::ready($this->db)) {
+                [$items, $promoTotal] = (new PromoService($this->db))->annotate($items);
+                if (isset($opts['expect_discount']) && abs($promoTotal - (float) $opts['expect_discount']) >= 0.005) {
+                    throw new PromoChangedException('ส่วนลดโปรโมชั่นเปลี่ยนไป (ตอนนี้ลด ฿' . number_format($promoTotal, 2)
+                        . ') — ตรวจยอดในตะกร้าแล้วชำระเงินอีกครั้ง');
+                }
+            }
             // A sale group (migration 0084) sold as one item: one line per member product, taken in turn.
             $items = (new SaleGroupService($this->db, $this->audit))->expand($items, !empty($opts['allow_short_stock']));
             $docNo = $this->docs->next('SL', 'sales', 'doc_no');
@@ -85,7 +95,8 @@ class SaleService
                     throw new \RuntimeException('จำนวนขายเกินสต๊อกคงเหลือของ ' . $product['name']);
                 }
 
-                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1));
+                $discount = round((float) ($line['promo_discount'] ?? 0), 2);
+                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1), $discount);
                 $unitPrice = $fig['unit_price'];
                 $packSize = $fig['pack_size'];
                 $feeOutPerUnit = $fig['fee_per_unit'];
@@ -110,19 +121,25 @@ class SaleService
                     $insItem->execute($row);
                 }
                 $itemId = (int) $this->db->lastInsertId();
+                if ($fig['discount'] > 0) {
+                    $this->db->prepare('UPDATE sale_items SET promo_discount = ?, promo_id = ? WHERE id = ?')
+                        ->execute([$fig['discount'], $line['promo_id'] ?? null, $itemId]);
+                }
 
                 $left = $this->products->applySale((int) $product['id'], $qty, $cashierId, $ip);
                 self::noteStockAfter($this->db, $itemId, $left);
 
                 $totalQty += $qty;
-                $totalValue += $unitPrice * $qty;
+                // A promotion's price per piece may run past the satang: the line comes to its regular price less its discount.
+                $lineValue = $fig['discount'] > 0 ? $fig['regular_price'] * $qty - $fig['discount'] : $unitPrice * $qty;
+                $totalValue += $lineValue;
 
                 if ($isStoreOwned) {
                     continue;
                 }
 
                 $cid = (int) $product['consignor_id'];
-                $perConsignor[$cid]['sale_value'] = ($perConsignor[$cid]['sale_value'] ?? 0) + $unitPrice * $qty;
+                $perConsignor[$cid]['sale_value'] = ($perConsignor[$cid]['sale_value'] ?? 0) + $lineValue;
                 $perConsignor[$cid]['fee_value'] = ($perConsignor[$cid]['fee_value'] ?? 0) + $feeOutPerUnit * $qty;
                 $perConsignor[$cid]['qty'] = ($perConsignor[$cid]['qty'] ?? 0) + $qty;
                 $perConsignor[$cid]['lines'] = ($perConsignor[$cid]['lines'] ?? 0) + 1;
@@ -141,12 +158,14 @@ class SaleService
                     $cashierId,
                     $businessDate
                 );
-                if ($agg['fee_value'] > 0) {
+                if (abs($agg['fee_value']) >= 0.005) {
+                    // Below zero only when a promotion took more off consigned goods than the store's fee:
+                    // the store bears the discount, the consignor still gets their full share.
                     $feeRef = $this->docs->next('FEE', 'ledger_entries', 'ref_no');
                     $this->ledger->append(
                         $consignorId,
                         'fee',
-                        "หักค่าฝากขาย {$agg['qty']} ชิ้น",
+                        $agg['fee_value'] > 0 ? "หักค่าฝากขาย {$agg['qty']} ชิ้น" : "ส่วนลดโปรโมชั่นที่ร้านรับภาระเกินค่าฝากขาย {$agg['qty']} ชิ้น",
                         $feeRef,
                         0,
                         round($agg['fee_value'], 2),
@@ -158,6 +177,9 @@ class SaleService
 
             $upd = $this->db->prepare('UPDATE sales SET total_qty = ?, total_value = ? WHERE id = ?');
             $upd->execute([$totalQty, round($totalValue, 2), $saleId]);
+            if ($promoTotal > 0) {
+                $this->db->prepare('UPDATE sales SET promo_discount = ? WHERE id = ?')->execute([round($promoTotal, 2), $saleId]);
+            }
 
             $change = 0.0;
             $paymentWarning = null;
@@ -168,7 +190,7 @@ class SaleService
             $this->audit->log('sales', $saleId, 'create', null, [
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
                 'business_date' => $businessDate, 'after_hours' => $afterHours,
-            ], $cashierId, $ip);
+            ] + ($promoTotal > 0 ? ['promo_discount' => round($promoTotal, 2)] : []), $cashierId, $ip);
 
             if ($own) {
                 $this->db->commit();
@@ -176,7 +198,7 @@ class SaleService
             return [
                 'id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
                 'change' => $change, 'business_date' => $businessDate, 'after_hours' => $afterHours,
-                'payment_warning' => $paymentWarning,
+                'payment_warning' => $paymentWarning, 'promo_discount' => round($promoTotal, 2),
             ];
         } catch (\Throwable $e) {
             if ($own) {
@@ -204,9 +226,10 @@ class SaleService
      * store's own goods it is the gross margin per piece.
      * @return array{unit_price:float, pack_size:int, fee_per_unit:float, fee_amount:float, cost_amount:float}
      */
-    public function lineFigures(array $product, int $qty, ?float $unitPrice, int $packSize = 1): array
+    public function lineFigures(array $product, int $qty, ?float $unitPrice, int $packSize = 1, float $discount = 0.0): array
     {
         $unitPrice = $unitPrice !== null ? round($unitPrice, 2) : (float) $product['sale_price'];
+        $regular = $unitPrice;
         // A whole pack: qty is still in pieces, each at the pack price per piece.
         if ($packSize > 1) {
             $pack = $this->db->prepare('SELECT sale_price FROM product_pack_barcodes WHERE product_id = ? AND pack_size = ? AND sale_price IS NOT NULL LIMIT 1');
@@ -216,6 +239,14 @@ class SaleService
                 throw new \RuntimeException("{$product['name']} ไม่มีราคาขายยกแพ็ค {$packSize} ชิ้น");
             }
             $unitPrice = round((float) $packPrice / $packSize, 4);
+            $regular = $unitPrice;
+            $discount = 0.0; // a whole pack has its own price: no bundle promotion
+        }
+        // A bundle promotion (PromoService): $discount baht off the whole line.
+        $discount = $qty > 0 ? min(max(0.0, round($discount, 2)), round($regular * $qty, 2)) : 0.0;
+        $perUnitOff = $qty > 0 ? $discount / $qty : 0.0;
+        if ($discount > 0) {
+            $unitPrice = round($regular - $perUnitOff, 4);
         }
 
         if ($product['consignor_id'] === null) {
@@ -226,11 +257,14 @@ class SaleService
         } else {
             $beneficiary = $product['rounding_beneficiary'];
             $feeOutPerUnit = (float) $product['fee_per_unit'] + ($beneficiary === 'store' ? (float) $product['round_per_unit'] : 0);
-            $costAmount = round(($unitPrice - $feeOutPerUnit) * $qty, 2);
+            // The consignor's share stays that of the regular price: a promotion comes out of the store's fee.
+            $costAmount = round(($regular - $feeOutPerUnit) * $qty, 2);
+            $feeOutPerUnit -= $perUnitOff;
         }
         return [
             'unit_price' => $unitPrice, 'pack_size' => max(1, $packSize), 'fee_per_unit' => $feeOutPerUnit,
             'fee_amount' => round($feeOutPerUnit * $qty, 2), 'cost_amount' => $costAmount,
+            'discount' => $discount, 'regular_price' => $regular,
         ];
     }
 

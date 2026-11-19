@@ -124,9 +124,13 @@ class SaleEditService
         $snap = $this->snapshot($saleId);
         // Stock left right after each line was sold, and the product's stock now (below zero = check it).
         $hasAfter = \App\Support\Db::hasColumn($this->db, 'sale_items', 'stock_after');
+        // Bundle promotion on the line (migration 0086): unit_price is already after it.
+        $promo = PromoService::ready($this->db);
         $stock = $this->db->prepare(
-            'SELECT si.id, ' . ($hasAfter ? 'si.stock_after' : 'NULL AS stock_after') . ', p.qty_stock
-             FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?'
+            'SELECT si.id, ' . ($hasAfter ? 'si.stock_after' : 'NULL AS stock_after') . ', p.qty_stock, '
+            . ($promo ? 'si.promo_discount, pb.name AS promo_name' : 'NULL AS promo_discount, NULL AS promo_name') . '
+             FROM sale_items si JOIN products p ON p.id = si.product_id'
+            . ($promo ? ' LEFT JOIN promo_bundles pb ON pb.id = si.promo_id' : '') . ' WHERE si.sale_id = ?'
         );
         $stock->execute([$saleId]);
         $byLine = [];
@@ -137,6 +141,8 @@ class SaleEditService
             $r = $byLine[(int) $it['sale_item_id']] ?? null;
             $it['stock_after'] = $r && $r['stock_after'] !== null ? (int) $r['stock_after'] : null;
             $it['stock_now'] = $r ? (int) $r['qty_stock'] : null;
+            $it['promo_discount'] = $r && $r['promo_discount'] !== null ? (float) $r['promo_discount'] : 0.0;
+            $it['promo_name'] = $r['promo_name'] ?? null;
         }
         unset($it);
         $sale['items'] = $snap['items'];

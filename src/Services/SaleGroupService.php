@@ -317,8 +317,18 @@ class SaleGroupService
                 $left[$best]--;
                 $take[$best] = ($take[$best] ?? 0) + 1;
             }
+            // A bundle promotion's discount on the group line (PromoService) is shared by the pieces.
+            $off = round((float) ($line['promo_discount'] ?? 0), 2);
+            $given = 0.0;
+            $k = 0;
             foreach ($take as $pid => $n) {
-                $out[] = ['product_id' => $pid, 'qty' => $n, 'unit_price' => (float) $g['sale_price'], 'group_id' => $gid];
+                $row = ['product_id' => $pid, 'qty' => $n, 'unit_price' => (float) $g['sale_price'], 'group_id' => $gid];
+                if ($off > 0) {
+                    $share = ++$k === count($take) ? round($off - $given, 2) : round($off * $n / $qty, 2);
+                    $given += $share;
+                    $row += ['promo_discount' => $share, 'promo_id' => $line['promo_id'] ?? null];
+                }
+                $out[] = $row;
             }
         }
         return $out;

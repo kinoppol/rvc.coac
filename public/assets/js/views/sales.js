@@ -125,6 +125,11 @@ export async function render(container, { user } = {}) {
     let drawnTerm = ''; // the term the product list on screen was filtered by
     let firstLoad = null; // the opening product load; a scan that comes before it waits for it
     let loaded = false;
+    // Bundle promotions (โปรโมชั่นจับคู่สินค้า): the server works out the cart's discount as it changes.
+    // key = the sale lines it was worked out for; a cart that no longer matches waits for a new quote.
+    let promo = { key: '[]', total: 0, lines: {}, applied: [] };
+    let promoTimer;
+    let promoAsk = null; // the quote in flight: { key, done: Promise }
 
     const life = new AbortController();
     const on = (target, type, fn, capture = false) => target.addEventListener(type, fn, { signal: life.signal, capture });
@@ -174,6 +179,7 @@ export async function render(container, { user } = {}) {
             <div class="pos-cart-list" data-el="cart"></div>
             <div class="pos-last" data-el="last" hidden></div>
             <div class="pos-cart-foot">
+              <div class="pos-promos" data-el="promos" hidden></div>
               <div class="pos-total"><span>ยอดรวม <small data-el="cart-qty"></small></span><b data-el="total">฿ 0.00</b></div>
               <button type="button" class="btn pos-pay" data-act="pay">ชำระเงิน</button>
             </div>
@@ -454,8 +460,52 @@ export async function render(container, { user } = {}) {
             }).join('')}</div>`;
     }
 
-    function cartTotal() {
+    /** The cart as POST /sales takes it; a sale group (id = -group id) is sold as one item. */
+    function saleItems() {
+        return cart.map((i) => (i.id < 0 ? { group_id: -i.id, qty: i.qty }
+            : { product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) }));
+    }
+
+    function cartSubtotal() {
         return Math.round(cart.reduce((s, i) => s + linePrice(i) * i.qty, 0) * 100) / 100;
+    }
+
+    /** The bundle discount worked out for this very cart (0 while a new quote is on its way). */
+    function promoNow() {
+        return promo.key === JSON.stringify(saleItems()) ? promo : { total: 0, lines: {}, applied: [] };
+    }
+
+    function cartTotal() {
+        return Math.round((cartSubtotal() - promoNow().total) * 100) / 100;
+    }
+
+    /** Asks the server for the cart's bundle discount; resolves once the quote for the current cart is in. */
+    function quotePromo() {
+        const items = saleItems();
+        const key = JSON.stringify(items);
+        if (promo.key === key) return Promise.resolve();
+        if (promoAsk?.key === key) return promoAsk.done;
+        const done = (items.length ? api.post('/sales/promo-quote', { items }).then((r) => r.data)
+            : Promise.resolve({ total: 0, lines: {}, applied: [] }))
+            .catch(() => ({ total: 0, lines: {}, applied: [] }))
+            .then((d) => {
+                if (promoAsk?.key === key) promoAsk = null;
+                promo = { key, total: Number(d.total) || 0, lines: d.lines || {}, applied: d.applied || [] };
+                if (key === JSON.stringify(saleItems()) && root.isConnected) drawCart();
+            });
+        promoAsk = { key, done };
+        return done;
+    }
+
+    function drawPromos() {
+        const p = promoNow();
+        const box = el('promos');
+        const waiting = promo.key !== JSON.stringify(saleItems()) && cart.length;
+        box.hidden = !p.applied.length && !waiting;
+        box.innerHTML = p.applied.length ? `<div class="pos-promo-line muted"><span>ราคาปกติ</span><span>฿${money(cartSubtotal())}</span></div>
+            ${p.applied.map((a) => `
+            <div class="pos-promo-line"><span>🏷 ${escapeHtml(a.name)}${a.sets > 1 ? ` ×${a.sets}` : ''}</span><b>−฿${money(a.discount)}</b></div>`).join('')}`
+            : waiting ? '<div class="pos-promo-line muted"><span>กำลังตรวจโปรโมชั่น...</span></div>' : '';
     }
 
     function drawCart() {
@@ -463,6 +513,10 @@ export async function render(container, { user } = {}) {
         el('cart-title').textContent = `ตะกร้าสินค้า (${cart.length})`;
         el('cart-qty').textContent = qty ? `${qty} ชิ้น` : '';
         el('total').textContent = `฿ ${money(cartTotal())}`;
+        drawPromos();
+        clearTimeout(promoTimer);
+        if (promo.key !== JSON.stringify(saleItems())) promoTimer = setTimeout(quotePromo, 150);
+        const promoLines = promoNow().lines;
         root.querySelector('[data-act="pay"]').disabled = !cart.length;
         root.querySelector('[data-act="clear-cart"]').disabled = !cart.length;
         root.querySelector('[data-act="hold"]').disabled = !cart.length;
@@ -479,7 +533,7 @@ export async function render(container, { user } = {}) {
               <input data-qty="${i}" inputmode="numeric" value="${it.qty}" aria-label="${it.pack ? 'จำนวนแพ็ค' : 'จำนวน'}">
               <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${inCart(it.id) + lineSize(it) > it.qty_stock && !mayShort(it) ? 'disabled' : ''}>+</button>
             </div>
-            <b class="pos-line-total">฿${money(linePrice(it) * it.qty)}</b>
+            <b class="pos-line-total">฿${money(linePrice(it) * it.qty)}${promoLines[i]?.discount > 0 ? `<small class="pos-line-promo">โปร −฿${money(promoLines[i].discount)}</small>` : ''}</b>
             <button type="button" class="pos-line-del" data-remove="${i}" aria-label="เอาออกจากตะกร้า">✕</button>
           </div>`).join('') || '<div class="empty">ยังไม่มีสินค้าในตะกร้า<br><small class="muted">สแกนบาร์โค้ด หรือแตะสินค้าเพื่อเพิ่ม</small></div>';
     }
@@ -993,8 +1047,10 @@ export async function render(container, { user } = {}) {
             try {
                 const res = await api.post('/sales', {
                     // A sale group (id = -group id) is sold as one item; the server takes the pieces from its members in turn.
-                    items: cart.map((i) => (i.id < 0 ? { group_id: -i.id, qty: i.qty }
-                        : { product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) })),
+                    items: saleItems(),
+                    // Bundle promotions: the server works them out again and refuses if they no longer match.
+                    promos: true,
+                    promo_discount: promoNow().total,
                     allow_short: allowShort(),
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });
@@ -1004,6 +1060,15 @@ export async function render(container, { user } = {}) {
                 refreshDrawer();
             } catch (e) {
                 error = e.message;
+                if (e.status === 409) {
+                    // The bundle discount changed (a promotion or price was changed meanwhile): new figures, pay again.
+                    busy = false;
+                    promo = { key: '', total: 0, lines: {}, applied: [] };
+                    close();
+                    message(e.message, 'warn');
+                    await quotePromo();
+                    return;
+                }
                 if (e.status === 428) {
                     await refreshDrawer();
                     skipEnds = 0;
@@ -1223,7 +1288,10 @@ export async function render(container, { user } = {}) {
                     if (yes) { cart = []; redraw(); }
                 });
             } else if (t.dataset.act === 'pay') {
-                openPayment();
+                if (!cart.length) return;
+                clearTimeout(promoTimer);
+                t.disabled = true;
+                quotePromo().then(() => { t.disabled = !cart.length; if (!modal) openPayment(); });
                 return;
             } else if (t.dataset.act === 'sound') {
                 openSoundPanel(t, () => { t.innerHTML = soundButtonLabel(); });
