@@ -91,8 +91,10 @@ class MonthlyClosingService
             }
         }
         $f = [];
-        $add = function (string $key, string $section, string $label, float|int $value, string $unit = 'money', string $note = '') use (&$f) {
-            $f[$key] = ['section' => $section, 'label' => $label, 'value' => $unit === 'money' ? round((float) $value, 2) : (int) $value, 'unit' => $unit, 'note' => $note];
+        // Database sums arrive as strings (PDO): any number-like value is taken.
+        $add = function (string $key, string $section, string $label, mixed $value, string $unit = 'money', string $note = '') use (&$f) {
+            $n = is_numeric($value) ? (float) $value : 0.0;
+            $f[$key] = ['section' => $section, 'label' => $label, 'value' => $unit === 'money' ? round($n, 2) : (int) round($n), 'unit' => $unit, 'note' => $note];
         };
 
         // ---- Income and expenses (as the profit statement counts them) ----
