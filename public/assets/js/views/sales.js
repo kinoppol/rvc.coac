@@ -31,6 +31,7 @@ const GROUPS = [
     ['all', 'สินค้าทั้งหมด'],
     ['nobarcode', 'ไม่มีบาร์โค้ด'],
     ['consign', 'สินค้าฝากขาย'],
+    ['promo', 'สินค้าโปรโมชั่น'],
 ];
 const VIEWS = [
     ['grid', 'รูปภาพ'],
@@ -130,6 +131,12 @@ export async function render(container, { user } = {}) {
     let promo = { key: '[]', total: 0, lines: {}, applied: [] };
     let promoTimer;
     let promoAsk = null; // the quote in flight: { key, done: Promise }
+    // Promotions running now (GET /sales/promos): which goods are on one, and what a cart still lacks.
+    let promos = [];
+    // A POS item's key in a promotion slot: a sale group (id = -group id) or a product.
+    const itemKey = (p) => (p.id < 0 ? `g${-p.id}` : `p${p.id}`);
+    const promosOf = (p) => promos.filter((r) => r.slots.some((s) => s.keys.includes(itemKey(p))));
+    const promoName = (id) => promos.find((r) => r.id === Number(id))?.name || promo.applied.find((a) => a.promo_id === Number(id))?.name || 'โปรโมชั่น';
 
     const life = new AbortController();
     const on = (target, type, fn, capture = false) => target.addEventListener(type, fn, { signal: life.signal, capture });
@@ -155,6 +162,7 @@ export async function render(container, { user } = {}) {
           <button type="button" class="pos-tool" data-act="full" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">⛶</button>
         </div>
         <div data-el="hours"></div>
+        <div data-el="promobar"></div>
         <div data-el="drawerbar"></div>
         <div data-el="shortbar"></div>
         <div data-el="msg"></div>
@@ -326,7 +334,7 @@ export async function render(container, { user } = {}) {
 
     function matches() {
         const term = listTerm();
-        const inGroup = GROUP_FN[group] || GROUP_FN.all;
+        const inGroup = group === 'promo' ? (p) => promosOf(p).length > 0 : (GROUP_FN[group] || GROUP_FN.all);
         const list = products.filter((p) => inGroup(p)
             && (!term || p.name.toLowerCase().includes(term) || (p.barcode || '').includes(term)));
         const fn = SORT_FN[sort] || SORT_FN.name;
@@ -402,7 +410,7 @@ export async function render(container, { user } = {}) {
         box.removeAttribute('aria-busy');
         if (!list.length) {
             const term = drawnTerm ? q.value.trim() : '';
-            box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : group !== 'all' ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
+            box.innerHTML = `<div class="empty">${term ? 'ไม่พบสินค้าที่ค้นหา' : group === 'promo' ? 'ไม่มีสินค้าที่ร่วมโปรโมชั่นตอนนี้' : group !== 'all' ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่มีสินค้าคงเหลือ'}</div>`;
             if (term && !allowShort()) {
                 if (outHints.term !== term) {
                     clearTimeout(outTimer);
@@ -443,6 +451,7 @@ export async function render(container, { user } = {}) {
                 const n = inCart(p.id);
                 return withPacks(p, `<button type="button" class="pos-tile${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
                   <span class="pos-tile-img">${photoImg(p)}</span>
+                  ${promoTag(p)}
                   <span class="pos-tile-name">${escapeHtml(p.name)}</span>
                   ${p.consignor_id != null ? `<span class="pos-tile-consignor">ผู้ฝาก: ${escapeHtml(p.consignor_name)}</span>` : ''}
                   <span class="pos-tile-meta"><b>฿${money(p.sale_price)}</b><span>เหลือ ${p.qty_stock - n}</span></span>
@@ -452,7 +461,7 @@ export async function render(container, { user } = {}) {
             : `<div class="pos-list">${list.map((p) => {
                 const n = inCart(p.id);
                 return withPacks(p, `<button type="button" class="pos-row${n ? ' picked' : ''}${p.qty_stock < 1 ? ' out' : ''}" data-pick="${p.id}">
-                  <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
+                  <span class="pos-row-name">${escapeHtml(p.name)}${promoTag(p, true)}<small>${escapeHtml(p.consignor_name)}${p.barcode ? ` · ${escapeHtml(p.barcode)}` : ''}</small></span>
                   <span class="pos-row-stock">เหลือ ${p.qty_stock - n}</span>
                   <b>฿${money(p.sale_price)}</b>
                   ${n ? `<span class="pos-tile-badge">${n}</span>` : ''}
@@ -464,6 +473,52 @@ export async function render(container, { user } = {}) {
     function saleItems() {
         return cart.map((i) => (i.id < 0 ? { group_id: -i.id, qty: i.qty }
             : { product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) }));
+    }
+
+    /** The "โปร" tag on a product tile / row: the promotions it is part of. */
+    function promoTag(p, inline = false) {
+        const list = promosOf(p);
+        if (!list.length) return '';
+        const names = list.map((r) => r.name).join(' · ');
+        return `<span class="pos-promo-tag${inline ? ' inline' : ''}" title="ร่วมโปรโมชั่น: ${escapeHtml(names)}">🏷 ${escapeHtml(list.length > 1 ? `โปร ${list.length} รายการ` : list[0].name)}</span>`;
+    }
+
+    /** The promotions running now, above the products; tapping it lists the goods on promotion. */
+    function drawPromoBar() {
+        const box = el('promobar');
+        if (!promos.length) { box.innerHTML = ''; return; }
+        box.innerHTML = `
+          <div class="pos-promobar">
+            <span class="pos-promobar-title">🏷 โปรโมชั่นตอนนี้</span>
+            <span class="pos-promobar-list">${promos.map((r) => `<span class="pos-promobar-chip" title="${escapeHtml(r.slots.map((s) => `${s.qty} ชิ้นจาก ${s.names.join(', ')}`).join(' + '))}${r.ends_on ? ` · ถึง ${escapeHtml(r.ends_on.slice(0, 16))}` : ''}">${escapeHtml(r.name)}</span>`).join('')}</span>
+            <button type="button" class="btn secondary sm" data-act="promo-filter">${group === 'promo' ? 'ดูสินค้าทั้งหมด' : 'ดูสินค้าที่ร่วมโปร'}</button>
+          </div>`;
+    }
+
+    /**
+     * Promotions the cart has started but not filled: what is still missing for one set
+     * (e.g. "เพิ่ม กาโต้ 1 ชิ้น"). Promotions already given are left out.
+     */
+    function promoHints(applied) {
+        const got = new Set(applied.map((a) => a.promo_id));
+        const pieces = {};
+        cart.forEach((c) => { if (!c.pack) pieces[itemKey(c)] = (pieces[itemKey(c)] || 0) + c.qty; });
+        const out = [];
+        for (const r of promos) {
+            if (got.has(r.id)) continue;
+            let started = false;
+            const missing = [];
+            for (const s of r.slots) {
+                const have = s.keys.reduce((n, k) => n + (pieces[k] || 0), 0);
+                if (have > 0) started = true;
+                if (have < s.qty) {
+                    const what = s.label || (s.names.length > 2 ? `${s.names.slice(0, 2).join(' / ')} ฯลฯ` : s.names.join(' / '));
+                    missing.push(`${what} ${s.qty - have} ชิ้น`);
+                }
+            }
+            if (started && missing.length) out.push({ name: r.name, missing });
+        }
+        return out;
     }
 
     function cartSubtotal() {
@@ -501,11 +556,16 @@ export async function render(container, { user } = {}) {
         const p = promoNow();
         const box = el('promos');
         const waiting = promo.key !== JSON.stringify(saleItems()) && cart.length;
-        box.hidden = !p.applied.length && !waiting;
-        box.innerHTML = p.applied.length ? `<div class="pos-promo-line muted"><span>ราคาปกติ</span><span>฿${money(cartSubtotal())}</span></div>
-            ${p.applied.map((a) => `
-            <div class="pos-promo-line"><span>🏷 ${escapeHtml(a.name)}${a.sets > 1 ? ` ×${a.sets}` : ''}</span><b>−฿${money(a.discount)}</b></div>`).join('')}`
-            : waiting ? '<div class="pos-promo-line muted"><span>กำลังตรวจโปรโมชั่น...</span></div>' : '';
+        const hints = waiting ? [] : promoHints(p.applied);
+        box.hidden = !p.applied.length && !waiting && !hints.length;
+        box.innerHTML = `${p.applied.length ? `<div class="pos-promo-got">
+              <div class="pos-promo-head">🎉 ได้ส่วนลดโปรโมชั่น <b>−฿${money(p.total)}</b></div>
+              ${p.applied.map((a) => `
+              <div class="pos-promo-line"><span>🏷 ${escapeHtml(a.name)}${a.sets > 1 ? ` <b>×${a.sets} ชุด</b>` : ''}</span><b>−฿${money(a.discount)}</b></div>`).join('')}
+              <div class="pos-promo-line muted"><span>ราคาปกติ</span><span>฿${money(cartSubtotal())}</span></div>
+            </div>` : ''}
+            ${waiting ? '<div class="pos-promo-line muted"><span>กำลังตรวจโปรโมชั่น...</span></div>' : ''}
+            ${hints.map((h) => `<div class="pos-promo-hint">💡 <b>${escapeHtml(h.name)}</b>: เพิ่ม ${escapeHtml(h.missing.join(' + '))} รับส่วนลด</div>`).join('')}`;
     }
 
     function drawCart() {
@@ -525,7 +585,7 @@ export async function render(container, { user } = {}) {
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
             <span class="pos-line-img">${photoImg(it)}</span>
-            <div class="pos-line-name">${escapeHtml(it.name)}${it.pack ? ` <span class="pill ok pos-pack-pill">ยกแพ็ค ×${it.pack.pack_size}</span>` : ''}
+            <div class="pos-line-name">${escapeHtml(it.name)}${it.pack ? ` <span class="pill ok pos-pack-pill">ยกแพ็ค ×${it.pack.pack_size}</span>` : ''}${promoLines[i]?.discount > 0 ? ` <span class="pos-promo-tag inline">🏷 ${escapeHtml(promoName(promoLines[i].promo_id))}</span>` : ''}
               <small>${it.pack ? `แพ็คละ ฿${money(it.pack.sale_price)} (${it.pack.pack_size} ชิ้น)` : `฿${money(it.sale_price)}`} · ${escapeHtml(it.consignor_name)}</small>
               ${!it.pack && it.packs?.length ? `<span class="pos-pack-adds">${it.packs.map((k) => `<button type="button" class="link-btn" data-add-pack="${i}" data-size="${k.pack_size}" title="เพิ่มยกแพ็ค ${k.pack_size} ชิ้น ราคาแพ็ค">+ ยกแพ็ค ×${k.pack_size} ฿${money(k.sale_price)}</button>`).join(' ')}</span>` : ''}</div>
             <div class="pos-qty">
@@ -716,6 +776,7 @@ export async function render(container, { user } = {}) {
 
     function redraw() {
         drawHours();
+        drawPromoBar();
         drawDrawerBar();
         drawShortBar();
         drawProducts();
@@ -850,8 +911,12 @@ export async function render(container, { user } = {}) {
 
     async function loadProducts() {
         try {
-            const res = await api.get(`/sales/products?all=1&groups=1&sort=popular${allowShort() ? '&short=1' : ''}`);
+            const [res, running] = await Promise.all([
+                api.get(`/sales/products?all=1&groups=1&sort=popular${allowShort() ? '&short=1' : ''}`),
+                api.get('/sales/promos').catch(() => ({ data: [] })),
+            ]);
             products = res.data.map(normalize);
+            promos = running.data || [];
             loaded = true;
         } catch (e) {
             message(e.message, 'error');
@@ -1287,6 +1352,11 @@ export async function render(container, { user } = {}) {
                 if (cart.length) confirmDialog(`สินค้า ${cart.length} รายการในตะกร้าจะถูกนำออกทั้งหมด`, { title: 'ล้างตะกร้าสินค้า?', okText: 'ล้างตะกร้า', danger: true }).then((yes) => {
                     if (yes) { cart = []; redraw(); }
                 });
+            } else if (t.dataset.act === 'promo-filter') {
+                group = group === 'promo' ? 'all' : 'promo';
+                savePref('group', group);
+                drawPromoBar();
+                drawProducts();
             } else if (t.dataset.act === 'pay') {
                 if (!cart.length) return;
                 clearTimeout(promoTimer);

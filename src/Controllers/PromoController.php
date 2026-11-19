@@ -87,6 +87,12 @@ class PromoController
         return $this->run($request, $response, fn ($uid, $ip) => $this->service()->delete((int) $args['id'], $uid, $ip));
     }
 
+    /** GET /sales/promos — the promotions running now (POS badges and hints). */
+    public function running(Request $request, Response $response): Response
+    {
+        return $this->json($response, ['data' => (new PromoService(Db::connection()))->posList()]);
+    }
+
     /** POST /sales/promo-quote {items} — the bundle discounts of a POS cart (same lines as POST /sales). */
     public function quote(Request $request, Response $response): Response
     {

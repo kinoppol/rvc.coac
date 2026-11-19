@@ -319,6 +319,8 @@ $app->group('/api', function ($group) {
     // Bundle promotions (migration 0086): the POS asks for the cart's discount as it changes.
     $group->post('/sales/promo-quote', [PromoController::class, 'quote'])
         ->add(new RoleGuard('sales.create'));
+    $group->get('/sales/promos', [PromoController::class, 'running'])
+        ->add(new RoleGuard('sales.create'));
     $group->get('/promos', [PromoController::class, 'index'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/promos/items', [PromoController::class, 'items'])

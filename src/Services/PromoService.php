@@ -425,8 +425,11 @@ class PromoService
         }
         $ids = array_map(fn ($p) => (int) $p['id'], $promos);
         $stmt = $this->db->prepare(
-            'SELECT s.promo_id, s.id, s.qty, i.product_id, i.sale_group_id FROM promo_bundle_slots s
+            'SELECT s.promo_id, s.id, s.qty, s.label, i.product_id, i.sale_group_id, COALESCE(p.name, g.name) AS item_name
+             FROM promo_bundle_slots s
              JOIN promo_bundle_items i ON i.slot_id = s.id
+             LEFT JOIN products p ON p.id = i.product_id
+             LEFT JOIN sale_groups g ON g.id = i.sale_group_id
              WHERE s.promo_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY s.position, s.id'
         );
         $stmt->execute($ids);
@@ -434,13 +437,16 @@ class PromoService
         foreach ($stmt->fetchAll() as $r) {
             $slot = &$slots[(int) $r['promo_id']][(int) $r['id']];
             $slot['qty'] = (int) $r['qty'];
+            $slot['label'] = $r['label'];
+            $slot['names'][] = (string) $r['item_name'];
             $slot['keys'][] = $r['sale_group_id'] !== null ? 'g' . $r['sale_group_id'] : 'p' . $r['product_id'];
             unset($slot);
         }
         $out = [];
         foreach ($promos as $p) {
             if (!empty($slots[(int) $p['id']])) {
-                $out[] = ['id' => (int) $p['id'], 'name' => $p['name'], 'kind' => $p['kind'], 'value' => (float) $p['value'], 'slots' => array_values($slots[(int) $p['id']])];
+                $out[] = ['id' => (int) $p['id'], 'name' => $p['name'], 'kind' => $p['kind'], 'value' => (float) $p['value'],
+                    'ends_on' => $p['ends_on'], 'slots' => array_values($slots[(int) $p['id']])];
             }
         }
         return $out;
@@ -603,6 +609,18 @@ class PromoService
             $lines[$i] = ['key' => $key, 'qty' => (int) ($l['qty'] ?? 0), 'price' => $price];
         }
         return $lines;
+    }
+
+    /**
+     * GET /sales/promos: the promotions running now, for the POS to show which goods are on a
+     * promotion and what a cart still lacks for one (slots with their item keys and names).
+     */
+    public function posList(): array
+    {
+        if (!self::ready($this->db)) {
+            return [];
+        }
+        return $this->running(date($this->timed() ? 'Y-m-d H:i:s' : 'Y-m-d'));
     }
 
     /** POST /sales/promo-quote: the discounts of a POS cart, per cart line (by index). */

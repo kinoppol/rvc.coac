@@ -733,9 +733,18 @@ div.pos-row.out { cursor: not-allowed; }
 .pos-qty input { width: 64px; height: 48px; text-align: center; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; font-size: 18px; font-weight: 700; }
 .pos-line-total { grid-area: total; font-size: 18px; text-align: right; }
 .pos-cart-foot { padding: 14px; border-top: 1px solid var(--border); background: var(--surface2); display: flex; flex-direction: column; gap: 12px; }
-.pos-promos { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.pos-promos { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 .pos-promo-line { display: flex; justify-content: space-between; gap: 8px; }
 .pos-promo-line b { color: var(--ok, #16a34a); white-space: nowrap; }
+.pos-promo-got { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 2px solid var(--ok); border-radius: 10px; background: var(--ok-bg); }
+.pos-promo-head { display: flex; justify-content: space-between; gap: 8px; font-size: 15.5px; font-weight: 700; color: var(--ok); }
+.pos-promo-hint { padding: 7px 10px; border: 1px dashed var(--warn); border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 13.5px; line-height: 1.45; }
+.pos-promo-tag { position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px); padding: 3px 9px; border-radius: 99px; background: #e11d48; color: #fff; font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 6px rgba(16,24,40,.3); }
+.pos-promo-tag.inline { position: static; display: inline-block; vertical-align: middle; margin-left: 6px; max-width: 220px; font-size: 12px; padding: 1px 8px; box-shadow: none; }
+.pos-promobar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-radius: 10px; border: 2px solid #e11d48; background: rgba(225, 29, 72, .08); font-size: 14px; }
+.pos-promobar-title { font-weight: 700; color: #e11d48; }
+.pos-promobar-list { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.pos-promobar-chip { padding: 3px 10px; border-radius: 99px; background: #e11d48; color: #fff; font-weight: 600; font-size: 13px; }
 .pos-line-promo { display: block; font-size: 12px; font-weight: 600; color: var(--ok, #16a34a); }
 .pos-total { display: flex; justify-content: space-between; align-items: baseline; font-size: 18px; font-weight: 700; }
 .pos-total small { font-size: 13px; color: var(--muted); font-weight: 500; }
