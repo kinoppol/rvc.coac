@@ -32,6 +32,17 @@ class PromoService
         return Db::hasColumn($db, 'sales', 'promo_discount');
     }
 
+    /** Whether a promotion's start / end carry a time of day (migration 0087); before it, days only. */
+    private function timed(): bool
+    {
+        static $timed = null;
+        if ($timed === null) {
+            $stmt = $this->db->query("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'promo_bundles' AND COLUMN_NAME = 'ends_on'");
+            $timed = strtolower((string) $stmt->fetchColumn()) === 'datetime';
+        }
+        return $timed;
+    }
+
     private function assertReady(): void
     {
         if (!self::ready($this->db)) {
@@ -85,7 +96,7 @@ class PromoService
                 'id' => (int) $s['id'], 'label' => $s['label'], 'qty' => (int) $s['qty'], 'items' => $bySlot[(int) $s['id']] ?? [],
             ];
         }
-        $today = date('Y-m-d');
+        $now = date($this->timed() ? 'Y-m-d H:i:s' : 'Y-m-d');
         $used = $this->usage();
         foreach ($promos as &$p) {
             $p['id'] = (int) $p['id'];
@@ -102,8 +113,8 @@ class PromoService
             $p['regular_max'] = round($hi, 2);
             $p['regular_min'] = round($lo, 2);
             $p['status'] = !$p['active'] ? 'off'
-                : ($p['starts_on'] && $p['starts_on'] > $today ? 'upcoming'
-                : ($p['ends_on'] && $p['ends_on'] < $today ? 'ended' : 'on'));
+                : ($p['starts_on'] && $p['starts_on'] > $now ? 'upcoming'
+                : ($p['ends_on'] && $p['ends_on'] < $now ? 'ended' : 'on'));
             $p['used_bills'] = $used[$p['id']]['bills'] ?? 0;
             $p['used_discount'] = $used[$p['id']]['discount'] ?? 0.0;
         }
@@ -148,21 +159,33 @@ class PromoService
         if ($kind === 'percent' && $value >= 100) {
             throw new \RuntimeException('ส่วนลดเป็นเปอร์เซ็นต์ต้องน้อยกว่า 100');
         }
-        $date = function ($v, string $label): ?string {
-            $v = trim((string) ($v ?? ''));
+        // A day and time ("2026-11-20T11:30"); a day alone starts at its first minute and ends at its last.
+        $timed = $this->timed();
+        $date = function ($v, string $label, bool $end) use ($timed): ?string {
+            $v = trim(str_replace('T', ' ', (string) ($v ?? '')));
             if ($v === '') {
                 return null;
             }
-            $d = \DateTimeImmutable::createFromFormat('!Y-m-d', $v);
-            if (!$d || $d->format('Y-m-d') !== $v) {
-                throw new \RuntimeException("{$label}ไม่ถูกต้อง");
+            foreach (['!Y-m-d H:i:s', '!Y-m-d H:i', '!Y-m-d'] as $f) {
+                $d = \DateTimeImmutable::createFromFormat($f, $v);
+                if ($d && $d->format(substr($f, 1)) === $v) {
+                    if ($f === '!Y-m-d') {
+                        $d = $end ? $d->setTime(23, 59, 59) : $d;
+                    } elseif ($end && $f === '!Y-m-d H:i') {
+                        $d = $d->setTime((int) $d->format('H'), (int) $d->format('i'), 59);
+                    }
+                    return $d->format($timed ? 'Y-m-d H:i:s' : 'Y-m-d');
+                }
             }
-            return $v;
+            throw new \RuntimeException("{$label}ไม่ถูกต้อง");
         };
-        $starts = $date($in['starts_on'] ?? null, 'วันเริ่มโปรโมชั่น');
-        $ends = $date($in['ends_on'] ?? null, 'วันสิ้นสุดโปรโมชั่น');
+        $starts = $date($in['starts_on'] ?? null, 'วันเวลาเริ่มโปรโมชั่น', false);
+        $ends = $date($in['ends_on'] ?? null, 'วันเวลาสิ้นสุดโปรโมชั่น', true);
         if ($starts && $ends && $ends < $starts) {
-            throw new \RuntimeException('วันสิ้นสุดต้องไม่ก่อนวันเริ่มโปรโมชั่น');
+            throw new \RuntimeException('วันเวลาสิ้นสุดต้องไม่ก่อนวันเวลาเริ่มโปรโมชั่น');
+        }
+        if (!$timed && ((string) ($in['starts_on'] ?? '') . (string) ($in['ends_on'] ?? '')) !== '' && preg_match('/\d:\d/', (string) ($in['starts_on'] ?? '') . (string) ($in['ends_on'] ?? ''))) {
+            throw new \RuntimeException('ยังกำหนดเวลาเริ่ม/สิ้นสุดไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0087) ก่อน');
         }
         $active = !array_key_exists('active', $in) || !empty($in['active']);
         $note = mb_substr(trim((string) ($in['note'] ?? '')), 0, 500) ?: null;
@@ -389,7 +412,7 @@ class PromoService
 
     // ---------- Applying promotions to a cart ----------
 
-    /** Promotions running on $day, with each slot's item keys ('p12' / 'g3'), oldest first. */
+    /** Promotions running at $now (a day before migration 0087), with each slot's item keys ('p12' / 'g3'), oldest first. */
     private function running(string $day): array
     {
         $stmt = $this->db->prepare(
@@ -438,7 +461,7 @@ class PromoService
         if (!self::ready($this->db) || !$lines) {
             return $result;
         }
-        return self::compute($lines, $this->running($day ?? date('Y-m-d')));
+        return self::compute($lines, $this->running($day ?? date($this->timed() ? 'Y-m-d H:i:s' : 'Y-m-d')));
     }
 
     /**

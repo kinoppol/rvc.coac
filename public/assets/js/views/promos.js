@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { money, count, escapeHtml, fmtDate } from '../util.js';
+import { money, count, escapeHtml, fmtDate, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 
 const STATUS = {
@@ -25,6 +25,19 @@ function saving(p, regular) {
 
 function rangeText(lo, hi) {
     return Math.abs(hi - lo) < 0.005 ? `฿${money(lo)}` : `฿${money(lo)}–${money(hi)}`;
+}
+
+/** A promotion's start / end: day and time (a day alone before migration 0087). */
+function whenText(v) {
+    if (!v) return 'ไม่กำหนด';
+    return v.length > 10 ? fmtDateTime(v.slice(0, 16)) : fmtDate(v);
+}
+
+/** For <input type="datetime-local">: "2026-11-20T11:30" (an end of day 23:59:59 shows as 23:59). */
+function inputValue(v, end) {
+    if (!v) return '';
+    if (v.length <= 10) return `${v}T${end ? '23:59' : '00:00'}`;
+    return v.slice(0, 16).replace(' ', 'T');
 }
 
 function itemLabel(it) {
@@ -90,7 +103,7 @@ export async function render(container) {
                     <td class="num" style="white-space:nowrap"><b>${dealText(p)}</b>
                       <div class="muted" style="font-size:12px">ราคาปกติ ${rangeText(p.regular_min, p.regular_max)}</div>
                       <div style="font-size:12px;${hi < 0.005 ? 'color:var(--bad)' : ''}">${hi < 0.005 ? 'ไม่ได้ลดจากราคาปกติ' : `ลูกค้าประหยัด ${rangeText(Math.max(0, lo), hi)}`}</div></td>
-                    <td style="white-space:nowrap;font-size:13px">${p.starts_on ? fmtDate(p.starts_on) : 'ไม่กำหนด'}<br>ถึง ${p.ends_on ? fmtDate(p.ends_on) : 'ไม่กำหนด'}</td>
+                    <td style="white-space:nowrap;font-size:13px">${whenText(p.starts_on)}<br>ถึง ${whenText(p.ends_on)}</td>
                     <td class="num" style="white-space:nowrap;font-size:13px">${count(p.used_bills)} บิล<br><span class="muted">ลดไป ฿${money(p.used_discount)}</span></td>
                     ${canManage ? `<td style="white-space:nowrap">
                       <button type="button" class="btn secondary sm" data-edit="${p.id}">แก้ไข</button>
@@ -129,7 +142,7 @@ export async function render(container) {
     /** Create / edit a promotion: name, deal, dates, and the slots with their products / groups. */
     function editor(src) {
         const f = src ? {
-            name: src.name, kind: src.kind, value: src.value, starts_on: src.starts_on || '', ends_on: src.ends_on || '',
+            name: src.name, kind: src.kind, value: src.value, starts_on: inputValue(src.starts_on, false), ends_on: inputValue(src.ends_on, true),
             active: src.active, note: src.note || '',
             slots: src.slots.map((s) => ({ label: s.label || '', qty: s.qty, items: s.items.map((it) => ({ ...it })) })),
         } : {
@@ -197,8 +210,10 @@ export async function render(container) {
                     <option value="amount" ${f.kind === 'amount' ? 'selected' : ''}>ลดเป็นบาทต่อชุด</option>
                     <option value="percent" ${f.kind === 'percent' ? 'selected' : ''}>ลดเป็น % ต่อชุด</option></select></label>
                   <label class="field"><span>${f.kind === 'price' ? 'ราคาชุด (บาท)' : f.kind === 'amount' ? 'ลด (บาท/ชุด)' : 'ลด (%)'}</span><input type="number" step="0.01" min="0" data-f="value" value="${escapeHtml(String(f.value))}"></label>
-                  <label class="field"><span>เริ่ม (เว้นว่าง = ทันที)</span><input type="date" data-f="starts_on" value="${escapeHtml(f.starts_on)}"></label>
-                  <label class="field"><span>สิ้นสุด (เว้นว่าง = ไม่กำหนด)</span><input type="date" data-f="ends_on" value="${escapeHtml(f.ends_on)}"></label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:8px">
+                  <label class="field"><span>เริ่ม วันและเวลา (เว้นว่าง = ทันที)</span><input type="datetime-local" data-f="starts_on" value="${escapeHtml(f.starts_on)}"></label>
+                  <label class="field"><span>สิ้นสุด วันและเวลา (เว้นว่าง = ไม่กำหนด)</span><input type="datetime-local" data-f="ends_on" value="${escapeHtml(f.ends_on)}"></label>
                 </div>
 
                 <h3 style="margin:16px 0 4px;font-size:14.5px">สินค้าที่จับคู่ (1 ชุด)</h3>
