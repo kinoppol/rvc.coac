@@ -342,6 +342,13 @@ class InventoryController
         if ($data === null) {
             return $this->error($response, 'ไม่พบเอกสาร', 404);
         }
+        // An approved count: admin / manager correct what was counted, with a reason (migration 0082).
+        if (isset($data['count_status'])) {
+            $user = $request->getAttribute('user');
+            $data['count_edit'] = $data['count_status'] === 'approved'
+                && in_array($user['role'] ?? '', ['admin', 'manager'], true)
+                && \App\Services\StockCountService::editReady($db);
+        }
         // A POS sale bill: whoever may correct sales (approve permission) edits it right from the bill.
         if (isset($data['sale_id'])) {
             $user = $request->getAttribute('user');

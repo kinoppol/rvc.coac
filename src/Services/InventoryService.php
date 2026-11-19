@@ -816,11 +816,18 @@ class InventoryService
                 $rows[] = ['k' => 'ความเห็นผู้รับรอง', 'v' => $d['review_note']];
             }
         }
+        if (!empty($l['edited_at'])) {
+            $rows[] = ['k' => 'แก้ไขการนับ', 'v' => sprintf('เดิมนับได้ %d · โดย %s · %s', (int) $l['original_counted_qty'], $who($l['edited_by']), $dateTime($l['edited_at']))];
+            $rows[] = ['k' => 'เหตุผลที่แก้ไข', 'v' => $l['edit_reason'] ?? '-'];
+        }
         if ($d['status'] === 'cancelled') {
             $rows[] = ['k' => 'ยกเลิกโดย / เวลา', 'v' => $who($d['cancelled_by']) . ' · ' . $dateTime($d['cancelled_at'])];
             $rows[] = ['k' => 'เหตุผล', 'v' => $d['cancel_reason'] ?? '-'];
         }
         return [
+            'count_status' => $d['status'],
+            // The one line, for correcting what was counted (admin / manager).
+            'count_line' => isset($l['id']) ? ['id' => (int) $l['id'], 'product' => $l['product'] ?? '', 'counted' => (int) ($cntAt ?? 0), 'system' => (int) ($sysAt ?? 0)] : null,
             'title' => 'นับสต๊อกรายการ ' . $d['doc_no'],
             'note' => 'นับทีละรายการโดยไม่เปิดรอบตรวจนับ · ยอดต่างจากระบบเกิน ' . StockCountService::ITEM_APPROVAL_OVER . ' ชิ้นต้องให้ผู้จัดการรับรองก่อนปรับสต๊อก',
             'sections' => [['title' => 'รายละเอียดการนับ', 'total' => false, 'columns' => [['k', 'หัวข้อ', 'text'], ['v', 'รายละเอียด', 'text']], 'rows' => $rows]],
@@ -1029,18 +1036,31 @@ class InventoryService
                 if (!$d) {
                     return null;
                 }
+                // Corrections of what was counted (migration 0082) show in the note, newest reason first.
+                $edited = StockCountService::editReady($this->db);
                 $items = $all(
-                    "SELECT p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, sci.system_qty, sci.counted_qty, sci.diff_qty,
-                            ROUND(sci.diff_qty * p.cost_price, 2) AS diff_cost, sci.note
-                     FROM stock_count_items sci JOIN products p ON p.id = sci.product_id LEFT JOIN consignors c ON c.id = p.consignor_id
+                    "SELECT sci.id AS _line, p.name AS product, COALESCE(c.name, 'สินค้าของร้าน') AS owner, sci.system_qty, sci.counted_qty, sci.diff_qty,
+                            ROUND(sci.diff_qty * p.cost_price, 2) AS diff_cost, sci.note"
+                    . ($edited ? ', sci.original_counted_qty, sci.edited_at, sci.edit_reason, eu.full_name AS editor_name' : '') . "
+                     FROM stock_count_items sci JOIN products p ON p.id = sci.product_id LEFT JOIN consignors c ON c.id = p.consignor_id"
+                    . ($edited ? ' LEFT JOIN users eu ON eu.id = sci.edited_by' : '') . "
                      WHERE sci.stock_count_id = ? AND sci.counted_qty IS NOT NULL ORDER BY (sci.diff_qty <> 0) DESC, p.name",
                     (int) $d['id']
                 );
+                foreach ($items as &$it) {
+                    if (!empty($it['edited_at'])) {
+                        $it['note'] = trim(sprintf('แก้ไขแล้ว (เดิมนับได้ %d) โดย %s %s: %s', (int) $it['original_counted_qty'], $it['editor_name'] ?? '-',
+                            $dateTime($it['edited_at']), $it['edit_reason'] ?? '-') . ($it['note'] ? ' · ' . $it['note'] : ''));
+                    }
+                    unset($it['original_counted_qty'], $it['edited_at'], $it['edit_reason'], $it['editor_name']);
+                }
+                unset($it);
                 $statuses = ['draft' => 'กำลังนับ', 'submitted' => 'ส่งรายงานแล้ว', 'approved' => 'อนุมัติแล้ว', 'cancelled' => 'ยกเลิก'];
                 if (($d['kind'] ?? 'round') === 'item') {
                     return $this->itemCountDocument($d, $date, $dateTime);
                 }
                 return [
+                    'count_status' => $d['status'],
                     'title' => 'รอบตรวจนับสต๊อก ' . $d['doc_no'],
                     'note' => sprintf(
                         'วันที่นับ %s · สถานะ %s · เปิดรอบโดย %s · อนุมัติโดย %s เมื่อ %s',
