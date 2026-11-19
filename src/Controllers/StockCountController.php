@@ -102,6 +102,25 @@ class StockCountController
         $data['can_approve'] = ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
             && (new UserRepo($db))->hasPermission($user['role'], 'stockcount.approve');
         $data['user_id'] = (int) $user['id'];
+        // Admin / manager correct approved counts (migration 0082).
+        $data['can_edit'] = in_array($user['role'] ?? '', ['admin', 'manager'], true) && StockCountService::editReady($db);
+        return $this->json($response, ['data' => $data]);
+    }
+
+    /** POST /stockcounts/lines/{id}/edit {counted, reason} — admin / manager corrects what was counted on an approved count. */
+    public function editCount(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        $counted = $body['counted'] ?? null;
+        if (!is_numeric($counted) || (int) $counted != $counted) {
+            return $this->error($response, 'จำนวนที่นับต้องเป็นจำนวนเต็ม', 422);
+        }
+        try {
+            $data = $this->service()->editCount((int) $args['id'], (int) $counted, (string) ($body['reason'] ?? ''), (int) $user['id'], (string) ($user['role'] ?? ''), $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), str_starts_with($e->getMessage(), 'เฉพาะ') ? 403 : 422);
+        }
         return $this->json($response, ['data' => $data]);
     }
 

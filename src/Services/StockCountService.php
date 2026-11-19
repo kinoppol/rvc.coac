@@ -576,6 +576,101 @@ class StockCountService
         return $v === '' ? null : mb_substr($v, 0, $len);
     }
 
+    /** Approved counts can be corrected (migration 0082). */
+    public static function editReady(PDO $db): bool
+    {
+        return \App\Support\Db::hasColumn($db, 'stock_count_items', 'edit_reason');
+    }
+
+    /**
+     * An admin or a manager corrects what was counted on an approved count line (a number typed
+     * wrong), with a reason. The line's count and difference move by the change; so does the stock
+     * now when this is the product's latest count (a later count set the stock again by itself, so
+     * then the stock stays). What was counted at first, who changed it, when and why stay on the line.
+     *
+     * @return array{doc_no:string, name:string, counted_before:int, counted_after:int, stock_before:int, stock_after:int, latest:bool}
+     */
+    public function editCount(int $lineId, int $counted, string $reason, int $userId, string $role, ?string $ip): array
+    {
+        if (!in_array($role, ['admin', 'manager'], true)) {
+            throw new \RuntimeException('เฉพาะผู้ดูแลระบบหรือผู้จัดการร้านเท่านั้น');
+        }
+        if (!self::editReady($this->db)) {
+            throw new \RuntimeException('ยังแก้ไขการตรวจนับไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0082) ก่อน');
+        }
+        if ($counted < 0 || $counted > 1000000) {
+            throw new \RuntimeException('จำนวนที่นับไม่ถูกต้อง');
+        }
+        $reason = self::clip($reason, 255);
+        if ($reason === null) {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่แก้ไขการตรวจนับ');
+        }
+        $item = self::itemReady($this->db);
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM stock_count_items WHERE id = ? FOR UPDATE');
+            $stmt->execute([$lineId]);
+            $line = $stmt->fetch();
+            $sc = $line ? $this->get((int) $line['stock_count_id']) : null;
+            if (!$line || !$sc || $line['counted_qty'] === null) {
+                throw new \RuntimeException('ไม่พบรายการตรวจนับนี้');
+            }
+            if ($sc['status'] !== 'approved') {
+                throw new \RuntimeException("การนับ {$sc['doc_no']} ยังไม่มีผล (รอรับรอง/ยกเลิก) แก้ไขได้เฉพาะการนับที่มีผลแล้ว");
+            }
+            $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([(int) $line['product_id']]);
+            $p = $stmt->fetch();
+            if (!$p) {
+                throw new \RuntimeException('ไม่พบสินค้า');
+            }
+            // What the count shows as counted: what was counted then (item counts), else the line's number.
+            $shown = $item && $line['count_qty'] !== null ? (int) $line['count_qty'] : (int) $line['counted_qty'];
+            $delta = $counted - $shown;
+            if ($delta === 0) {
+                throw new \RuntimeException('จำนวนที่นับเท่าเดิม ไม่มีอะไรเปลี่ยน');
+            }
+            $latest = $this->isLatestCount($line, $sc);
+            $this->db->prepare(
+                'UPDATE stock_count_items SET counted_qty = counted_qty + ?, diff_qty = diff_qty + ?'
+                . ($item ? ', count_qty = IF(count_qty IS NULL, NULL, count_qty + ?)' : '')
+                . ', original_counted_qty = COALESCE(original_counted_qty, ?), edited_by = ?, edited_at = NOW(), edit_reason = ? WHERE id = ?'
+            )->execute($item
+                ? [$delta, $delta, $delta, $shown, $userId, $reason, $lineId]
+                : [$delta, $delta, $shown, $userId, $reason, $lineId]);
+            $before = (int) $p['qty_stock'];
+            $after = $latest ? $before + $delta : $before;
+            if ($after !== $before) {
+                $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$after, (int) $p['id']]);
+                $this->audit->log('products', (int) $p['id'], 'update', $p, ['qty_stock' => $after, 'stock_count' => $sc['doc_no'], 'note' => "แก้ไขการตรวจนับ: {$reason}"], $userId, $ip);
+            }
+            $this->audit->log('stock_count_items', $lineId, 'update',
+                ['doc_no' => $sc['doc_no'], 'product_id' => (int) $p['id'], 'counted_qty' => $shown],
+                ['doc_no' => $sc['doc_no'], 'product_id' => (int) $p['id'], 'counted_qty' => $counted, 'edit_reason' => $reason, 'stock_before' => $before, 'stock_after' => $after],
+                $userId, $ip);
+            $this->db->commit();
+            return ['doc_no' => $sc['doc_no'], 'name' => $p['name'], 'counted_before' => $shown, 'counted_after' => $counted,
+                'stock_before' => $before, 'stock_after' => $after, 'latest' => $latest];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /** No approved count of the same product comes after this line on the stock card (which orders by count date, then approval time). */
+    private function isLatestCount(array $line, array $sc): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             WHERE sci.product_id = ? AND sci.id <> ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
+               AND (sc.count_date > ? OR (sc.count_date = ? AND (sc.approved_at > ? OR (sc.approved_at = ? AND sci.id > ?))))
+             LIMIT 1"
+        );
+        $at = (string) ($sc['approved_at'] ?? '');
+        $stmt->execute([(int) $line['product_id'], (int) $line['id'], $sc['count_date'], $sc['count_date'], $at, $at, (int) $line['id']]);
+        return !$stmt->fetchColumn();
+    }
+
     /** Item counts waiting for a manager. */
     public function pendingItemCount(): int
     {
@@ -793,9 +888,14 @@ class StockCountService
             $args[] = $from;
             $args[] = $to;
         }
+        // Corrections of approved counts (migration 0082).
+        $edit = self::editReady($this->db)
+            ? 'sci.original_counted_qty, sci.edited_at, sci.edit_reason, eu.full_name AS editor_name'
+            : 'NULL AS original_counted_qty, NULL AS edited_at, NULL AS edit_reason, NULL AS editor_name';
+        $editJoin = self::editReady($this->db) ? ' LEFT JOIN users eu ON eu.id = sci.edited_by' : '';
         $stmt = $this->db->prepare(
             "SELECT sc.id, sc.doc_no, sc.status, sc.count_date, sc.created_at, sc.approved_at, sc.review_note, sc.cancelled_at, sc.cancel_reason,
-                    sci.product_id, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.counted_by, sci.counted_at,
+                    sci.id AS line_id, {$edit}, sci.product_id, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.counted_by, sci.counted_at,
                     sci.count_system_qty, sci.count_qty, sci.count_place, sci.count_method, sci.count_note, sci.diff_reason, sci.diff_detail,
                     p.name, p.barcode, p.image_token, p.qty_stock, p.sale_price, p.consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name,
                     cu.full_name AS counter_name, au.full_name AS approver_name, xu.full_name AS canceller_name
@@ -805,7 +905,7 @@ class StockCountService
              LEFT JOIN consignors c ON c.id = p.consignor_id
              LEFT JOIN users cu ON cu.id = COALESCE(sci.counted_by, sc.created_by)
              LEFT JOIN users au ON au.id = sc.approved_by
-             LEFT JOIN users xu ON xu.id = sc.cancelled_by
+             LEFT JOIN users xu ON xu.id = sc.cancelled_by{$editJoin}
              WHERE {$where}
              ORDER BY (sc.status = 'submitted') DESC, sc.id DESC
              LIMIT " . (int) $limit
@@ -818,6 +918,8 @@ class StockCountService
             $r['photos'] = $photos->fetchAll();
             $r['diff_at_count'] = $r['count_qty'] !== null ? (int) $r['count_qty'] - (int) $r['count_system_qty'] : (int) $r['diff_qty'];
             $r['reason_label'] = $r['diff_reason'] !== null ? (self::DIFF_REASONS[$r['diff_reason']] ?? $r['diff_reason']) : null;
+            // Approved: whether correcting it moves the stock now (no later count of the product).
+            $r['latest'] = $r['status'] === 'approved' && $this->isLatestCount(['id' => $r['line_id'], 'product_id' => $r['product_id']], $r);
             // Waiting: what the stock becomes if certified now.
             $r['stock_if_approved'] = $r['status'] === 'submitted' ? max(0, (int) $r['qty_stock'] + $r['diff_at_count']) : null;
         }
@@ -863,14 +965,18 @@ class StockCountService
                NULL AS count_note, NULL AS diff_reason, NULL AS diff_detail, NULL AS review_note, NULL AS cancel_reason";
         $at = $item ? 'COALESCE(sci.counted_at, sc.approved_at, sc.created_at)' : 'COALESCE(sc.approved_at, sc.created_at)';
         $counter = $item ? 'COALESCE(sci.counted_by, sc.created_by)' : 'sc.created_by';
+        $edit = self::editReady($this->db)
+            ? 'sci.original_counted_qty, sci.edited_at, sci.edit_reason, eu.full_name AS editor_name'
+            : 'NULL AS original_counted_qty, NULL AS edited_at, NULL AS edit_reason, NULL AS editor_name';
+        $editJoin = self::editReady($this->db) ? ' LEFT JOIN users eu ON eu.id = sci.edited_by' : '';
         $which = $item ? "(sc.status = 'approved' OR (sc.kind = 'item' AND sc.status IN ('submitted', 'cancelled')))" : "sc.status = 'approved'";
         $stmt = $this->db->prepare(
-            "SELECT sc.id, sc.doc_no, sc.status, sc.count_date, sc.approved_at, {$at} AS at, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.note, {$cols},
+            "SELECT sc.id, sci.id AS line_id, {$edit}, sc.doc_no, sc.status, sc.count_date, sc.approved_at, {$at} AS at, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.note, {$cols},
                     cu.full_name AS counter_name, au.full_name AS approver_name
              FROM stock_count_items sci
              JOIN stock_counts sc ON sc.id = sci.stock_count_id
              LEFT JOIN users cu ON cu.id = {$counter}
-             LEFT JOIN users au ON au.id = sc.approved_by
+             LEFT JOIN users au ON au.id = sc.approved_by{$editJoin}
              WHERE sci.product_id = ? AND sci.counted_qty IS NOT NULL AND {$which}
              ORDER BY at DESC, sc.id DESC
              LIMIT " . (int) $limit

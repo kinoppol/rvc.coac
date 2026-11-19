@@ -271,6 +271,7 @@ export async function render(container, { permissions, user }) {
         const [f, t] = repSpan();
         const all = rep.rows || [];
         const rows = rep.diffOnly ? all.filter((r) => r.diff_at_count) : all;
+        rep.shown = rows;
         const done = all.filter((r) => r.status !== 'cancelled');
         const products = new Set(done.map((r) => r.product_id)).size;
         const same = done.filter((r) => !r.diff_at_count).length;
@@ -303,14 +304,15 @@ export async function render(container, { permissions, user }) {
           ${rep.rows === null ? '<div class="card-pad muted">กำลังโหลด...</div>' : rows.length ? `
           <div class="table-wrap" style="max-height:560px"><table>
             <thead><tr><th>เวลานับ / เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th>ผล</th></tr></thead>
-            <tbody>${rows.map((r) => `<tr${r.diff_at_count && r.status !== 'cancelled' ? ' style="box-shadow:inset 3px 0 0 var(--bad)"' : ''}>
+            <tbody>${rows.map((r, i) => `<tr${r.diff_at_count && r.status !== 'cancelled' ? ' style="box-shadow:inset 3px 0 0 var(--bad)"' : ''}>
               <td style="white-space:nowrap">${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}<div class="muted" style="font-size:12px">${escapeHtml(r.doc_no)} · ${escapeHtml(r.counter_name || '-')}</div></td>
               <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}${r.barcode ? ` · ${escapeHtml(r.barcode)}` : ''}</div></td>
               <td class="num">${r.count_system_qty ?? r.system_qty}</td><td class="num"><b>${r.count_qty ?? r.counted_qty}</b></td>
               <td>${r.diff_at_count ? `<span class="pill bad">${signed(r.diff_at_count)}</span>` : '<span class="pill ok">ตรง</span>'}</td>
               <td>${itemDetail(r)}</td>
               <td>${itemPhotos(r)}</td>
-              <td>${r.status === 'submitted' ? '<span class="pill warn">รอผู้จัดการรับรอง</span>' : itemStatus(r)}</td>
+              <td>${r.status === 'submitted' ? '<span class="pill warn">รอผู้จัดการรับรอง</span>' : itemStatus(r)}${editedHtml(r)}
+                ${r.status === 'approved' && itemData.can_edit ? `<div style="margin-top:4px"><button type="button" class="btn secondary sm" data-edit-count="${i}" title="แก้จำนวนที่นับได้ (เช่น กรอกผิด) ต้องระบุเหตุผล">✎ แก้ไขการนับ</button></div>` : ''}</td>
             </tr>`).join('')}</tbody>
           </table></div>` : `<div class="empty" style="padding:16px">${rep.diffOnly ? 'ไม่มีรายการที่มีผลต่างในวันที่เลือก' : 'ยังไม่มีการนับในวันที่เลือก'}</div>`}
         </section>`;
@@ -322,6 +324,53 @@ export async function render(container, { permissions, user }) {
         container.querySelector('#rep-from')?.addEventListener('change', (e) => { if (e.target.value) { rep.from = e.target.value; reload(); } });
         container.querySelector('#rep-to')?.addEventListener('change', (e) => { if (e.target.value) { rep.to = e.target.value; reload(); } });
         container.querySelector('#rep-diff')?.addEventListener('change', (e) => { rep.diffOnly = e.target.checked; redraw(); });
+        container.querySelectorAll('[data-edit-count]').forEach((b) => b.addEventListener('click', () => editCount(rep.shown[Number(b.dataset.editCount)], redraw)));
+    }
+
+    /** A count corrected after it took effect: what was counted at first, who changed it and why. */
+    function editedHtml(r) {
+        if (!r.edited_at) return '';
+        return `<div style="font-size:12px;margin-top:4px"><span class="pill warn">แก้ไขแล้ว</span>
+          <div class="muted">เดิมนับได้ ${r.original_counted_qty} · โดย ${escapeHtml(r.editor_name || '-')} · ${escapeHtml(fmtDateTime(r.edited_at))}<br>เหตุผล: ${escapeHtml(r.edit_reason || '-')}</div></div>`;
+    }
+
+    /** Admin / manager: correct what was counted on an approved count, with a reason. */
+    async function editCount(r, redraw) {
+        const shown = Number(r.count_qty ?? r.counted_qty);
+        const typed = await promptDialog(
+            `${r.name} — ${r.doc_no} นับโดย ${r.counter_name || '-'} ในระบบตอนนับ ${r.count_system_qty ?? r.system_qty} นับได้ ${shown}\n\nจำนวนที่นับได้ที่ถูกต้อง`,
+            { title: `แก้ไขการนับ ${r.doc_no}`, okText: 'ถัดไป', value: String(shown), required: 'กรุณากรอกจำนวน' }
+        );
+        if (typed === null) return;
+        const counted = Number(typed.trim());
+        if (!Number.isInteger(counted) || counted < 0) {
+            error = 'จำนวนที่นับต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป';
+            notice = null;
+            redraw();
+            return;
+        }
+        if (counted === shown) return;
+        const delta = counted - shown;
+        const effect = r.latest
+            ? `สต๊อกตอนนี้จะเปลี่ยน ${signed(delta)} ชิ้น (จาก ${r.qty_stock} เป็น ${Number(r.qty_stock) + delta})`
+            : 'มีการนับสินค้านี้ครั้งหลังกว่านี้แล้ว สต๊อกตอนนี้จะไม่เปลี่ยน (เปลี่ยนเฉพาะยอดในบัตรสินค้าช่วงก่อนการนับครั้งถัดไป)';
+        const reason = await promptDialog(
+            `${r.name}: นับได้ ${shown} → ${counted} (${signed(delta)})\n${effect}\n\nระบุเหตุผลที่แก้ไข`,
+            { title: `ยืนยันแก้ไขการนับ ${r.doc_no}?`, okText: 'บันทึกการแก้ไข', placeholder: 'เหตุผล (ต้องระบุ) เช่น กรอกจำนวนผิด นับซ้ำแล้วได้ 12', required: 'กรุณาระบุเหตุผลที่แก้ไข', multiline: true, danger: true }
+        );
+        if (reason === null) return;
+        try {
+            const res = (await api.post(`/stockcounts/lines/${r.line_id}/edit`, { counted, reason: reason.trim() })).data;
+            notice = `แก้ไขการนับ ${res.doc_no} แล้ว — ${res.name} นับได้ ${res.counted_before} → ${res.counted_after}`
+                + (res.stock_after !== res.stock_before ? ` สต๊อกเปลี่ยนจาก ${res.stock_before} เป็น ${res.stock_after} ชิ้น` : ' สต๊อกตอนนี้ไม่เปลี่ยน');
+            error = null;
+        } catch (e) {
+            error = e.message;
+            notice = null;
+        }
+        await loadItems();
+        await loadReport();
+        redraw();
     }
 
     async function loadItems() {
