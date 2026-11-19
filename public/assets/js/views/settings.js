@@ -160,6 +160,12 @@ export async function render(page, { user, permissions, params = {} }) {
             <form id="pos-form">
               <fieldset ${canEdit ? '' : 'disabled'} style="border:0;padding:0;margin:0">
                 <section class="card card-pad">
+                  <h2 style="margin-bottom:6px">ชื่อระบบบนแอป Android</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">แสดงถัดจากสัญลักษณ์ สอศ. ที่แถบด้านบนของแอปขายสินค้า (POS) และแอปผู้จัดการ เว้นว่าง = ใช้ชื่อเริ่มต้น
+                    แอปจะเปลี่ยนตามเมื่อโหลดข้อมูลรอบถัดไป</p>
+                  <label class="field">ชื่อระบบ <input name="app_title" maxlength="150" value="${escapeHtml(s.app_title || '')}" placeholder="ระบบบัญชีสหการวิทยาลัยอาชีวศึกษาร้อยเอ็ด"></label>
+                </section>
+                <section class="card card-pad" style="margin-top:16px">
                   <h2 style="margin-bottom:6px">วิธีรับชำระเงินที่หน้าขายสินค้า (POS)</h2>
                   <p class="muted" style="font-size:13px;margin:0 0 14px">เลือกวิธีที่ร้านรับชำระได้ พนักงานขายจะเห็นเฉพาะวิธีที่เปิดไว้ตอนกดชำระเงิน</p>
                   <div style="display:flex;flex-direction:column;gap:10px">
@@ -296,7 +302,7 @@ export async function render(page, { user, permissions, params = {} }) {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
-                await api.put('/settings', { pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
+                await api.put('/settings', { app_title: fd.get('app_title').trim(), pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
                     pos_short_stock_always: fd.get('short_always') === '1' ? '1' : '0',
                     ...(isAdmin ? {
                         pos_promptpay_enabled: fd.get('promptpay_enabled') === '1' ? '1' : '0',

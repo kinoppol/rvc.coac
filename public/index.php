@@ -147,6 +147,8 @@ $app->group('/api/device/v1', function ($group) {
         ->add(new RoleGuard('sales.create'));
     $group->get('/catalog/popular', [DeviceController::class, 'popular'])
         ->add(new RoleGuard('sales.create'));
+    $group->get('/promos', [DeviceController::class, 'promos'])
+        ->add(new RoleGuard('sales.create'));
     $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
     $group->post('/sales', [DeviceController::class, 'syncSales'])
         ->add(new RoleGuard('sales.create'));

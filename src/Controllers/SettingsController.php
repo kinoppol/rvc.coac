@@ -125,6 +125,9 @@ class SettingsController
                 return $this->error($response, 'ช่องทางจ่ายเงินผู้ฝากขายไม่ถูกต้อง', 422);
             }
         }
+        if (isset($body['app_title'])) {
+            $body['app_title'] = mb_substr(trim((string) $body['app_title']), 0, 150);
+        }
         foreach (['store_open_time', 'store_close_time'] as $key) {
             if (isset($body[$key]) && $body[$key] !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $body[$key])) {
                 return $this->error($response, 'เวลาเปิด-ปิดร้านไม่ถูกต้อง', 422);

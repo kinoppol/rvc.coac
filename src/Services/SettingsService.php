@@ -9,6 +9,8 @@ use PDO;
 
 class SettingsService
 {
+    public const APP_TITLE = 'ระบบบัญชีสหการวิทยาลัยอาชีวศึกษาร้อยเอ็ด';
+
     private const DEFAULTS = [
         'fee_mode' => 'fixed',
         'fee_fixed' => '2',
@@ -65,8 +67,15 @@ class SettingsService
         'closing_float_default' => '1500', // change kept in the drawer for the next day
         'closing_sent_to' => 'งานศูนย์บ่มเพาะ', // who receives the day's cash for the college
         'closing_payout_method' => 'hold', // how "pay every consignor" pays: hold | cash | promptpay | bank_transfer
+        'app_title' => self::APP_TITLE, // the system's name in the top bar of the Android apps ('' = this default)
         'asset_mode' => 'production', // production | development — how JS/CSS are cached (App\Support\AppShell)
     ];
+
+    /** The system's name shown in the Android apps' top bar. */
+    public function appTitle(): string
+    {
+        return trim((string) $this->get('app_title')) ?: self::APP_TITLE;
+    }
 
     /** @return array<string,string> date => name of the days off set in store_holidays */
     public function holidays(): array

@@ -97,6 +97,8 @@ class DeviceController
             'store_holidays' => array_map(fn ($d, $n) => ['date' => $d, 'name' => $n], array_keys($settings->holidays()), $settings->holidays()),
             'sale_edit' => ['enabled' => $settings->get('sale_edit_enabled') === '1', 'minutes' => (int) $settings->get('sale_edit_minutes')],
             'timezone' => date_default_timezone_get(),
+            // The system's name in the app's top bar (ตั้งค่า › หน้าขายสินค้า).
+            'app_title' => $settings->appTitle(),
         ];
         return $this->json($response, [
             'api_version' => self::API_VERSION,
@@ -227,6 +229,16 @@ class DeviceController
             $data['ids'] = array_map('intval', $db->query("SELECT id FROM products WHERE {$onSale} ORDER BY id")->fetchAll(\PDO::FETCH_COLUMN));
         }
         return $this->json($response, $data);
+    }
+
+    /**
+     * GET /promos — bundle promotions for the app to work out itself (offline too): every one that is
+     * on and not over, with start / end, slots (item keys 'p<product>' / 'g<sale group>') and the
+     * products of each sale group named. See PromoService::devicePromos.
+     */
+    public function promos(Request $request, Response $response): Response
+    {
+        return $this->json($response, (new \App\Services\PromoService(Db::connection()))->devicePromos() + ['server_time' => date(DATE_ATOM)]);
     }
 
     /** GET /catalog/popular — pieces sold per product in the last 90 days, for the "ขายดี" order. */

@@ -29,7 +29,7 @@ class DeviceSaleSyncService
     }
 
     /**
-     * @param array $sale {client_uuid, sold_at, offline, allow_short, items:[{product_id, qty, pack_size?, unit_price?}], payments:[{method, amount}], total_value?}
+     * @param array $sale {client_uuid, sold_at, offline, allow_short, items:[{product_id, qty, pack_size?, unit_price?, promo_discount?, promo_id?}], payments:[{method, amount}], total_value?}
      * @param array $user the seller who made the sale (with its active role)
      * @param string[] $notes warnings to keep with the sale
      * @return array{client_uuid:string, status:string, sale?:array, error?:string, warnings?:string[]}
@@ -92,6 +92,7 @@ class DeviceSaleSyncService
         $role = $user['role'] ?? null;
 
         $items = [];
+        $sent = [];
         foreach (is_array($sale['items'] ?? null) ? $sale['items'] : [] as $line) {
             if (!is_array($line)) {
                 continue;
@@ -111,6 +112,12 @@ class DeviceSaleSyncService
                 }
             }
             $items[] = $item;
+            $sent[] = $line;
+        }
+        // Bundle promotions the device gave (it works them out itself, offline too): kept as sold.
+        if ($items) {
+            [$items, $promoWarnings] = (new PromoService($this->db))->checkDevice($items, $sent, $soldAt->format('Y-m-d H:i:s'));
+            $warnings = array_merge($warnings, $promoWarnings);
         }
         $lines = is_array($sale['payments'] ?? null) ? $sale['payments'] : [];
         $methods = $settings->paymentMethods();

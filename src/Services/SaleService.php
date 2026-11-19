@@ -63,6 +63,7 @@ class SaleService
             $docNo = $this->docs->next('SL', 'sales', 'doc_no');
             $totalQty = 0;
             $totalValue = 0.0;
+            $lineDiscounts = 0.0;
 
             $insSale = $this->db->prepare(
                 'INSERT INTO sales (doc_no, cashier_id, sale_datetime, business_date, after_hours, total_qty, total_value, created_at)
@@ -133,6 +134,7 @@ class SaleService
                 // A promotion's price per piece may run past the satang: the line comes to its regular price less its discount.
                 $lineValue = $fig['discount'] > 0 ? $fig['regular_price'] * $qty - $fig['discount'] : $unitPrice * $qty;
                 $totalValue += $lineValue;
+                $lineDiscounts += $fig['discount'];
 
                 if ($isStoreOwned) {
                     continue;
@@ -175,6 +177,10 @@ class SaleService
                 }
             }
 
+            // The Android POS works out its promotions itself (offline too) and sends each line's discount.
+            if (empty($opts['promos']) && $lineDiscounts > 0) {
+                $promoTotal = round($lineDiscounts, 2);
+            }
             $upd = $this->db->prepare('UPDATE sales SET total_qty = ?, total_value = ? WHERE id = ?');
             $upd->execute([$totalQty, round($totalValue, 2), $saleId]);
             if ($promoTotal > 0) {

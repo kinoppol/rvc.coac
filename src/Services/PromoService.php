@@ -16,8 +16,9 @@ use PDO;
  * kind: price = each full set sells for `value`; amount = `value` baht off each set;
  * percent = `value` % off each set.
  *
- * Only the web POS applies them (it asks for a quote while the cart changes and the sale is
- * recorded with the same figures); the Android app and imported sales are left as they were.
+ * The web POS asks for a quote while the cart changes and the sale is recorded with the same
+ * figures. The Android POS keeps the promotions (devicePromos) and works them out itself, offline
+ * too, with the same rules; it sends each line's discount (checkDevice). Imported sales get none.
  */
 class PromoService
 {
@@ -419,7 +420,12 @@ class PromoService
             'SELECT * FROM promo_bundles WHERE active = 1 AND (starts_on IS NULL OR starts_on <= ?) AND (ends_on IS NULL OR ends_on >= ?) ORDER BY id'
         );
         $stmt->execute([$day, $day]);
-        $promos = $stmt->fetchAll();
+        return $this->withSlots($stmt->fetchAll());
+    }
+
+    /** Promotion rows with their slots (qty, label, item keys and names); rows without slots are left out. */
+    private function withSlots(array $promos): array
+    {
         if (!$promos) {
             return [];
         }
@@ -446,7 +452,7 @@ class PromoService
         foreach ($promos as $p) {
             if (!empty($slots[(int) $p['id']])) {
                 $out[] = ['id' => (int) $p['id'], 'name' => $p['name'], 'kind' => $p['kind'], 'value' => (float) $p['value'],
-                    'ends_on' => $p['ends_on'], 'slots' => array_values($slots[(int) $p['id']])];
+                    'starts_on' => $p['starts_on'], 'ends_on' => $p['ends_on'], 'slots' => array_values($slots[(int) $p['id']])];
             }
         }
         return $out;
@@ -644,5 +650,106 @@ class PromoService
             }
         }
         return [$items, $res['total'], $res['applied']];
+    }
+
+    // ---------- The Android POS ----------
+
+    /**
+     * GET /api/device/v1/promos: every promotion that is on and not over yet (also those not started:
+     * the app works offline and checks the start / end itself), with the products of each sale group
+     * they name (the app sells a group's members one by one; any of them fills the group's slot).
+     * starts_on / ends_on: "Y-m-d H:i:s", or "Y-m-d" before migration 0087 (the whole day).
+     */
+    public function devicePromos(): array
+    {
+        if (!self::ready($this->db)) {
+            return ['promos' => [], 'groups' => (object) [], 'ready' => false];
+        }
+        $now = date($this->timed() ? 'Y-m-d H:i:s' : 'Y-m-d');
+        $stmt = $this->db->prepare('SELECT * FROM promo_bundles WHERE active = 1 AND (ends_on IS NULL OR ends_on >= ?) ORDER BY id');
+        $stmt->execute([$now]);
+        $promos = $this->withSlots($stmt->fetchAll());
+        $gids = [];
+        foreach ($promos as $p) {
+            foreach ($p['slots'] as $s) {
+                foreach ($s['keys'] as $k) {
+                    if ($k[0] === 'g') {
+                        $gids[(int) substr($k, 1)] = true;
+                    }
+                }
+            }
+        }
+        $groups = [];
+        if ($gids && SaleGroupService::ready($this->db)) {
+            $ids = array_keys($gids);
+            $stmt = $this->db->prepare('SELECT id, sale_group_id FROM products WHERE sale_group_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY id');
+            $stmt->execute($ids);
+            foreach ($stmt->fetchAll() as $r) {
+                $groups[(string) $r['sale_group_id']][] = (int) $r['id'];
+            }
+        }
+        return ['promos' => $promos, 'groups' => (object) $groups, 'ready' => true];
+    }
+
+    /**
+     * A sale from the Android POS: its lines with the discount the device gave (promo_discount baht
+     * off the whole line, promo_id), kept as sold — the customer has paid. Returns [items, warnings]:
+     * a warning when the server's own figure at the time of sale differs (promotion changed, or the
+     * device had not loaded it yet). Before migration 0086 the discounts cannot be kept: dropped, with a warning.
+     * @param array $items [{product_id, qty, pack_size?, unit_price?}] as the sale is booked
+     * @param array $sent the device's lines (same order), with promo_discount / promo_id
+     */
+    public function checkDevice(array $items, array $sent, string $soldAt): array
+    {
+        $given = 0.0;
+        foreach ($items as $i => $it) {
+            $line = (array) ($sent[$i] ?? []);
+            $d = isset($line['promo_discount']) && is_numeric($line['promo_discount']) ? round((float) $line['promo_discount'], 2) : 0.0;
+            if ($d <= 0 || (int) ($it['pack_size'] ?? 1) > 1) {
+                continue;
+            }
+            $items[$i]['promo_discount'] = $d;
+            $items[$i]['promo_id'] = (int) ($line['promo_id'] ?? 0) ?: null;
+            $given += $d;
+        }
+        $given = round($given, 2);
+        if (!self::ready($this->db)) {
+            if ($given > 0) {
+                foreach ($items as &$it) {
+                    unset($it['promo_discount'], $it['promo_id']);
+                }
+                unset($it);
+                return [$items, ['อุปกรณ์ให้ส่วนลดโปรโมชั่น ฿' . number_format($given, 2) . ' แต่เซิร์ฟเวอร์ยังไม่ได้รัน migration 0086 จึงบันทึกเป็นราคาปกติ']];
+            }
+            return [$items, []];
+        }
+        // What the server would give: the device's lines by product (or its sale group) at the price sold.
+        $pids = array_values(array_unique(array_map(fn ($it) => (int) $it['product_id'], $items)));
+        $info = [];
+        if ($pids) {
+            $grp = SaleGroupService::ready($this->db) ? 'sale_group_id' : 'NULL AS sale_group_id';
+            $stmt = $this->db->prepare("SELECT id, sale_price, {$grp} FROM products WHERE id IN (" . implode(',', array_fill(0, count($pids), '?')) . ')');
+            $stmt->execute($pids);
+            foreach ($stmt->fetchAll() as $r) {
+                $info[(int) $r['id']] = $r;
+            }
+        }
+        $lines = [];
+        foreach ($items as $i => $it) {
+            $p = $info[(int) $it['product_id']] ?? null;
+            if (!$p || (int) ($it['pack_size'] ?? 1) > 1) {
+                continue;
+            }
+            $key = $p['sale_group_id'] !== null ? 'g' . $p['sale_group_id'] : 'p' . $p['id'];
+            $lines[$i] = ['key' => $key, 'qty' => (int) $it['qty'], 'price' => isset($it['unit_price']) ? round((float) $it['unit_price'], 2) : (float) $p['sale_price']];
+        }
+        $at = $this->timed() ? $soldAt : substr($soldAt, 0, 10);
+        $server = $lines ? self::compute($lines, $this->running($at))['total'] : 0.0;
+        $warnings = [];
+        if (abs($server - $given) >= 0.005) {
+            $warnings[] = 'ส่วนลดโปรโมชั่นบนอุปกรณ์ ฿' . number_format($given, 2) . ' ไม่ตรงกับที่เซิร์ฟเวอร์คำนวณ ฿' . number_format($server, 2)
+                . ' (บันทึกตามที่ขายจริงบนอุปกรณ์)';
+        }
+        return [$items, $warnings];
     }
 }
