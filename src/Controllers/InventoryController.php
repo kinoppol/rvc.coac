@@ -173,6 +173,9 @@ class InventoryController
         $data['adjust_ready'] = \App\Services\StockAdjustmentService::available($db);
         $data['can_adjust'] = $user && ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
             && (new \App\Repositories\UserRepo($db))->hasPermission($user['role'], 'stockcount.approve');
+        // ระบุว่าหมด: the reasons to pick from (item counts, migration 0077).
+        $data['sold_out_reasons'] = \App\Services\StockCountService::itemReady($db) ? \App\Services\StockCountService::DIFF_REASONS : null;
+        $data['detail_min'] = \App\Services\StockCountService::DIFF_DETAIL_MIN;
         return $this->json($response, ['data' => $data]);
     }
 

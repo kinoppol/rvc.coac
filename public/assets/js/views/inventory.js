@@ -343,7 +343,7 @@ export async function render(container, { navigate, permissions, user }) {
             if (link) { link.shown = true; draw(); } else openLink();
         });
         bindLink();
-        container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate)));
+        container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate, { onChange: load })));
         container.querySelectorAll('[data-split]').forEach((b) => b.addEventListener('click', () => openSplitModal(b.dataset.split, { onDone: load })));
         container.querySelectorAll('[data-counts]').forEach((b) => b.addEventListener('click', () => openCounts(b.dataset.counts)));
         container.querySelectorAll('[data-damage]').forEach((b) => b.addEventListener('click', () => openDamageModal(b.dataset.damage, { onDone: load })));

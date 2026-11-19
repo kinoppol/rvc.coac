@@ -76,6 +76,23 @@ class StockCountController
     }
 
     /**
+     * POST /products/{id}/sold-out {reason, reason_detail} — admin / manager (stockcount.approve):
+     * the product is gone, its stock is set to 0 as an item count with the reason found.
+     */
+    public function soldOut(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        try {
+            $result = $this->service()->markSoldOut((int) $args['id'], isset($body['reason']) ? (string) $body['reason'] : null,
+                isset($body['reason_detail']) ? (string) $body['reason_detail'] : null, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    /**
      * GET /stockcounts/items[?product_id=] — item counts waiting for a manager and the latest ones,
      * with all that was recorded about them, plus the reasons to choose from and the threshold.
      */

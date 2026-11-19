@@ -413,7 +413,7 @@ class StockCountService
      * @param array{place?:?string, method?:?string, note?:?string, reason?:?string, reason_detail?:?string} $detail
      * @return array{id:int, doc_no:string, system_qty:int, counted_qty:int, diff_qty:int, pending:bool}
      */
-    public function itemCount(int $productId, int $counted, array $detail, int $userId, ?string $ip, ?string $photo = null): array
+    public function itemCount(int $productId, int $counted, array $detail, int $userId, ?string $ip, ?string $photo = null, bool $certified = false): array
     {
         if (!self::itemReady($this->db)) {
             throw new \RuntimeException('ยังนับรายการแบบใหม่ไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0077) ก่อน');
@@ -455,7 +455,8 @@ class StockCountService
                     throw new \RuntimeException('กรุณาระบุรายละเอียดว่าทำไมยอดที่นับต่างจากระบบ (อย่างน้อย ' . self::DIFF_DETAIL_MIN . ' ตัวอักษร)', 1);
                 }
             }
-            $pending = abs($diff) > self::ITEM_APPROVAL_OVER;
+            // Certified: recorded by an admin / manager themself (ระบุว่าหมด), it takes effect at once.
+            $pending = !$certified && abs($diff) > self::ITEM_APPROVAL_OVER;
             $docNo = $this->docs->next('SC', 'stock_counts', 'doc_no');
             $this->db->prepare(
                 $pending
@@ -491,6 +492,30 @@ class StockCountService
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * An admin / manager marks a product as sold out (ระบุว่าหมด): the same as counting it at 0 —
+     * an item count that takes effect at once, with the reason found (DIFF_REASONS) and an
+     * explanation. Used for goods the system shows below zero (sold more than recorded, sold as
+     * the wrong product) or with pieces left that are really gone.
+     */
+    public function markSoldOut(int $productId, ?string $reason, ?string $detail, int $userId, ?string $ip): array
+    {
+        $stmt = $this->db->prepare('SELECT name, qty_stock FROM products WHERE id = ?');
+        $stmt->execute([$productId]);
+        $p = $stmt->fetch();
+        if (!$p) {
+            throw new \RuntimeException('ไม่พบสินค้า');
+        }
+        if ((int) $p['qty_stock'] === 0) {
+            throw new \RuntimeException("\"{$p['name']}\" คงเหลือเป็น 0 อยู่แล้ว");
+        }
+        return $this->itemCount($productId, 0, [
+            'method' => 'ระบุว่าหมด (ไม่มีสินค้าเหลือ)',
+            'reason' => $reason,
+            'reason_detail' => $detail,
+        ], $userId, $ip, null, true);
     }
 
     /** An item count waiting for a manager, locked, with its line. */

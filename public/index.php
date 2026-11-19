@@ -460,6 +460,9 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.approve'));
     $group->post('/stockcounts/items/{id:[0-9]+}/reject', [StockCountController::class, 'rejectItem'])
         ->add(new RoleGuard('stockcount.create'));
+    // Admin / manager: the product is gone (e.g. below zero) — counted at 0 with the reason found.
+    $group->post('/products/{id:[0-9]+}/sold-out', [StockCountController::class, 'soldOut'])
+        ->add(new RoleGuard('stockcount.approve'));
     // Admin / manager correct what was counted on an approved count, with a reason (migration 0082).
     $group->post('/stockcounts/lines/{id:[0-9]+}/edit', [StockCountController::class, 'editCount']);
     $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])

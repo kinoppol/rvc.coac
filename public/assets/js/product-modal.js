@@ -115,7 +115,8 @@ function info(label, value) {
     return `<div class="pm-info"><div class="muted">${escapeHtml(label)}</div><div>${value}</div></div>`;
 }
 
-export async function openProductModal(productId, navigate) {
+/** opts.onChange: something changed the product's stock here (ระบุว่าหมด), so the page below can reload. */
+export async function openProductModal(productId, navigate, opts = {}) {
     const box = document.createElement('div');
     box.className = 'modal-backdrop';
     box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:960px"><div class="modal-body">' + skBlock(6, 8) + '</div></div>';
@@ -271,6 +272,70 @@ export async function openProductModal(productId, navigate) {
 
     const signed = (n) => `${n > 0 ? '+' : ''}${count(n)}`;
     const reopen = () => { close(); openProductModal(productId, navigate); };
+
+    /** Admin / manager: "ระบุว่าหมด" — the stock becomes 0 as a count, with the cause found. */
+    const canSoldOut = () => d.can_adjust && d.sold_out_reasons && Number(p.qty_stock) !== 0;
+    function soldOutHtml() {
+        if (!canSoldOut()) return '';
+        const q = Number(p.qty_stock);
+        return `<div class="pm-soldout" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid ${q < 0 ? 'var(--bad)' : 'var(--border)'};${q < 0 ? 'background:var(--bad-bg)' : ''}">
+          <div style="flex:1;min-width:220px;font-size:13px">${q < 0
+              ? `<b style="color:var(--bad)">คงเหลือติดลบ ${count(q)} ชิ้น</b> — ถ้าสินค้าหมดแล้ว (ขายเกินที่บันทึก หรือขายผิดรายการ) กด "ระบุว่าหมด" เพื่อตั้งคงเหลือเป็น 0`
+              : `คงเหลือในระบบ ${count(q)} ชิ้น — ถ้าตรวจแล้วไม่มีสินค้าเหลือ กด "ระบุว่าหมด" เพื่อตั้งคงเหลือเป็น 0`}
+            <div class="muted" style="font-size:12px">บันทึกเป็นการนับสต๊อกได้ 0 ชิ้น (ปรับยอดทันที) ต้องระบุสาเหตุที่ตรวจพบ</div></div>
+          <button type="button" class="btn ${q < 0 ? 'danger' : 'secondary'}" data-sold-out>ระบุว่าหมด</button></div>`;
+    }
+
+    function soldOutForm() {
+        return new Promise((resolve) => {
+            const q = Number(p.qty_stock);
+            const reasons = Object.entries(d.sold_out_reasons).filter(([k]) => k !== 'found');
+            // Below zero most often: sold more than recorded, or sold as the wrong product.
+            const pick = q < 0 ? 'sale_error' : 'lost';
+            const el = document.createElement('div');
+            el.className = 'modal-backdrop';
+            el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="width:540px">
+              <div class="modal-head"><h2>ระบุว่าหมด: ${escapeHtml(p.name)}</h2><button type="button" class="modal-close" data-c aria-label="ปิด">✕</button></div>
+              <div class="modal-body" style="padding-top:12px">
+                <div style="font-size:13px;margin-bottom:10px">คงเหลือในระบบ <b>${count(q)}</b> ชิ้น → <b>0</b> ชิ้น (${signed(-q)}) · บันทึกเป็นการนับสต๊อก ดูได้ในบัตรสินค้าและรายงานการนับ</div>
+                <div style="font-weight:600;font-size:13px;margin-bottom:4px">สาเหตุที่ตรวจพบ (จำเป็น)</div>
+                ${reasons.map(([k, l]) => `<label class="pm-radio"><input type="radio" name="so-reason" value="${k}" ${k === pick ? 'checked' : ''}> ${escapeHtml(l)}</label>`).join('')}
+                <label class="field" style="margin-top:8px"><span>รายละเอียด (จำเป็น อย่างน้อย ${d.detail_min} ตัวอักษร)</span>
+                  <textarea rows="3" data-detail maxlength="500" placeholder="${q < 0 ? 'เช่น สแกนขายสินค้าอื่นเป็นรายการนี้ ตรวจชั้นวางแล้วไม่มีสินค้าเหลือ' : 'เช่น ตรวจชั้นวางและหลังร้านแล้วไม่พบสินค้า'}"></textarea></label>
+                <div class="app-dialog-error" data-err hidden></div>
+              </div>
+              <div class="modal-foot"><button type="button" class="btn secondary" data-c>ยกเลิก</button><button type="button" class="btn danger" data-ok>ระบุว่าหมด</button></div></div>`;
+            document.body.appendChild(el);
+            const $ = (s) => el.querySelector(s);
+            const done = (v) => { el.remove(); document.removeEventListener('keydown', onEsc, true); resolve(v); };
+            const onEsc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+            document.addEventListener('keydown', onEsc, true);
+            el.addEventListener('input', () => { $('[data-err]').hidden = true; });
+            el.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => done(null)));
+            $('[data-ok]').addEventListener('click', () => {
+                const reason = el.querySelector('input[name="so-reason"]:checked')?.value;
+                const detail = $('[data-detail]').value.trim();
+                const err = (m) => { $('[data-err]').textContent = m; $('[data-err]').hidden = false; };
+                if (!reason) return err('กรุณาเลือกสาเหตุที่ตรวจพบ');
+                if (detail.length < d.detail_min) return err(`กรุณาระบุรายละเอียดอย่างน้อย ${d.detail_min} ตัวอักษร`);
+                done({ reason, reason_detail: detail });
+            });
+            $('[data-detail]').focus();
+        });
+    }
+
+    async function markSoldOut() {
+        const v = await soldOutForm();
+        if (!v) return;
+        try {
+            const res = (await api.post(`/products/${p.id}/sold-out`, v)).data;
+            alertDialog(`ตั้งคงเหลือ "${p.name}" จาก ${count(res.system_qty)} เป็น 0 ชิ้นแล้ว (บันทึกเป็นการนับ ${res.doc_no})`, { title: 'ระบุว่าหมดแล้ว' });
+            opts.onChange?.();
+            await refresh();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+    }
 
     /** A worked-out adjustment row: undo it, or say how much it should have been. */
     async function newFix(r) {
@@ -656,6 +721,7 @@ export async function openProductModal(productId, navigate) {
                 ${p.expiry_date ? info('วันหมดอายุ', escapeHtml(fmtDate(p.expiry_date))) : ''}
               </div>
             </div>
+            ${soldOutHtml()}
             ${photoBackupsHtml()}
             ${supplierPricesHtml()}
             ${summaryHtml()}
@@ -702,6 +768,7 @@ export async function openProductModal(productId, navigate) {
         box.querySelectorAll('[data-adj-new]').forEach((b) => b.addEventListener('click', () => newFix(d.movements[+b.dataset.adjNew])));
         box.querySelectorAll('[data-adj-edit]').forEach((b) => b.addEventListener('click', () => editFix(d.movements[+b.dataset.adjEdit])));
         box.querySelectorAll('[data-adj-cancel]').forEach((b) => b.addEventListener('click', () => cancelFix(d.movements[+b.dataset.adjCancel])));
+        box.querySelector('[data-sold-out]')?.addEventListener('click', markSoldOut);
         box.querySelectorAll('[data-restore-photo]').forEach((b) => b.addEventListener('click', async () => {
             b.disabled = true;
             try {
