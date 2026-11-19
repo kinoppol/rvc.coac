@@ -58,9 +58,13 @@ class SalesController
             $all = false;
         }
         $like = '%' . $q . '%';
-        $where = "({$stock}) AND (p.name LIKE ? OR p.barcode LIKE ?
+        // Members of a sale group (migration 0084) are sold as the group: out of the list and of name
+        // searches; their exact barcode still finds them.
+        // groups=1: only the web POS sells groups; other callers (the Android app) still see each member.
+        $groups = !empty($params['groups']) && \App\Services\SaleGroupService::ready($db);
+        $where = ($groups ? '(p.sale_group_id IS NULL OR p.barcode = ?) AND ' : '') . "({$stock}) AND (p.name LIKE ? OR p.barcode LIKE ?
                 OR EXISTS (SELECT 1 FROM product_pack_barcodes b WHERE b.product_id = p.id AND b.barcode = ?))";
-        $args = [$like, $like, $q];
+        $args = $groups ? [$q, $like, $like, $q] : [$like, $like, $q];
         $flag = '0';
         if (Db::hasColumn($db, 'products', 'discontinued_at')) {
             $flag = 'p.discontinued_at IS NOT NULL';
@@ -108,6 +112,25 @@ class SalesController
             $r['discontinued'] = !empty($r['discontinued']);
         }
         unset($r);
+        // Sale groups as one POS item each (id = -group id), in the same order as the products.
+        if ($groups && empty($params['out'])) {
+            $items = (new \App\Services\SaleGroupService($db, new AuditLogger($db)))->posItems($q, $short);
+            if ($items) {
+                $rows = array_merge($rows, $items);
+                $key = $params['sort'] ?? 'name';
+                usort($rows, function ($a, $b) use ($key) {
+                    $c = match ($key) {
+                        'popular' => (int) $b['sold_qty'] <=> (int) $a['sold_qty'],
+                        'price_asc' => (float) $a['sale_price'] <=> (float) $b['sale_price'],
+                        'price_desc' => (float) $b['sale_price'] <=> (float) $a['sale_price'],
+                        'stock_desc' => (int) $b['qty_stock'] <=> (int) $a['qty_stock'],
+                        'stock_asc' => (int) $a['qty_stock'] <=> (int) $b['qty_stock'],
+                        default => 0,
+                    };
+                    return $c !== 0 ? $c : strcmp((string) $a['name'], (string) $b['name']);
+                });
+            }
+        }
         return $this->json($response, ['data' => $rows]);
     }
 

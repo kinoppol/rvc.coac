@@ -413,7 +413,7 @@ class StockCountService
      * @param array{place?:?string, method?:?string, note?:?string, reason?:?string, reason_detail?:?string} $detail
      * @return array{id:int, doc_no:string, system_qty:int, counted_qty:int, diff_qty:int, pending:bool}
      */
-    public function itemCount(int $productId, int $counted, array $detail, int $userId, ?string $ip, ?string $photo = null, bool $certified = false): array
+    public function itemCount(int $productId, int $counted, array $detail, int $userId, ?string $ip, ?string $photo = null, bool $certified = false, ?bool $forcePending = null): array
     {
         if (!self::itemReady($this->db)) {
             throw new \RuntimeException('ยังนับรายการแบบใหม่ไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0077) ก่อน');
@@ -426,7 +426,11 @@ class StockCountService
         $note = self::clip($detail['note'] ?? null, 255);
         $reason = self::clip($detail['reason'] ?? null, 20);
         $reasonDetail = self::clip($detail['reason_detail'] ?? null, 500);
-        $this->db->beginTransaction();
+        // Inside a caller's transaction (a group count) it joins it.
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
         try {
             $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([$productId]);
@@ -456,7 +460,7 @@ class StockCountService
                 }
             }
             // Certified: recorded by an admin / manager themself (ระบุว่าหมด), it takes effect at once.
-            $pending = !$certified && abs($diff) > self::ITEM_APPROVAL_OVER;
+            $pending = $forcePending ?? (!$certified && abs($diff) > self::ITEM_APPROVAL_OVER);
             $docNo = $this->docs->next('SC', 'stock_counts', 'doc_no');
             $this->db->prepare(
                 $pending
@@ -486,12 +490,164 @@ class StockCountService
                 'system_qty' => $system, 'counted_qty' => $counted, 'diff_qty' => $diff, 'place' => $place, 'method' => $method,
                 'note' => $note, 'reason' => $reason, 'reason_detail' => $reasonDetail,
             ], $userId, $ip);
-            $this->db->commit();
+            if ($own) {
+                $this->db->commit();
+            }
             return ['id' => $countId, 'doc_no' => $docNo, 'system_qty' => $system, 'counted_qty' => $counted, 'diff_qty' => $diff, 'pending' => $pending];
+        } catch (\Throwable $e) {
+            if ($own) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * A sale group (migration 0084) is counted as one: the pieces of all its members together.
+     * The count is shared out over the members by changing their stock as little as possible:
+     * members below zero go to 0 first, then pieces short come off the member with the most left
+     * and pieces over go to the member with the least, until the members add up to what was
+     * counted. Each member gets its own item count (same reason, the group named in how it was
+     * counted). A group difference over ITEM_APPROVAL_OVER pieces waits for a manager, member by member.
+     *
+     * @return array{doc_no:string, system_qty:int, counted_qty:int, diff_qty:int, pending:bool, qty_stock:int}
+     */
+    public function groupCount(int $groupId, int $counted, array $detail, int $userId, ?string $ip, ?string $photo = null): array
+    {
+        if (!self::itemReady($this->db) || !SaleGroupService::ready($this->db)) {
+            throw new \RuntimeException('ยังนับกลุ่มขายไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0077 และ 0084) ก่อน');
+        }
+        if ($counted < 0 || $counted > 1000000) {
+            throw new \RuntimeException('จำนวนที่นับไม่ถูกต้อง');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM sale_groups WHERE id = ?');
+            $stmt->execute([$groupId]);
+            $g = $stmt->fetch();
+            if (!$g) {
+                throw new \RuntimeException('ไม่พบกลุ่มขายนี้ (อาจถูกยกเลิกกลุ่มแล้ว)');
+            }
+            $stmt = $this->db->prepare('SELECT id, name, qty_stock FROM products WHERE sale_group_id = ? ORDER BY id FOR UPDATE');
+            $stmt->execute([$groupId]);
+            $members = $stmt->fetchAll();
+            if (!$members) {
+                throw new \RuntimeException("กลุ่ม \"{$g['name']}\" ไม่มีสินค้า");
+            }
+            $system = array_sum(array_map(fn ($m) => (int) $m['qty_stock'], $members));
+            $diff = $counted - $system;
+            $reason = self::clip($detail['reason'] ?? null, 20);
+            $reasonDetail = self::clip($detail['reason_detail'] ?? null, 500);
+            if ($diff !== 0) {
+                if ($reason === null || !isset(self::DIFF_REASONS[$reason])) {
+                    throw new \RuntimeException(sprintf('นับได้ %d ในระบบ %d (%s%d) กรุณาเลือกสาเหตุที่ยอดต่างจากระบบ', $counted, $system, $diff > 0 ? '+' : '', $diff), 1);
+                }
+                if ($reasonDetail === null || mb_strlen($reasonDetail) < self::DIFF_DETAIL_MIN) {
+                    throw new \RuntimeException('กรุณาระบุรายละเอียดว่าทำไมยอดที่นับต่างจากระบบ (อย่างน้อย ' . self::DIFF_DETAIL_MIN . ' ตัวอักษร)', 1);
+                }
+            }
+            // Share the count out: nobody below zero, then take from the most / give to the least.
+            $target = [];
+            foreach ($members as $m) {
+                $target[(int) $m['id']] = max(0, (int) $m['qty_stock']);
+            }
+            $sum = array_sum($target);
+            while ($sum > $counted) {
+                $pid = array_keys($target, max($target))[0];
+                $target[$pid]--;
+                $sum--;
+            }
+            while ($sum < $counted) {
+                $pid = array_keys($target, min($target))[0];
+                $target[$pid]++;
+                $sum++;
+            }
+            $pending = abs($diff) > self::ITEM_APPROVAL_OVER;
+            $method = mb_substr(sprintf('นับรวมกลุ่ม %s: นับได้ %d ในระบบ %d', $g['name'], $counted, $system)
+                . (!empty($detail['method']) ? ' · ' . $detail['method'] : ''), 0, 100);
+            $docs = [];
+            foreach ($members as $i => $m) {
+                $mine = (int) $m['qty_stock'] !== $target[(int) $m['id']];
+                $res = $this->itemCount((int) $m['id'], $target[(int) $m['id']], [
+                    'place' => $detail['place'] ?? null,
+                    'method' => $method,
+                    'note' => $detail['note'] ?? null,
+                    // The group matched but its members were evened out (one was below zero).
+                    'reason' => $mine ? ($diff !== 0 ? $reason : 'other') : null,
+                    'reason_detail' => $mine ? ($diff !== 0 ? $reasonDetail : 'ปรับยอดภายในกลุ่มขาย ยอดรวมที่นับตรงกับระบบ') : null,
+                ], $userId, $ip, $i === 0 ? $photo : null, false, $mine ? $pending : false);
+                $docs[] = $res['doc_no'];
+            }
+            $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
+        $stmt = $this->db->prepare('SELECT COALESCE(SUM(qty_stock), 0) FROM products WHERE sale_group_id = ?');
+        $stmt->execute([$groupId]);
+        return [
+            'doc_no' => $docs[0] . (count($docs) > 1 ? ' – ' . end($docs) : ''), 'system_qty' => $system, 'counted_qty' => $counted,
+            'diff_qty' => $diff, 'pending' => $pending && $diff !== 0, 'qty_stock' => (int) $stmt->fetchColumn(),
+        ];
+    }
+
+    /**
+     * Counting: a group stands in for its members (by name, or a member found). Shaped like
+     * productInfo: id = -group id, qty_stock = the members' stock added up.
+     */
+    public function groupInfo(int $groupId): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT g.id, g.name, g.sale_price, COALESCE(SUM(p.qty_stock), 0) AS qty_stock, COUNT(p.id) AS members,
+                    SUBSTRING_INDEX(GROUP_CONCAT(IF(p.image_token IS NULL, NULL, CONCAT(p.id, ':', p.image_token)) ORDER BY p.qty_stock DESC), ',', 1) AS photo
+             FROM sale_groups g LEFT JOIN products p ON p.sale_group_id = g.id WHERE g.id = ? GROUP BY g.id, g.name, g.sale_price"
+        );
+        $stmt->execute([$groupId]);
+        $g = $stmt->fetch();
+        if (!$g) {
+            return null;
+        }
+        [$photoId, $token] = $g['photo'] ? explode(':', (string) $g['photo'], 2) : [null, null];
+        return [
+            'id' => -(int) $g['id'], 'group_id' => (int) $g['id'], 'is_group' => true, 'members' => (int) $g['members'],
+            'name' => $g['name'] . ' (กลุ่ม ' . (int) $g['members'] . ' รายการ)', 'barcode' => null, 'image_token' => $token,
+            'photo_id' => $photoId !== null ? (int) $photoId : null, 'consignor_id' => null, 'qty_stock' => (int) $g['qty_stock'],
+            'sale_price' => (float) $g['sale_price'], 'consignor_name' => 'สินค้าของร้าน · นับรวมทั้งกลุ่มขาย', 'pack_barcodes' => [],
+        ];
+    }
+
+    /** Counting with no round: members of a sale group become their group (once), and groups match by name too. */
+    public function asGroups(array $found, string $q = ''): array
+    {
+        if (!SaleGroupService::ready($this->db)) {
+            return $found;
+        }
+        $out = [];
+        $seen = [];
+        $groupOf = $this->db->prepare('SELECT sale_group_id FROM products WHERE id = ?');
+        $add = function (int $gid) use (&$out, &$seen) {
+            if (!isset($seen[$gid]) && ($g = $this->groupInfo($gid))) {
+                $seen[$gid] = true;
+                $out[] = $g;
+            }
+        };
+        if ($q !== '') {
+            $stmt = $this->db->prepare('SELECT id FROM sale_groups WHERE name LIKE ? ORDER BY name LIMIT 10');
+            $stmt->execute(['%' . $q . '%']);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $gid) {
+                $add((int) $gid);
+            }
+        }
+        foreach ($found as $p) {
+            $groupOf->execute([(int) $p['id']]);
+            $gid = $groupOf->fetchColumn();
+            if ($gid) {
+                $add((int) $gid);
+            } else {
+                $out[] = $p;
+            }
+        }
+        return $out;
     }
 
     /**

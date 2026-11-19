@@ -48,6 +48,8 @@ class SaleService
             $this->db->beginTransaction();
         }
         try {
+            // A sale group (migration 0084) sold as one item: one line per member product, taken in turn.
+            $items = (new SaleGroupService($this->db, $this->audit))->expand($items, !empty($opts['allow_short_stock']));
             $docNo = $this->docs->next('SL', 'sales', 'doc_no');
             $totalQty = 0;
             $totalValue = 0.0;

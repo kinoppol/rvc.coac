@@ -93,6 +93,37 @@ class StockCountController
     }
 
     /**
+     * POST /sale-groups/{id}/count — a sale group counted as one, same body as quick-count; the
+     * count is shared out over the members (StockCountService::groupCount).
+     */
+    public function groupCount(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        if (!isset($body['counted_qty']) || !is_numeric($body['counted_qty']) || (int) $body['counted_qty'] != $body['counted_qty']) {
+            return $this->error($response, 'กรุณาระบุจำนวนที่นับเป็นจำนวนเต็ม', 422);
+        }
+        $detail = [
+            'place' => $body['place'] ?? null,
+            'method' => $body['method'] ?? $body['photo_note'] ?? null,
+            'note' => $body['note'] ?? null,
+            'reason' => $body['reason'] ?? null,
+            'reason_detail' => $body['reason_detail'] ?? null,
+        ];
+        try {
+            $result = $this->service()->groupCount((int) $args['id'], (int) $body['counted_qty'], $detail, (int) $user['id'],
+                $request->getServerParams()['REMOTE_ADDR'] ?? null, isset($body['photo']) ? (string) $body['photo'] : null);
+        } catch (\RuntimeException $e) {
+            $g = $this->service()->groupInfo((int) $args['id']);
+            $response->getBody()->write((string) json_encode([
+                'error' => $e->getMessage(), 'need_reason' => $e->getCode() === 1, 'system_qty' => $g ? (int) $g['qty_stock'] : null,
+            ], JSON_UNESCAPED_UNICODE));
+            return $response->withStatus(422)->withHeader('Content-Type', 'application/json');
+        }
+        return $this->json($response, ['data' => $result]);
+    }
+
+    /**
      * GET /stockcounts/items[?product_id=] — item counts waiting for a manager and the latest ones,
      * with all that was recorded about them, plus the reasons to choose from and the threshold.
      */
@@ -213,6 +244,10 @@ class StockCountController
         if (!$found) {
             return $this->error($response, "ไม่พบสินค้าที่มีบาร์โค้ด {$code}", 404);
         }
+        // Counting with no round: a member of a sale group is counted as its group.
+        if ((int) $args['id'] === 0) {
+            $found = $this->service()->asGroups([$found])[0] ?? $found;
+        }
         return $this->json($response, ['data' => $found]);
     }
 
@@ -222,7 +257,12 @@ class StockCountController
         if (mb_strlen($q) < 1) {
             return $this->json($response, ['data' => []]);
         }
-        return $this->json($response, ['data' => $this->service()->search((int) $args['id'], $q)]);
+        $found = $this->service()->search((int) $args['id'], $q);
+        // Counting with no round: sale groups are counted as one (migration 0084).
+        if ((int) $args['id'] === 0) {
+            $found = $this->service()->asGroups($found, $q);
+        }
+        return $this->json($response, ['data' => $found]);
     }
 
     /** POST /stockcounts/{id}/count {product_id, counted_qty} — one product counted on the phone. */

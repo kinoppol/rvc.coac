@@ -274,7 +274,8 @@ export async function render(container, { user } = {}) {
     }
 
     function photoUrl(p) {
-        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${p.image_token}`) : null;
+        // A sale group (id < 0) shows one member's photo.
+        return p.image_token ? api.downloadUrl(`/products/${p.photo_id ?? p.id}/photo?size=thumb&v=${p.image_token}`) : null;
     }
 
     /** <img> for a product photo; a photo without a server thumbnail is marked so its first load makes one. */
@@ -763,7 +764,7 @@ export async function render(container, { user } = {}) {
         }
         if (!p && /^\S{4,}$/.test(code)) {
             // Not in the loaded list (stock arrived after the page was opened, or a discontinued product).
-            const res = await api.get(`/sales/products?q=${encodeURIComponent(code)}`).catch(() => ({ data: [] }));
+            const res = await api.get(`/sales/products?groups=1&q=${encodeURIComponent(code)}`).catch(() => ({ data: [] }));
             [p, pack] = byCode(res.data.map(normalize));
             if (p && !p.discontinued && !products.some((x) => x.id === p.id)) products.push(p);
         }
@@ -795,7 +796,7 @@ export async function render(container, { user } = {}) {
 
     async function loadProducts() {
         try {
-            const res = await api.get(`/sales/products?all=1&sort=popular${allowShort() ? '&short=1' : ''}`);
+            const res = await api.get(`/sales/products?all=1&groups=1&sort=popular${allowShort() ? '&short=1' : ''}`);
             products = res.data.map(normalize);
             loaded = true;
         } catch (e) {
@@ -991,7 +992,9 @@ export async function render(container, { user } = {}) {
             draw();
             try {
                 const res = await api.post('/sales', {
-                    items: cart.map((i) => ({ product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) })),
+                    // A sale group (id = -group id) is sold as one item; the server takes the pieces from its members in turn.
+                    items: cart.map((i) => (i.id < 0 ? { group_id: -i.id, qty: i.qty }
+                        : { product_id: i.id, qty: i.qty * lineSize(i), ...(i.pack ? { pack_size: i.pack.pack_size } : {}) })),
                     allow_short: allowShort(),
                     payments: selected.map((k) => ({ method: k, amount: Number(amounts[k]) || 0 })),
                 });

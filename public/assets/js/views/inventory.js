@@ -285,6 +285,8 @@ export async function render(container, { navigate, permissions, user }) {
             <div class="actions-row">
               <button type="button" class="btn secondary" id="phone-link" title="ใช้กล้องมือถือสแกนบาร์โค้ดแล้วส่งเข้าหน้านี้บนคอมพิวเตอร์">📲 ใช้มือถือสแกนให้คอม</button>
               ${canMerge ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
+              ${canMerge ? `<button type="button" class="btn secondary" id="group-picked" ${pickedStore().length > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าของร้านที่หน้าตาคล้ายกัน ไม่มีบาร์โค้ด และต้นทุนเท่ากัน 2 รายการขึ้นไป แล้วรวมเป็นสินค้ารายการเดียวหน้า POS (ขายและนับเป็นกลุ่ม ตัดยอดสลับแต่ละรายการ)">จัดกลุ่มขายหน้า POS (${pickedStore().length})</button>
+                <button type="button" class="btn secondary" id="sale-groups" title="ดู แก้ไข หรือยกเลิกกลุ่มขายหน้า POS">กลุ่มขายหน้า POS</button>` : ''}
               ${canMerge ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
               ${canEdit ? `<button type="button" class="btn secondary" id="compare-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง 2–${COMPARE_MAX} รายการ แล้วดูกราฟแนวโน้มการขายรายวันเทียบกัน">เปรียบเทียบแนวโน้มการขาย (${picked.size})</button>` : ''}
               ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
@@ -381,12 +383,17 @@ export async function render(container, { navigate, permissions, user }) {
         // Ticking products for a purchase order: the button count updates without redrawing the table.
         const poBtn = container.querySelector('#make-po');
         const mergeBtn = container.querySelector('#merge-picked');
+        const groupBtn = container.querySelector('#group-picked');
         const compareBtn = container.querySelector('#compare-picked');
         const syncPick = () => {
             const storePicks = pickedStore().length;
             if (poBtn) {
                 poBtn.textContent = `สร้างใบรายการสั่งซื้อ (${storePicks})`;
                 poBtn.disabled = !storePicks;
+            }
+            if (groupBtn) {
+                groupBtn.textContent = `จัดกลุ่มขายหน้า POS (${storePicks})`;
+                groupBtn.disabled = storePicks < 2;
             }
             if (mergeBtn) {
                 mergeBtn.textContent = `รวมรายการที่เลือก (${picked.size})`;
@@ -416,6 +423,9 @@ export async function render(container, { navigate, permissions, user }) {
         });
         syncPick();
         mergeBtn?.addEventListener('click', mergePicked);
+        groupBtn?.addEventListener('click', groupPicked);
+        container.querySelector('#sale-groups')?.addEventListener('click', openSaleGroups);
+        container.querySelectorAll('[data-sale-group]').forEach((b) => b.addEventListener('click', openSaleGroups));
         compareBtn?.addEventListener('click', () => {
             if (picked.size > COMPARE_MAX) {
                 alertDialog(`เปรียบเทียบได้ครั้งละไม่เกิน ${COMPARE_MAX} รายการ (เลือกไว้ ${picked.size} รายการ) กรุณาเอาติ๊กออกบางรายการ`, { title: 'เปรียบเทียบแนวโน้มการขาย' });
@@ -746,6 +756,154 @@ export async function render(container, { navigate, permissions, user }) {
     }
 
     /** Admin: merge the rows ticked in the table (the same item under names too different to be found). */
+    // ---- Sale groups (migration 0084): look-alike store goods sold and counted as one POS item ----
+
+    /** Small form for a group: name and price. Resolves to { name, sale_price } or null. */
+    function groupForm({ title, intro, name, price, okText }) {
+        return new Promise((resolve) => {
+            const el = document.createElement('div');
+            el.className = 'modal-backdrop';
+            el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="width:560px">
+              <div class="modal-head"><h2>${escapeHtml(title)}</h2><button type="button" class="modal-close" data-c aria-label="ปิด">✕</button></div>
+              <div class="modal-body" style="padding-top:12px">
+                <div style="font-size:13px;margin-bottom:10px">${intro}</div>
+                <label class="field"><span>ชื่อที่แสดงหน้า POS</span><input type="text" data-name maxlength="200" value="${escapeHtml(name)}"></label>
+                <label class="field" style="margin-top:8px"><span>ราคาขาย/ชิ้น (บาท)</span><input type="number" step="0.01" min="0" data-price value="${escapeHtml(String(price))}"></label>
+                <div class="app-dialog-error" data-err hidden></div>
+              </div>
+              <div class="modal-foot"><button type="button" class="btn secondary" data-c>ยกเลิก</button><button type="button" class="btn" data-ok>${escapeHtml(okText)}</button></div></div>`;
+            document.body.appendChild(el);
+            const $ = (s) => el.querySelector(s);
+            const done = (v) => { el.remove(); document.removeEventListener('keydown', onEsc, true); resolve(v); };
+            const onEsc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+            document.addEventListener('keydown', onEsc, true);
+            el.addEventListener('input', () => { $('[data-err]').hidden = true; });
+            el.querySelectorAll('[data-c]').forEach((b) => b.addEventListener('click', () => done(null)));
+            $('[data-ok]').addEventListener('click', () => {
+                const n = $('[data-name]').value.trim();
+                const pr = Number($('[data-price]').value);
+                const err = (m) => { $('[data-err]').textContent = m; $('[data-err]').hidden = false; };
+                if (!n) return err('กรุณาตั้งชื่อกลุ่ม');
+                if (!(pr > 0)) return err('ราคาขายต้องมากกว่า 0');
+                done({ name: n, sale_price: pr });
+            });
+            $('[data-name]').focus();
+        });
+    }
+
+    /** The words the names share at the start (a name for the group), else the first name. */
+    function commonName(names) {
+        const words = names.map((n) => n.trim().split(/\s+/));
+        const out = [];
+        for (let i = 0; i < words[0].length; i++) {
+            if (words.every((w) => w[i] === words[0][i])) out.push(words[0][i]); else break;
+        }
+        return out.join(' ') || names[0];
+    }
+
+    async function groupPicked() {
+        const list = res.data.filter((p) => picked.has(Number(p.id)) && p.consignor_id == null);
+        if (list.length < 2) return;
+        const inGroup = list.filter((p) => p.sale_group_id);
+        if (inGroup.length) {
+            alertDialog(`อยู่ในกลุ่มขายแล้ว: ${inGroup.map((p) => `${p.name} (${p.sale_group_name})`).join(', ')} — เพิ่มสินค้าเข้ากลุ่มเดิมหรือเอาออกจากกลุ่มได้ที่ปุ่ม "กลุ่มขายหน้า POS"`, { title: 'จัดกลุ่มขายหน้า POS' });
+            return;
+        }
+        const costs = new Set(list.map((p) => Number(p.cost_price).toFixed(2)));
+        if (costs.size > 1) {
+            alertDialog(`สินค้าในกลุ่มขายต้องมีต้นทุนต่อชิ้นเท่ากัน — ${list.map((p) => `${p.name} ฿${money(p.cost_price)}`).join(', ')}`, { title: 'ต้นทุนไม่เท่ากัน', tone: 'error' });
+            return;
+        }
+        const prices = list.map((p) => Number(p.sale_price));
+        const price = prices.sort((a, b) => prices.filter((x) => x === b).length - prices.filter((x) => x === a).length)[0];
+        const v = await groupForm({
+            title: 'จัดกลุ่มขายหน้า POS',
+            intro: `สินค้า ${list.length} รายการนี้จะแสดงหน้า POS เป็นรายการเดียว ขายแล้วระบบตัดยอดจากรายการที่เหลือมากที่สุดก่อน สลับกันไปจนหมดทุกรายการ และตอนนับสต๊อกนับรวมทั้งกลุ่ม · ซื้อเข้าร้านแยกรายการตามเดิม
+              <ul style="margin:8px 0 0;padding-left:18px">${list.map((p) => `<li>${escapeHtml(p.name)} <span class="muted">คงเหลือ ${count(p.qty_stock)} · ทุน ฿${money(p.cost_price)} · ราคา ฿${money(p.sale_price)}</span></li>`).join('')}</ul>`,
+            name: commonName(list.map((p) => p.name)), price, okText: 'จัดกลุ่ม',
+        });
+        if (!v) return;
+        try {
+            await api.post('/sale-groups', { ...v, product_ids: list.map((p) => p.id) });
+            list.forEach((p) => picked.delete(Number(p.id)));
+            await load();
+            alertDialog(`หน้า POS จะแสดง "${v.name}" เป็นรายการเดียว ราคา ฿${money(v.sale_price)}`, { title: 'จัดกลุ่มขายแล้ว' });
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+    }
+
+    /** Every sale group: rename / reprice, add the ticked products, take members out, or ungroup. */
+    function openSaleGroups() {
+        const box = document.createElement('div');
+        box.className = 'modal-backdrop';
+        box.innerHTML = '<div class="modal" role="dialog" aria-modal="true" style="width:820px"><div class="modal-body">กำลังโหลด...</div></div>';
+        document.body.appendChild(box);
+        let groups = [];
+        let changed = false;
+        const close = () => { box.remove(); document.removeEventListener('keydown', onKey); if (changed) load(); };
+        const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-backdrop')].pop() === box) close(); };
+        document.addEventListener('keydown', onKey);
+        const run = async (fn) => {
+            try { await fn(); changed = true; await reload(); } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+        };
+        async function reload() {
+            try { groups = (await api.get('/sale-groups')).data; } catch (e) { groups = []; alertDialog(e.message, { tone: 'error' }); }
+            draw();
+        }
+        function draw() {
+            const ticked = res.data.filter((p) => picked.has(Number(p.id)) && p.consignor_id == null && !p.sale_group_id);
+            box.querySelector('.modal').innerHTML = `
+              <div class="modal-head"><h2>กลุ่มขายหน้า POS (${groups.length})</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
+              <div class="modal-body" style="padding-top:8px">
+                <div class="muted" style="font-size:12.5px;margin-bottom:10px">สินค้าของร้านที่หน้าตาคล้ายกัน ไม่มีบาร์โค้ด ต้นทุนเท่ากัน แสดงหน้า POS เป็นรายการเดียว ขายแล้วตัดยอดจากรายการที่เหลือมากที่สุดก่อน สลับไปจนหมดทุกรายการ · นับสต๊อกนับรวมทั้งกลุ่ม · ซื้อเข้าร้านแยกรายการตามเดิม · สร้างกลุ่มใหม่: ติ๊กสินค้าในตารางแล้วกด "จัดกลุ่มขายหน้า POS"</div>
+                ${groups.length ? groups.map((g) => `
+                  <section class="card" style="margin:0 0 12px;padding:12px">
+                    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+                      <div><b style="font-size:15px">${escapeHtml(g.name)}</b> <span class="pill ok">฿${money(g.sale_price)}</span>
+                        <span class="muted" style="font-size:12.5px">คงเหลือรวม ${count(g.qty_stock)} ชิ้น · ${g.members.length} รายการ</span></div>
+                      <div class="actions-row" style="gap:6px">
+                        <button type="button" class="btn secondary sm" data-g-edit="${g.id}">แก้ชื่อ/ราคา</button>
+                        ${ticked.length ? `<button type="button" class="btn secondary sm" data-g-add="${g.id}" title="${escapeHtml(ticked.map((p) => p.name).join(', '))}">เพิ่มสินค้าที่ติ๊ก (${ticked.length})</button>` : ''}
+                        <button type="button" class="btn danger sm" data-g-del="${g.id}">ยกเลิกกลุ่ม</button>
+                      </div>
+                    </div>
+                    <div class="table-wrap" style="margin-top:8px"><table>
+                      <thead><tr><th>สินค้าในกลุ่ม</th><th class="num">คงเหลือ</th><th class="num">ทุน/ชิ้น</th><th class="num">ราคาของรายการ</th><th></th></tr></thead>
+                      <tbody>${g.members.map((m) => `<tr><td>${escapeHtml(m.name)}${m.barcode ? `<div class="muted" style="font-size:12px">${escapeHtml(m.barcode)}</div>` : ''}</td>
+                        <td class="num" style="${Number(m.qty_stock) < 0 ? 'color:var(--bad)' : ''}">${count(m.qty_stock)}</td><td class="num">${money(m.cost_price)}</td><td class="num">${money(m.sale_price)}</td>
+                        <td><button type="button" class="link-btn" data-g-out="${g.id}:${m.id}" style="font-size:12.5px">เอาออกจากกลุ่ม</button></td></tr>`).join('')}</tbody>
+                    </table></div>
+                  </section>`).join('') : '<div class="empty">ยังไม่มีกลุ่มขาย</div>'}
+              </div>
+              <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
+            box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
+            const byId = (id) => groups.find((g) => String(g.id) === String(id));
+            box.querySelectorAll('[data-g-edit]').forEach((b) => b.addEventListener('click', async () => {
+                const g = byId(b.dataset.gEdit);
+                const v = await groupForm({ title: `แก้ไขกลุ่ม ${g.name}`, intro: 'ชื่อและราคาที่แสดงหน้า POS (ราคานี้ใช้ขายทุกรายการในกลุ่ม)', name: g.name, price: Number(g.sale_price), okText: 'บันทึก' });
+                if (v) run(() => api.put(`/sale-groups/${g.id}`, v));
+            }));
+            box.querySelectorAll('[data-g-add]').forEach((b) => b.addEventListener('click', () => {
+                const ids = res.data.filter((p) => picked.has(Number(p.id)) && p.consignor_id == null && !p.sale_group_id).map((p) => p.id);
+                run(async () => { await api.put(`/sale-groups/${b.dataset.gAdd}`, { add: ids }); ids.forEach((id) => picked.delete(Number(id))); });
+            }));
+            box.querySelectorAll('[data-g-out]').forEach((b) => b.addEventListener('click', async () => {
+                const [gid, pid] = b.dataset.gOut.split(':');
+                const g = byId(gid);
+                const m = g.members.find((x) => String(x.id) === pid);
+                if (!(await confirmDialog(`"${m.name}" จะแสดงและขายแยกเป็นรายการของตัวเองหน้า POS`, { title: `เอาออกจากกลุ่ม ${g.name}?`, okText: 'เอาออก' }))) return;
+                run(() => api.put(`/sale-groups/${gid}`, { remove: [Number(pid)] }));
+            }));
+            box.querySelectorAll('[data-g-del]').forEach((b) => b.addEventListener('click', async () => {
+                const g = byId(b.dataset.gDel);
+                if (!(await confirmDialog(`สินค้า ${g.members.length} รายการในกลุ่มจะกลับไปแสดงและขายแยกรายการหน้า POS (สต๊อกและประวัติการขายไม่เปลี่ยน)`, { title: `ยกเลิกกลุ่ม ${g.name}?`, okText: 'ยกเลิกกลุ่ม', danger: true }))) return;
+                run(() => api.post(`/sale-groups/${g.id}/delete`));
+            }));
+        }
+        reload();
+    }
+
     async function mergePicked() {
         const group = res.data.filter((p) => picked.has(Number(p.id))).sort((a, b) => Number(a.id) - Number(b.id));
         if (group.length < 2) {
@@ -992,6 +1150,7 @@ export async function render(container, { navigate, permissions, user }) {
         return `<tr data-row="${p.id}">${pick}
           <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>
             ${barcodeLine(p)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
+            ${p.sale_group_id ? `<div style="margin-top:3px"><button type="button" class="pill ok" data-sale-group="${p.sale_group_id}" style="font-size:11.5px;border:0;cursor:pointer" title="ขายและนับเป็นกลุ่มหน้า POS — กดเพื่อจัดการกลุ่ม">▦ กลุ่มขาย: ${escapeHtml(p.sale_group_name || '')}</button></div>` : ''}
             ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">
               <span class="pill warn" style="font-size:11.5px">⏸ รอตรวจสอบ ${escapeHtml(h.barcode)}</span>
               ${canMerge ? `<button type="button" class="btn secondary sm" data-held-release="${p.id}" data-code="${escapeHtml(h.barcode)}" title="ตรวจแล้วว่าบันทึกผิด ลบออกให้ใช้บาร์โค้ดนี้ได้อีก">ลบ</button>` : ''}</div>`).join('')}

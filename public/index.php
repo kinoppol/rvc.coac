@@ -42,6 +42,7 @@ use App\Controllers\SalesController;
 use App\Controllers\SettingsController;
 use App\Controllers\SsoController;
 use App\Controllers\StockCountController;
+use App\Controllers\SaleGroupController;
 use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
@@ -461,6 +462,13 @@ $app->group('/api', function ($group) {
     $group->post('/stockcounts/items/{id:[0-9]+}/reject', [StockCountController::class, 'rejectItem'])
         ->add(new RoleGuard('stockcount.create'));
     // Admin / manager: the product is gone (e.g. below zero) — counted at 0 with the reason found.
+    // Sale groups (migration 0084): look-alike goods sold and counted as one; admin / manager set them up.
+    $group->get('/sale-groups', [SaleGroupController::class, 'index']);
+    $group->post('/sale-groups', [SaleGroupController::class, 'create']);
+    $group->put('/sale-groups/{id:[0-9]+}', [SaleGroupController::class, 'update']);
+    $group->post('/sale-groups/{id:[0-9]+}/delete', [SaleGroupController::class, 'delete']);
+    $group->post('/sale-groups/{id:[0-9]+}/count', [StockCountController::class, 'groupCount'])
+        ->add(new RoleGuard('stockcount.create'));
     $group->post('/products/{id:[0-9]+}/sold-out', [StockCountController::class, 'soldOut'])
         ->add(new RoleGuard('stockcount.approve'));
     // Admin / manager correct what was counted on an approved count, with a reason (migration 0082).

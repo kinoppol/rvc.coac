@@ -53,7 +53,8 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
         // Round 0 = no round: the product alone, with no line.
         lookup: (code) => api.get(`/stockcounts/0/lookup?code=${encodeURIComponent(code)}`),
         search: (q) => api.get(`/stockcounts/0/search?q=${encodeURIComponent(q)}`),
-        count: (b) => api.post(`/products/${b.product_id}/quick-count`, b),
+        // A sale group (id = -group id) is counted as one: all its members' pieces together.
+        count: (b) => (b.product_id < 0 ? api.post(`/sale-groups/${-b.product_id}/count`, b) : api.post(`/products/${b.product_id}/quick-count`, b)),
         barcode: (b) => api.post('/stockcounts/0/barcode', b),
     } : {
         lookup: (code) => api.get(`/stockcounts/${stockCount.id}/lookup?code=${encodeURIComponent(code)}`),
@@ -133,7 +134,7 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
     }
 
     function photoUrl(p) {
-        return p.image_token ? api.downloadUrl(`/products/${p.id}/photo?size=thumb&v=${p.image_token}${photoCache}`) : null;
+        return p.image_token ? api.downloadUrl(`/products/${p.photo_id ?? p.id}/photo?size=thumb&v=${p.image_token}${photoCache}`) : null;
     }
 
     /** Pack sizes known from the product's pack barcodes, smallest first. */
@@ -746,6 +747,11 @@ export function openMobileCount({ stockCount, items, onClose, quick = false }) {
         const p = photoFor;
         photoFor = null;
         if (!file || !p) return;
+        if (Number(p.id) < 0) { // a sale group has no photo of its own: set it on a member in the stock page
+            message = { kind: 'bad', text: 'กลุ่มขายไม่มีรูปของตัวเอง ตั้งรูปที่สินค้าแต่ละรายการในหน้าสต๊อก' };
+            draw();
+            return;
+        }
         message = { kind: 'info', text: `กำลังอัปโหลดรูป ${p.name}…` };
         draw();
         try {
