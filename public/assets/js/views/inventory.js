@@ -336,12 +336,7 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
             canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
         }));
-        container.querySelector('#quick-count')?.addEventListener('click', async () => {
-            const open = (await api.get('/stockcounts/open-round').catch(() => ({ data: { open: false } }))).data.open;
-            if (open) {
-                alertDialog('มีรอบตรวจนับเปิดอยู่ ให้นับสินค้าในเมนูตรวจนับสต๊อก (รอบนั้น) แทน', { title: 'นับในรอบตรวจนับ' });
-                return;
-            }
+        container.querySelector('#quick-count')?.addEventListener('click', () => {
             openMobileCount({ quick: true, stockCount: null, items: [], onClose: load });
         });
         container.querySelector('#phone-link').addEventListener('click', () => {

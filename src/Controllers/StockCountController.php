@@ -31,10 +31,10 @@ class StockCountController
         return $this->json($response, ['data' => $this->service()->list()]);
     }
 
-    /** Whether a round is open: the phone counts single items on the spot only when none is. */
+    /** Kept for older phone apps: counting in rounds was removed, so no round is ever open. */
     public function openRound(Request $request, Response $response): Response
     {
-        return $this->json($response, ['data' => ['open' => $this->service()->hasOpenRound()]]);
+        return $this->json($response, ['data' => ['open' => false]]);
     }
 
     /**
@@ -98,7 +98,7 @@ class StockCountController
         $data['reasons'] = StockCountService::DIFF_REASONS;
         $data['approval_over'] = StockCountService::ITEM_APPROVAL_OVER;
         $data['detail_min'] = StockCountService::DIFF_DETAIL_MIN;
-        $data['open_round'] = $this->service()->hasOpenRound();
+        $data['open_round'] = false; // rounds were removed; kept for older phone apps
         $data['can_approve'] = ($user['role'] ?? '') !== \App\Middleware\ReadOnlyGuard::ROLE
             && (new UserRepo($db))->hasPermission($user['role'], 'stockcount.approve');
         $data['user_id'] = (int) $user['id'];
@@ -154,17 +154,6 @@ class StockCountController
         return $this->json($response, ['data' => $result]);
     }
 
-    public function start(Request $request, Response $response): Response
-    {
-        $user = $request->getAttribute('user');
-        try {
-            $id = $this->service()->start((int) $user['id']);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['id' => $id, 'stock_count' => $this->service()->get($id)]], 201);
-    }
-
     public function show(Request $request, Response $response, array $args): Response
     {
         $id = (int) $args['id'];
@@ -172,9 +161,8 @@ class StockCountController
         if (!$sc) {
             return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
         }
+        // An old whole-store round, read only (counting in rounds was removed).
         $this->service()->purgeOldPhotos();
-        $this->service()->addMissingLines($id);
-        $this->service()->refreshSystemQty($id);
         return $this->json($response, ['data' => $this->service()->diffSummary($id) + ['stock_count' => $sc]]);
     }
 
@@ -200,18 +188,6 @@ class StockCountController
         return $this->json($response, ['ok' => true]);
     }
 
-    public function saveCounts(Request $request, Response $response, array $args): Response
-    {
-        $id = (int) $args['id'];
-        $body = (array) $request->getParsedBody();
-        $items = $body['items'] ?? [];
-        if (!is_array($items)) {
-            return $this->error($response, 'ข้อมูลไม่ถูกต้อง', 422);
-        }
-        $this->service()->saveCounts($id, $items);
-        return $this->json($response, ['data' => $this->service()->diffSummary($id)]);
-    }
-
     /** GET /stockcounts/{id}/lookup?code= — product of a scanned or typed barcode. */
     public function lookup(Request $request, Response $response, array $args): Response
     {
@@ -233,44 +209,6 @@ class StockCountController
     }
 
     /** POST /stockcounts/{id}/count {product_id, counted_qty} — one product counted on the phone. */
-    /**
-     * POST /stockcounts/{id}/count {product_id, counted_qty, photo, photo_note?} — one product
-     * counted on the phone. A photo of what was counted is required (kept PHOTO_DAYS days).
-     */
-    public function countOne(Request $request, Response $response, array $args): Response
-    {
-        $body = (array) $request->getParsedBody();
-        $photo = (string) ($body['photo'] ?? '');
-        if ($photo === '') {
-            return $this->error($response, 'กรุณาถ่ายรูปสินค้าที่นับไว้เป็นหลักฐานก่อนบันทึก', 422);
-        }
-        $service = $this->service();
-        try {
-            $service->addPhoto((int) $args['id'], (int) ($body['product_id'] ?? 0), $photo,
-                isset($body['photo_note']) ? (string) $body['photo_note'] : null, (int) $request->getAttribute('user')['id']);
-            $data = $service->setCount((int) $args['id'], (int) ($body['product_id'] ?? 0), (int) ($body['counted_qty'] ?? -1));
-        } catch (\PDOException $e) {
-            return $this->error($response, 'ยังบันทึกรูปประกอบการนับไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0044) ก่อน', 422);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $data]);
-    }
-
-    /** POST /stockcounts/{id}/photo {product_id, data_url} — a counting photo added from the count table. */
-    public function addPhoto(Request $request, Response $response, array $args): Response
-    {
-        $body = (array) $request->getParsedBody();
-        try {
-            $token = $this->service()->addPhoto((int) $args['id'], (int) ($body['product_id'] ?? 0), (string) ($body['data_url'] ?? ''),
-                null, (int) $request->getAttribute('user')['id']);
-        } catch (\PDOException $e) {
-            return $this->error($response, 'ยังบันทึกรูปประกอบการนับไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0044) ก่อน', 422);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => ['token' => $token]], 201);
-    }
 
     /** POST /stockcounts/{id}/barcode {product_id, barcode, pack_size} */
     public function assignBarcode(Request $request, Response $response, array $args): Response
@@ -385,59 +323,4 @@ class StockCountController
         return $this->json($response, ['data' => ['saved' => $saved]]);
     }
 
-    public function submit(Request $request, Response $response, array $args): Response
-    {
-        $id = (int) $args['id'];
-        try {
-            $this->service()->submit($id);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $this->service()->get($id)]);
-    }
-
-    public function approve(Request $request, Response $response, array $args): Response
-    {
-        $user = $request->getAttribute('user');
-        $id = (int) $args['id'];
-        try {
-            $this->service()->approve($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $this->service()->get($id)]);
-    }
-
-    /** POST /stockcounts/{id}/reopen — approver sends a submitted round back to draft to keep counting. */
-    public function reopen(Request $request, Response $response, array $args): Response
-    {
-        $user = $request->getAttribute('user');
-        $id = (int) $args['id'];
-        try {
-            $this->service()->reopen($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $this->service()->get($id)]);
-    }
-
-    /** POST /stockcounts/{id}/cancel — a submitted round may only be cancelled by an approver. */
-    public function cancel(Request $request, Response $response, array $args): Response
-    {
-        $user = $request->getAttribute('user');
-        $id = (int) $args['id'];
-        $sc = $this->service()->get($id);
-        if (!$sc) {
-            return $this->error($response, 'ไม่พบรอบตรวจนับ', 404);
-        }
-        if ($sc['status'] === 'submitted' && !(new UserRepo(Db::connection()))->hasPermission($user['role'], 'stockcount.approve')) {
-            return $this->error($response, 'รอบตรวจนับนี้ส่งรายงานแล้ว ต้องให้ผู้อนุมัติเป็นผู้ยกเลิก', 403);
-        }
-        try {
-            $this->service()->cancel($id, (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
-        } catch (\RuntimeException $e) {
-            return $this->error($response, $e->getMessage(), 422);
-        }
-        return $this->json($response, ['data' => $this->service()->get($id)]);
-    }
 }

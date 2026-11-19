@@ -191,26 +191,14 @@ $app->group('/api/device/v1', function ($group) {
     $group->get('/stockcounts/open-round', [StockCountController::class, 'openRound']);
     $group->get('/stockcounts/{id:[0-9]+}', [StockCountController::class, 'show'])
         ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/start', [StockCountController::class, 'start'])
-        ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/search', [StockCountController::class, 'search'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/count', [StockCountController::class, 'countOne'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id:[0-9]+}/barcode', [StockCountController::class, 'assignBarcode'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/products/{id:[0-9]+}/photo', [StockCountController::class, 'savePhoto'])
         ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/cancel', [StockCountController::class, 'cancel'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/submit', [StockCountController::class, 'submit'])
-        ->add(new RoleGuard('stockcount.submit'));
-    $group->post('/stockcounts/{id:[0-9]+}/approve', [StockCountController::class, 'approve'])
-        ->add(new RoleGuard('stockcount.approve'));
-    $group->post('/stockcounts/{id:[0-9]+}/reopen', [StockCountController::class, 'reopen'])
-        ->add(new RoleGuard('stockcount.approve'));
     // Counting one product with no round open (migration 0077): a difference needs a reason; more than
     // 10 pieces off waits for a manager. Same as on the web.
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
@@ -461,6 +449,7 @@ $app->group('/api', function ($group) {
     $group->get('/stockcounts/discontinued', [StockCountController::class, 'discontinued']);
     $group->post('/products/{id:[0-9]+}/discontinued', [StockCountController::class, 'setDiscontinued']);
     $group->post('/products/{id:[0-9]+}/return-all', [ReturnController::class, 'returnAll']);
+    // Counting the whole store in open / closed rounds was removed: old rounds are read-only history.
     $group->get('/stockcounts/{id:[0-9]+}', [StockCountController::class, 'show']);
     // Counting one product with no round open; a difference over 10 pieces waits for a manager (migration 0077).
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
@@ -473,17 +462,9 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.create'));
     // Admin / manager correct what was counted on an approved count, with a reason (migration 0082).
     $group->post('/stockcounts/lines/{id:[0-9]+}/edit', [StockCountController::class, 'editCount']);
-    $group->post('/stockcounts/start', [StockCountController::class, 'start'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/counts', [StockCountController::class, 'saveCounts'])
-        ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/search', [StockCountController::class, 'search'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/count', [StockCountController::class, 'countOne'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/photo', [StockCountController::class, 'addPhoto'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/{id:[0-9]+}/barcode', [StockCountController::class, 'assignBarcode'])
         ->add(new RoleGuard('stockcount.create'));
@@ -491,14 +472,6 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
     $group->post('/products/{id:[0-9]+}/photo/thumb', [StockCountController::class, 'saveThumb']);
-    $group->post('/stockcounts/{id:[0-9]+}/cancel', [StockCountController::class, 'cancel'])
-        ->add(new RoleGuard('stockcount.create'));
-    $group->post('/stockcounts/{id:[0-9]+}/submit', [StockCountController::class, 'submit'])
-        ->add(new RoleGuard('stockcount.submit'));
-    $group->post('/stockcounts/{id:[0-9]+}/approve', [StockCountController::class, 'approve'])
-        ->add(new RoleGuard('stockcount.approve'));
-    $group->post('/stockcounts/{id:[0-9]+}/reopen', [StockCountController::class, 'reopen'])
-        ->add(new RoleGuard('stockcount.approve'));
 
     $group->get('/capital', [CapitalController::class, 'index'])
         ->add(new RoleGuard('capital.manage'));

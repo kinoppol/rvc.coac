@@ -92,11 +92,6 @@ class ConsignorPayoutService
         foreach ($returns as $pid) {
             unset($stock[$pid]);
         }
-        // Other adjustments wait for the open round. A return does not: the goods have left the
-        // store, so it goes through and closes the product's line in that round (see adjustStock).
-        if ($stock && (new StockCountService($this->db, $this->docs, $this->audit))->hasOpenRound()) {
-            throw new \RuntimeException('มีรอบตรวจนับสต๊อกเปิดอยู่ ปรับยอดคงเหลือได้ในรอบนั้นแทน (การคืนสินค้าให้ผู้ฝากทำได้ตามปกติ)');
-        }
         foreach ($returns as $pid) {
             $stock[$pid] = 0;
         }

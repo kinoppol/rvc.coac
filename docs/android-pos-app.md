@@ -401,11 +401,10 @@ businessDay(at):
 - **รับฝากสินค้า** (`receive.create`; ย้อนหลัง `receive.backdate`): `GET /consignors/options`, `POST /receive/quote`,
   `GET /receive/history?consignor_id=&q=`, `POST /receive/existing`, `POST /receive`, `GET /receive/requests`,
   `POST /receive/requests/{id}/reject`, `GET /receive/docs?q=&from=&to=`, `GET /receive/docs/{id}`, `POST /receive/docs/{id}/cancel` (ผู้ดูแลระบบ)
-- **ตรวจนับสต๊อก** (`stockcount.create`; ส่งรายงาน `stockcount.submit`; อนุมัติ/ส่งกลับ `stockcount.approve`):
-  `GET /stockcounts`, `GET /stockcounts/{id}`, `POST /stockcounts/start`, `GET /stockcounts/{id}/lookup?code=`,
-  `GET /stockcounts/{id}/search?q=`, `POST /stockcounts/{id}/count` (ต้องมีรูป `photo`), `POST /stockcounts/{id}/barcode`,
-  `POST /stockcounts/{id}/submit|approve|reopen|cancel`, `POST /products/{id}/photo`
-- **นับรายการ** (ไม่ต้องเปิดรอบ ใช้ได้เมื่อไม่มีรอบเปิด, `stockcount.create`; ต้องรัน migration 0077):
+- **ตรวจนับสต๊อกแบบรอบทั้งร้าน: เลิกใช้แล้ว** — `POST /stockcounts/start|{id}/count|{id}/submit|approve|reopen|cancel`
+  ถูกนำออก (404) แอปต้องไม่แสดงเมนูนี้ · `GET /stockcounts`, `GET /stockcounts/{id}` เหลือไว้ดูประวัติ ·
+  `GET /stockcounts/open-round` ตอบ `open: false` เสมอ · `POST /products/{id}/photo` ใช้ได้ตามเดิม
+- **นับรายการ** (วิธีตรวจนับเดียว, `stockcount.create`; ต้องรัน migration 0077):
   `GET /stockcounts/0/lookup?code=`, `GET /stockcounts/0/search?q=`, `POST /stockcounts/0/barcode`,
   `POST /products/{id}/quick-count` {`counted_qty`, `photo`, `place` (นับที่ไหน), `method` (วิธีนับ เช่น 2 แพ็ค × 12 + 3 ชิ้น),
   `note`, `reason`, `reason_detail`} — ยอดต่างจากระบบต้องมี `reason` (คีย์จาก `GET /stockcounts/items` → `reasons`) และ

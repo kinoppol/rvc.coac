@@ -12,65 +12,6 @@ class StockCountService
     {
     }
 
-    public function start(int $userId): int
-    {
-        // Counting the whole store in one round is retired: a round approved with lines left
-        // half-counted or counted wrong set many products' stock wrong at once. Products are counted
-        // one at a time now (itemCount), each count its own record. A round still open can be finished.
-        throw new \RuntimeException('เลิกใช้การตรวจนับทั้งร้านเป็นรอบแล้ว — นับสินค้าทีละรายการ (ปุ่ม "นับรายการ") แต่ละครั้งบันทึกเป็นการนับของสินค้านั้น');
-        // A round approved after an item count waiting for a manager would be undone by certifying it.
-        if ($waiting = $this->pendingItemCount()) {
-            throw new \RuntimeException("มีการนับรายการรอผู้จัดการรับรอง {$waiting} รายการ ให้ผู้จัดการรับรองหรือไม่รับรองให้เสร็จก่อนจึงเปิดรอบตรวจนับได้");
-        }
-        $docNo = $this->docs->next('SC', 'stock_counts', 'doc_no');
-        $this->db->beginTransaction();
-        try {
-            $ins = $this->db->prepare(
-                'INSERT INTO stock_counts (doc_no, count_date, status, created_by, created_at) VALUES (?, CURDATE(), \'draft\', ?, NOW())'
-            );
-            $ins->execute([$docNo, $userId]);
-            $countId = (int) $this->db->lastInsertId();
-
-            $products = $this->db->query(
-                'SELECT id, qty_stock FROM products WHERE qty_stock > 0 ORDER BY name ASC'
-            )->fetchAll();
-
-            $itemStmt = $this->db->prepare(
-                'INSERT INTO stock_count_items (stock_count_id, product_id, system_qty) VALUES (?, ?, ?)'
-            );
-            foreach ($products as $p) {
-                $itemStmt->execute([$countId, $p['id'], $p['qty_stock']]);
-            }
-            $this->addMissingLines($countId);
-
-            $this->db->commit();
-            return $countId;
-        } catch (\Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
-    }
-
-    /**
-     * A blank (null) count means the item was not counted: it keeps no count and
-     * its stock is left as it is. Not every item has to be counted.
-     *
-     * @param array<int,array{item_id:int, counted_qty:?int, note?:string}> $items
-     */
-    public function saveCounts(int $stockCountId, array $items): void
-    {
-        $upd = $this->db->prepare(
-            'UPDATE stock_count_items sci JOIN products p ON p.id = sci.product_id
-             SET sci.system_qty = p.qty_stock, sci.counted_qty = ?, sci.diff_qty = ? - p.qty_stock, sci.note = ?
-             WHERE sci.id = ? AND sci.stock_count_id = ? AND (sci.note IS NULL OR sci.note NOT LIKE ?)'
-        );
-        foreach ($items as $item) {
-            $raw = $item['counted_qty'] ?? null;
-            $counted = $raw === null || $raw === '' ? null : max(0, (int) $raw);
-            $upd->execute([$counted, $counted, $item['note'] ?? null, (int) $item['item_id'], $stockCountId, self::RETURNED_NOTE . '%']);
-        }
-    }
-
     /** How the note of a line closed by a return to the consignor begins. */
     public const RETURNED_NOTE = 'คืนสินค้าให้ผู้ฝาก';
 
@@ -80,47 +21,12 @@ class StockCountService
     }
 
     /**
-     * Goods handed back to the consignor are final, whatever an open round counted: the product's
-     * line in each open round closes at 0 with no difference, so approving the round leaves the
-     * stock alone and the line cannot be counted again in that round. Goods received after the
-     * return keep their stock and are counted from the next round.
+     * Goods handed back to the consignor are final: item counts of the product still waiting for a
+     * manager are dropped (they counted goods that have left). Counting in rounds was removed.
      */
     public function closeReturnedLines(int $productId, string $note): void
     {
-        $find = $this->db->prepare('SELECT 1 FROM stock_count_items WHERE stock_count_id = ? AND product_id = ? LIMIT 1');
-        $add = $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty, counted_qty, diff_qty, note) VALUES (?, ?, 0, 0, 0, ?)');
-        $close = $this->db->prepare('UPDATE stock_count_items SET system_qty = 0, counted_qty = 0, diff_qty = 0, note = ? WHERE stock_count_id = ? AND product_id = ?');
         $this->cancelPendingItems($productId, $note);
-        $item = self::itemReady($this->db) ? " AND kind <> 'item'" : '';
-        $rounds = $this->db->query("SELECT id FROM stock_counts WHERE status IN ('draft','submitted'){$item}")->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($rounds as $round) {
-            $find->execute([$round, $productId]);
-            if ($find->fetchColumn()) {
-                $close->execute([$note, $round, $productId]);
-            } else {
-                $add->execute([$round, $productId, $note]);
-            }
-        }
-    }
-
-    /**
-     * A draft round lists every product still on sale, store goods and consigned, even sold out
-     * (0 left), so the list shows what has run out and the count can find one that is on the
-     * shelf though the system says none. Goods that came in after the round was opened join it
-     * too. Discontinued ones stay out unless they somehow hold stock.
-     */
-    public function addMissingLines(int $stockCountId): void
-    {
-        $onSale = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')
-            ? '(p.discontinued_at IS NULL OR p.qty_stock > 0)' : '1 = 1';
-        $this->db->prepare(
-            "INSERT INTO stock_count_items (stock_count_id, product_id, system_qty)
-             SELECT sc.id, p.id, p.qty_stock
-             FROM stock_counts sc
-             JOIN products p ON {$onSale}
-             WHERE sc.id = ? AND sc.status = 'draft'
-               AND NOT EXISTS (SELECT 1 FROM stock_count_items x WHERE x.stock_count_id = sc.id AND x.product_id = p.id)"
-        )->execute([$stockCountId]);
     }
 
     /** The reason / who columns for discontinued goods exist (migration 0081). */
@@ -148,7 +54,7 @@ class StockCountService
 
     /**
      * Marks a product (store goods or consigned) as discontinued, or back on sale. Goods still
-     * held must be sold, returned or counted out first. Its lines in open rounds go, unless they carry a difference.
+     * held must be sold, returned or counted out first.
      * Discontinuing needs a reason, kept with the product (migration 0081) and in the audit log.
      */
     public function setDiscontinued(int $productId, bool $discontinued, int $userId, ?string $ip, string $reason = ''): void
@@ -172,19 +78,6 @@ class StockCountService
                 if ((int) $product['qty_stock'] > 0) {
                     throw new \RuntimeException("\"{$product['name']}\" ยังเหลือ {$product['qty_stock']} ชิ้น ต้องไม่มีคงเหลือก่อนจึงตั้งเลิกจำหน่ายได้ (ขายให้หมด คืนผู้ฝาก ตัดสินค้าเสียหาย หรือตรวจนับ)");
                 }
-                $open = "SELECT sci.id FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
-                         WHERE sci.product_id = ? AND sc.status IN ('draft','submitted')";
-                $stmt = $this->db->prepare($open . ' AND sci.diff_qty <> 0 LIMIT 1');
-                $stmt->execute([$productId]);
-                if ($stmt->fetchColumn()) {
-                    throw new \RuntimeException("\"{$product['name']}\" มีผลต่างในรอบตรวจนับที่เปิดอยู่ ลบจำนวนที่นับออกหรือปิดรอบก่อนจึงตั้งเลิกจำหน่ายได้");
-                }
-                $stmt = $this->db->prepare($open);
-                $stmt->execute([$productId]);
-                $del = $this->db->prepare('DELETE FROM stock_count_items WHERE id = ?');
-                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $lineId) {
-                    $del->execute([$lineId]);
-                }
             }
             if (self::hasReason($this->db)) {
                 $this->db->prepare('UPDATE products SET discontinued_at = ' . ($discontinued ? 'NOW()' : 'NULL') . ', discontinued_reason = ?, discontinued_by = ?, updated_at = NOW() WHERE id = ?')
@@ -202,40 +95,8 @@ class StockCountService
         }
     }
 
-    /**
-     * A draft round keeps the system quantity of lines not counted yet in step with the
-     * stock now: sales imported after the round was opened (a late POS import) would
-     * otherwise leave it showing what was there when the round started.
-     */
-    public function refreshSystemQty(int $stockCountId): void
-    {
-        $this->db->prepare(
-            "UPDATE stock_count_items sci
-             JOIN stock_counts sc ON sc.id = sci.stock_count_id AND sc.status = 'draft'
-             JOIN products p ON p.id = sci.product_id
-             SET sci.system_qty = p.qty_stock
-             WHERE sci.stock_count_id = ? AND sci.counted_qty IS NULL AND sci.system_qty <> p.qty_stock"
-        )->execute([$stockCountId]);
-    }
-
     /** Days a counting photo is kept before its file is removed. */
     public const PHOTO_DAYS = 30;
-
-    /**
-     * Keeps a photo taken while counting a product (already shrunk by the browser to a
-     * size that still shows clearly full screen on a computer).
-     */
-    public function addPhoto(int $stockCountId, int $productId, string $dataUrl, ?string $note, int $userId): string
-    {
-        $sc = $this->get($stockCountId);
-        if (!$sc || self::isItem($sc) || !in_array($sc['status'], ['draft', 'submitted'], true)) {
-            throw new \RuntimeException('รอบตรวจนับนี้อนุมัติหรือยกเลิกไปแล้ว เพิ่มรูปไม่ได้');
-        }
-        $row = (new AttachmentService($this->db))->saveDataUrl($dataUrl, $userId, 'counts');
-        $this->db->prepare('INSERT INTO stock_count_photos (stock_count_id, product_id, token, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, NOW())')
-            ->execute([$stockCountId, $productId, $row['token'], $note !== null ? mb_substr($note, 0, 100) : null, $userId]);
-        return $row['token'];
-    }
 
     /** product id => [{token (null once removed), note, created_at}], oldest first. */
     public function photosFor(int $stockCountId): array
@@ -403,144 +264,6 @@ class StockCountService
         return $product;
     }
 
-    /**
-     * Records the physical count of one product. A product the count did not
-     * list (system stock was 0) is added with its current system quantity.
-     */
-    public function setCount(int $stockCountId, int $productId, int $counted): array
-    {
-        $sc = $this->get($stockCountId);
-        if (!$sc || self::isItem($sc) || $sc['status'] !== 'draft') {
-            throw new \RuntimeException('รอบตรวจนับนี้ส่งรายงานแล้ว แก้ไขจำนวนไม่ได้');
-        }
-        if ($counted < 0 || $counted > 1000000) {
-            throw new \RuntimeException('จำนวนนับไม่ถูกต้อง');
-        }
-        $info = $this->productInfo($stockCountId, $productId);
-        if ($info['item'] && self::isReturnedLine($info['item']['note'])) {
-            throw new \RuntimeException('สินค้านี้คืนให้ผู้ฝากแล้วระหว่างรอบนี้ ยอดเป็นที่สิ้นสุด นับเพิ่มในรอบนี้ไม่ได้');
-        }
-        if (!$info['item']) {
-            $this->db->prepare('INSERT INTO stock_count_items (stock_count_id, product_id, system_qty) VALUES (?, ?, ?)')
-                ->execute([$stockCountId, $productId, (int) $info['qty_stock']]);
-        }
-        $this->db->prepare(
-            'UPDATE stock_count_items sci JOIN products p ON p.id = sci.product_id
-             SET sci.system_qty = p.qty_stock, sci.counted_qty = ?, sci.diff_qty = ? - p.qty_stock
-             WHERE sci.stock_count_id = ? AND sci.product_id = ?'
-        )->execute([$counted, $counted, $stockCountId, $productId]);
-        return $this->productInfo($stockCountId, $productId);
-    }
-
-    public function submit(int $stockCountId): void
-    {
-        $sc = $this->get($stockCountId);
-        if (!$sc || self::isItem($sc) || $sc['status'] !== 'draft') {
-            throw new \RuntimeException('ส่งรายงานได้เฉพาะรอบตรวจนับที่กำลังนับอยู่');
-        }
-        $summary = $this->diffSummary($stockCountId);
-        if ($summary['diff_count'] === 0) {
-            throw new \RuntimeException('ไม่พบผลต่าง ไม่สามารถส่งรายงานได้');
-        }
-        $stmt = $this->db->prepare(
-            "UPDATE stock_counts SET status='submitted', submitted_at=NOW() WHERE id = ?"
-        );
-        $stmt->execute([$stockCountId]);
-    }
-
-    public function saveDraft(int $stockCountId): void
-    {
-        // Already draft by default; explicit no-op endpoint kept for UI symmetry with "submit".
-    }
-
-    /** Manager/admin approves the diff report; adjusts product stock to match physical count. */
-    public function approve(int $stockCountId, int $userId, ?string $ip): void
-    {
-        $sc = $this->get($stockCountId);
-        if (self::isItem($sc)) {
-            throw new \RuntimeException('การนับรายการต้องรับรองจากรายการรอผู้จัดการรับรอง');
-        }
-        if (!$sc || $sc['status'] !== 'submitted') {
-            throw new \RuntimeException('รอบตรวจนับนี้ยังไม่ได้ส่งรายงาน หรืออนุมัติ/ยกเลิกไปแล้ว');
-        }
-        $summary = $this->diffSummary($stockCountId);
-        $this->db->beginTransaction();
-        try {
-            foreach ($summary['items'] as $item) {
-                if ($item['diff_qty'] === null || (int) $item['diff_qty'] === 0) {
-                    continue;
-                }
-                $before = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
-                $before->execute([$item['product_id']]);
-                $old = $before->fetch();
-
-                $upd = $this->db->prepare('UPDATE products SET qty_stock = ? WHERE id = ?');
-                $upd->execute([(int) $item['counted_qty'], $item['product_id']]);
-                // Keep on the line what the stock really was and how much it moved, so the
-                // stock card adds up even when sales were recorded between counting and approval.
-                $this->db->prepare('UPDATE stock_count_items SET system_qty = ?, diff_qty = ? WHERE id = ?')
-                    ->execute([(int) $old['qty_stock'], (int) $item['counted_qty'] - (int) $old['qty_stock'], $item['id']]);
-
-                $new = $old;
-                $new['qty_stock'] = (int) $item['counted_qty'];
-                $this->audit->log('products', (int) $item['product_id'], 'update', $old, $new, $userId, $ip);
-            }
-
-            $stmt = $this->db->prepare(
-                "UPDATE stock_counts SET status='approved', approved_by=?, approved_at=NOW() WHERE id = ?"
-            );
-            $stmt->execute([$userId, $stockCountId]);
-
-            $this->db->commit();
-        } catch (\Throwable $e) {
-            $this->db->rollBack();
-            throw $e;
-        }
-    }
-
-    /**
-     * Sends a submitted round back to draft so counting can continue (phone mode,
-     * more lines, fixes). Counts, photos and barcodes recorded so far are kept.
-     */
-    public function reopen(int $stockCountId, int $userId, ?string $ip): void
-    {
-        $sc = $this->get($stockCountId);
-        if (!$sc || self::isItem($sc) || $sc['status'] !== 'submitted') {
-            throw new \RuntimeException('ส่งกลับไปนับต่อได้เฉพาะรอบที่ส่งรายงานแล้วและยังไม่อนุมัติ');
-        }
-        $this->db->prepare(
-            "UPDATE stock_counts SET status='draft', submitted_at=NULL WHERE id = ?"
-        )->execute([$stockCountId]);
-        $this->audit->log('stock_counts', $stockCountId, 'update', ['status' => 'submitted'], ['status' => 'draft'], $userId, $ip);
-    }
-
-    /**
-     * Cancels a round that has not been approved yet; product stock is not changed.
-     * Barcodes and photos linked during the count were already saved on the product
-     * records (see StockCountController::assignBarcode/savePhoto) and are kept.
-     */
-    public function cancel(int $stockCountId, int $userId, ?string $ip): void
-    {
-        $sc = $this->get($stockCountId);
-        if (!$sc || self::isItem($sc)) {
-            throw new \RuntimeException('ไม่พบรอบตรวจนับ');
-        }
-        if (!in_array($sc['status'], ['draft', 'submitted'], true)) {
-            throw new \RuntimeException('รอบตรวจนับนี้อนุมัติหรือยกเลิกไปแล้ว ยกเลิกไม่ได้');
-        }
-        $this->db->prepare(
-            "UPDATE stock_counts SET status='cancelled', cancelled_by=?, cancelled_at=NOW() WHERE id = ?"
-        )->execute([$userId, $stockCountId]);
-        $this->audit->log('stock_counts', $stockCountId, 'cancel', ['status' => $sc['status']], ['status' => 'cancelled'], $userId, $ip);
-    }
-
-    /** True while a counting round is open (draft or waiting for approval). Item counts are not rounds. */
-    public function hasOpenRound(): bool
-    {
-        $item = self::itemReady($this->db) ? " AND kind <> 'item'" : '';
-        return (bool) $this->db->query("SELECT 1 FROM stock_counts WHERE status IN ('draft','submitted'){$item} LIMIT 1")->fetchColumn();
-    }
-
     /** A difference of more than this many pieces waits for a manager to certify it. */
     public const ITEM_APPROVAL_OVER = 10;
 
@@ -705,9 +428,6 @@ class StockCountService
         $reasonDetail = self::clip($detail['reason_detail'] ?? null, 500);
         $this->db->beginTransaction();
         try {
-            if ($this->hasOpenRound()) {
-                throw new \RuntimeException('มีรอบตรวจนับเปิดอยู่ กรุณานับในรอบนั้นแทน');
-            }
             $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([$productId]);
             $old = $stmt->fetch();
