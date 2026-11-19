@@ -906,6 +906,9 @@ class ProductRepo
         $old = $this->find($productId);
         // Goods received or bought again: a discontinued product is back on sale.
         $backOnSale = $qty > 0 && \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? 'discontinued_at = NULL, ' : '';
+        if ($backOnSale && \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_reason')) {
+            $backOnSale .= 'discontinued_reason = NULL, discontinued_by = NULL, ';
+        }
         $stmt = $this->db->prepare(
             "UPDATE products SET {$backOnSale}qty_received = qty_received + ?, qty_stock = qty_stock + ?, updated_at = NOW() WHERE id = ?"
         );

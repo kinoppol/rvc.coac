@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { openLowStockAssist } from '../low-stock-assist.js';
 import { money, count, escapeHtml, fmtDate, fmtDateTime, todayISO } from '../util.js';
-import { alertDialog, confirmDialog } from '../dialog.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 import { openDetailModal } from '../detail-modal.js';
 import { openProductModal, openOrderCheckModal } from '../product-modal.js';
 import { openPoBuilder } from '../po-builder.js';
@@ -923,11 +923,12 @@ export async function render(container, { navigate, permissions, user }) {
         }
     }
 
-    /** Admin: a product with no stock can be discontinued, and a discontinued one put back on sale. */
+    /** Admin / manager: a product with no stock can be discontinued (with a reason), and a discontinued one put back on sale. */
     function discontinuedCell(p) {
-        const admin = user?.role === 'admin';
+        const admin = ['admin', 'manager'].includes(user?.role);
         if (p.discontinued_at) {
-            return `<div><span class="pill warn" style="font-size:11.5px">เลิกจำหน่าย</span>${admin ? ` <button type="button" class="link-btn" data-discontinue="${p.id}" data-on="0" style="font-size:12px;font-weight:400;white-space:nowrap">กลับมาจำหน่าย</button>` : ''}</div>`;
+            const why = p.discontinued_reason ? `เหตุผล: ${p.discontinued_reason}${p.discontinued_by_name ? ` (${p.discontinued_by_name})` : ''}` : '';
+            return `<div><span class="pill warn" style="font-size:11.5px" title="${escapeHtml(why)}">เลิกจำหน่าย</span>${admin ? ` <button type="button" class="link-btn" data-discontinue="${p.id}" data-on="0" style="font-size:12px;font-weight:400;white-space:nowrap">กลับมาจำหน่าย</button>` : ''}${why ? `<div class="muted" style="font-size:11.5px;white-space:normal">${escapeHtml(why)}</div>` : ''}</div>`;
         }
         return admin && Number(p.qty_stock) <= 0
             ? `<div><button type="button" class="link-btn" data-discontinue="${p.id}" data-on="1" style="font-size:12px;font-weight:400;white-space:nowrap" title="ไม่นำมาขายแล้ว: ไม่แสดงในรายการหน้าขาย (POS) และหน้าตรวจนับ ดูได้ที่แท็บเลิกจำหน่าย สแกนบาร์โค้ดที่ตรงยังหยิบลงตะกร้าได้ จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button></div>` : '';
@@ -935,10 +936,17 @@ export async function render(container, { navigate, permissions, user }) {
 
     async function setDiscontinued(id, on) {
         const p = res.data.find((x) => String(x.id) === String(id));
-        if (on && !(await confirmDialog(`"${p.name}" จะไม่แสดงในรายการหน้าขาย (POS) และหน้าตรวจนับ ดูได้ที่แท็บเลิกจำหน่าย สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        let reason = '';
+        if (on) {
+            reason = await promptDialog(`"${p.name}" จะไม่แสดงในรายการหน้าขาย (POS) และหน้าตรวจนับ ดูได้ที่แท็บเลิกจำหน่าย สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง\n\nระบุเหตุผลที่เลิกจำหน่าย`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน', placeholder: 'เช่น ผู้ฝากไม่นำมาส่งแล้ว / ขายไม่ออก / เลิกผลิต', required: 'กรุณาระบุเหตุผลที่เลิกจำหน่าย', multiline: true });
+            if (reason === null) return;
+            reason = reason.trim();
+        }
         try {
-            await api.post(`/products/${id}/discontinued`, { discontinued: on });
+            await api.post(`/products/${id}/discontinued`, { discontinued: on, reason });
             p.discontinued_at = on ? new Date().toISOString() : null;
+            p.discontinued_reason = on ? reason : null;
+            p.discontinued_by_name = on ? (user?.full_name || null) : null;
             draw();
         } catch (err) {
             alertDialog(err.message, { tone: 'error' });

@@ -37,6 +37,8 @@ export async function render(container, { permissions, user }) {
     const canApprove = permissions.includes('stockcount.approve');
     const canCreate = permissions.includes('stockcount.create');
     const isAdmin = user?.role === 'admin';
+    // Admin / manager: discontinue goods with no stock (a reason is required), or put them back on sale.
+    const canDiscontinue = ['admin', 'manager'].includes(user?.role);
 
     async function loadList() {
         const list = (await api.get('/stockcounts')).data;
@@ -82,7 +84,7 @@ export async function render(container, { permissions, user }) {
         }
 
         const { diffCount, diffValue, countedN } = totals();
-        const manage = current.status === 'draft' && isAdmin;
+        const manage = current.status === 'draft' && canDiscontinue;
 
         container.innerHTML = `
         <div class="stat-row">
@@ -555,9 +557,9 @@ export async function render(container, { permissions, user }) {
         });
     }
 
-    /** Admin: consigned goods with stock can be handed back; anything without stock can be discontinued. */
+    /** Admin: consigned goods with stock can be handed back; admin / manager: anything without stock can be discontinued. */
     function manageHtml(it, i) {
-        if (Number(it.system_qty) > 0 && !it.consignor_id) return '';
+        if (Number(it.system_qty) > 0 && (!it.consignor_id || !isAdmin)) return '';
         return Number(it.system_qty) > 0
             ? `<button type="button" class="btn secondary sm" data-return-all="${i}" title="คืนสินค้าทุกชิ้นให้ผู้ฝาก ปรับยอดเป็น 0 พร้อมออกใบคืนสินค้า">↩ คืนทุกชิ้น</button>`
             : `<button type="button" class="btn secondary sm" data-discontinue="${i}" title="ไม่นำมาขายแล้ว: ไม่แสดงในหน้าตรวจนับ หน้าสต๊อก และหน้าขาย จนกว่าจะรับสินค้าเข้าอีกครั้ง">เลิกจำหน่าย</button>`;
@@ -568,11 +570,12 @@ export async function render(container, { permissions, user }) {
         <section class="card">
           <div class="card-pad"><b>สินค้าที่เลิกจำหน่าย (${discontinued.length})</b></div>
           ${discontinued.length ? `<div class="table-wrap"><table>
-            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th>บาร์โค้ด</th><th class="num">คงเหลือ</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+            <thead><tr><th>สินค้า</th><th>ผู้ฝาก</th><th>บาร์โค้ด</th><th class="num">คงเหลือ</th><th>เหตุผล</th>${canDiscontinue ? '<th></th>' : ''}</tr></thead>
             <tbody>${discontinued.map((p, i) => `<tr data-disc="${i}">
               <td>${escapeHtml(p.name)}</td><td class="muted">${escapeHtml(p.consignor_name)}</td><td class="muted">${escapeHtml(p.barcode || '-')}</td>
               <td class="num">${Number(p.qty_stock)}</td>
-              ${isAdmin ? `<td><button type="button" class="btn secondary sm" data-restore="${i}">กลับมาจำหน่าย</button></td>` : ''}
+              <td class="muted">${escapeHtml(p.discontinued_reason || '-')}${p.discontinued_by_name ? `<div style="font-size:11.5px">โดย ${escapeHtml(p.discontinued_by_name)}</div>` : ''}</td>
+              ${canDiscontinue ? `<td><button type="button" class="btn secondary sm" data-restore="${i}">กลับมาจำหน่าย</button></td>` : ''}
             </tr>`).join('')}</tbody>
           </table></div>` : '<div class="empty">ไม่มีสินค้าที่เลิกจำหน่าย</div>'}
         </section>`;
@@ -621,9 +624,12 @@ export async function render(container, { permissions, user }) {
     }
 
     async function discontinue(it) {
-        if (!(await confirmDialog(`"${it.name}" จะไม่แสดงในหน้าตรวจนับ หน้าสต๊อก และหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน' }))) return;
+        const reason = await promptDialog(`"${it.name}" จะไม่แสดงในหน้าตรวจนับ หน้าสต๊อก และหน้าขาย ดูได้เมื่อทำเครื่องหมาย แสดงสินค้าที่เลิกจำหน่าย และกลับมาจำหน่ายเองเมื่อรับสินค้านี้เข้าอีกครั้ง
+
+ระบุเหตุผลที่เลิกจำหน่าย`, { title: 'ตั้งเป็นเลิกจำหน่าย?', okText: 'เลิกจำหน่าย', cancelText: 'ไม่เปลี่ยน', placeholder: 'เช่น ผู้ฝากไม่นำมาส่งแล้ว / ขายไม่ออก / เลิกผลิต', required: 'กรุณาระบุเหตุผลที่เลิกจำหน่าย', multiline: true });
+        if (reason === null) return;
         await act(it, async () => {
-            await api.post(`/products/${it.product_id}/discontinued`, { discontinued: true });
+            await api.post(`/products/${it.product_id}/discontinued`, { discontinued: true, reason: reason.trim() });
             return `ตั้ง "${it.name}" เป็นเลิกจำหน่ายแล้ว`;
         });
     }

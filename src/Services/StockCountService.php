@@ -123,15 +123,25 @@ class StockCountService
         )->execute([$stockCountId]);
     }
 
+    /** The reason / who columns for discontinued goods exist (migration 0081). */
+    public static function hasReason(PDO $db): bool
+    {
+        return \App\Support\Db::hasColumn($db, 'products', 'discontinued_reason');
+    }
+
     /** Products marked as discontinued, store goods and consigned, for showing them on request. */
     public function discontinued(): array
     {
         if (!\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')) {
             return [];
         }
+        // Why and by whom (migration 0081; none recorded before it).
+        $why = self::hasReason($this->db)
+            ? 'p.discontinued_reason, du.full_name AS discontinued_by_name' : 'NULL AS discontinued_reason, NULL AS discontinued_by_name';
+        $byJoin = self::hasReason($this->db) ? ' LEFT JOIN users du ON du.id = p.discontinued_by' : '';
         return $this->db->query(
-            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.consignor_id, p.discontinued_at, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
-             FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id
+            "SELECT p.id, p.name, p.barcode, p.qty_stock, p.consignor_id, p.discontinued_at, {$why}, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name
+             FROM products p LEFT JOIN consignors c ON c.id = p.consignor_id{$byJoin}
              WHERE p.discontinued_at IS NOT NULL ORDER BY p.name ASC"
         )->fetchAll();
     }
@@ -139,11 +149,16 @@ class StockCountService
     /**
      * Marks a product (store goods or consigned) as discontinued, or back on sale. Goods still
      * held must be sold, returned or counted out first. Its lines in open rounds go, unless they carry a difference.
+     * Discontinuing needs a reason, kept with the product (migration 0081) and in the audit log.
      */
-    public function setDiscontinued(int $productId, bool $discontinued, int $userId, ?string $ip): void
+    public function setDiscontinued(int $productId, bool $discontinued, int $userId, ?string $ip, string $reason = ''): void
     {
         if (!\App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at')) {
             throw new \RuntimeException('ยังตั้งเลิกจำหน่ายไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0067) ก่อน');
+        }
+        $reason = mb_substr(trim($reason), 0, 500);
+        if ($discontinued && $reason === '') {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่เลิกจำหน่าย');
         }
         $this->db->beginTransaction();
         try {
@@ -171,9 +186,15 @@ class StockCountService
                     $del->execute([$lineId]);
                 }
             }
-            $this->db->prepare('UPDATE products SET discontinued_at = ' . ($discontinued ? 'NOW()' : 'NULL') . ', updated_at = NOW() WHERE id = ?')
-                ->execute([$productId]);
-            $this->audit->log('products', $productId, 'update', ['discontinued' => $product['discontinued_at'] !== null], ['discontinued' => $discontinued], $userId, $ip);
+            if (self::hasReason($this->db)) {
+                $this->db->prepare('UPDATE products SET discontinued_at = ' . ($discontinued ? 'NOW()' : 'NULL') . ', discontinued_reason = ?, discontinued_by = ?, updated_at = NOW() WHERE id = ?')
+                    ->execute([$discontinued ? $reason : null, $discontinued ? $userId : null, $productId]);
+            } else {
+                $this->db->prepare('UPDATE products SET discontinued_at = ' . ($discontinued ? 'NOW()' : 'NULL') . ', updated_at = NOW() WHERE id = ?')
+                    ->execute([$productId]);
+            }
+            $this->audit->log('products', $productId, 'update', ['discontinued' => $product['discontinued_at'] !== null],
+                ['discontinued' => $discontinued] + ($discontinued ? ['discontinued_reason' => $reason] : []), $userId, $ip);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();

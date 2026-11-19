@@ -165,15 +165,16 @@ class StockCountController
         return $this->json($response, ['data' => $this->service()->discontinued()]);
     }
 
-    /** Admin only: marks a product as discontinued, or back on sale (body: discontinued). */
+    /** Admin / manager: marks a product as discontinued (body: discontinued, reason — required), or back on sale. */
     public function setDiscontinued(Request $request, Response $response, array $args): Response
     {
         $user = $request->getAttribute('user');
-        if (($user['role'] ?? '') !== 'admin') {
-            return $this->error($response, 'เฉพาะผู้ดูแลระบบเท่านั้น', 403);
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบหรือผู้จัดการร้านเท่านั้น', 403);
         }
+        $body = (array) $request->getParsedBody();
         try {
-            $this->service()->setDiscontinued((int) $args['id'], !empty(((array) $request->getParsedBody())['discontinued']), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null);
+            $this->service()->setDiscontinued((int) $args['id'], !empty($body['discontinued']), (int) $user['id'], $request->getServerParams()['REMOTE_ADDR'] ?? null, (string) ($body['reason'] ?? ''));
         } catch (\RuntimeException $e) {
             return $this->error($response, $e->getMessage(), 422);
         }

@@ -26,11 +26,15 @@ class InventoryService
         // Marked as really having no barcode (migration 0065; none marked before it).
         $noBarcode = \App\Support\Db::hasColumn($this->db, 'products', 'no_barcode') ? 'p.no_barcode' : '0';
         $discontinued = \App\Support\Db::hasColumn($this->db, 'products', 'discontinued_at') ? 'p.discontinued_at' : 'NULL'; // migration 0067
+        // Why it was discontinued and by whom (migration 0081).
+        $discReason = StockCountService::hasReason($this->db)
+            ? 'p.discontinued_reason, (SELECT du.full_name FROM users du WHERE du.id = p.discontinued_by) AS discontinued_by_name'
+            : 'NULL AS discontinued_reason, NULL AS discontinued_by_name';
         // Promotion price selling now, the normal price kept aside, the latest promotion price (migration 0070).
         $promo = \App\Support\Db::hasColumn($this->db, 'products', 'on_promo') ? 'p.on_promo, p.regular_price, p.promo_price' : '0 AS on_promo, NULL AS regular_price, NULL AS promo_price';
         // The product's own running-low line (migration 0078; none = the shop-wide setting).
         $lowLine = LowStockService::ready($this->db) ? 'p.low_stock_at' : 'NULL';
-        $sql = "SELECT p.id, p.name, p.barcode, {$noBarcode} AS no_barcode, {$lowLine} AS low_stock_at, {$discontinued} AS discontinued_at, p.image_token, p.consignor_id, c.name AS consignor_name,
+        $sql = "SELECT p.id, p.name, p.barcode, {$noBarcode} AS no_barcode, {$lowLine} AS low_stock_at, {$discontinued} AS discontinued_at, {$discReason}, p.image_token, p.consignor_id, c.name AS consignor_name,
                        (SELECT a.created_at FROM attachments a WHERE a.token = p.image_token) AS image_at,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price, {$promo},
