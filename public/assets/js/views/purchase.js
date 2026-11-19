@@ -441,7 +441,42 @@ export async function render(container, { user } = {}) {
         return `<span class="actions-row">${orderDraft ? purchase + order : order + purchase}</span>`;
     }
 
+    /**
+     * Where the open modals are scrolled to (the form's body, its items table sideways, the
+     * detail modal). draw() rebuilds the page, so an action on one row (pairing a product,
+     * new product, price mode...) would jump back to the top; this puts it back where it was.
+     */
+    function scrollState() {
+        const pick = (sel) => {
+            const el = container.querySelector(sel);
+            return el ? { top: el.scrollTop, left: el.scrollLeft } : null;
+        };
+        return {
+            title: container.querySelector('#pc-form-title')?.textContent || '',
+            form: pick('.pc-modal-body'),
+            table: pick('.table-wrap:has(> .pc-items)'),
+            view: pick('.modal-backdrop:not(:has(.pc-modal)) .modal-body'),
+            page: window.scrollY,
+        };
+    }
+    function restoreScroll(s) {
+        const sameForm = s.form && (container.querySelector('#pc-form-title')?.textContent || '') === s.title;
+        const body = sameForm && container.querySelector('.pc-modal-body');
+        if (body) body.scrollTop = s.form.top;
+        const wrap = sameForm && s.table && container.querySelector('.table-wrap:has(> .pc-items)');
+        if (wrap) wrap.scrollLeft = s.table.left;
+        const view = s.view && container.querySelector('.modal-backdrop:not(:has(.pc-modal)) .modal-body');
+        if (view) view.scrollTop = s.view.top;
+        if (Math.abs(window.scrollY - s.page) > 1) window.scrollTo(0, s.page);
+    }
+
     function draw() {
+        const keep = scrollState();
+        drawPage();
+        restoreScroll(keep);
+    }
+
+    function drawPage() {
         const waiting = list.counts.ordered || 0;
         const drafts = list.counts.draft || 0;
         container.innerHTML = `
@@ -1707,7 +1742,7 @@ export async function render(container, { user } = {}) {
                 && !(Number(it.sale_price) > 0 && Number(it.regular_price) > Number(it.sale_price)));
             if (!error && promoBad >= 0) error = `รายการที่ ${items.indexOf(rows[promoBad]) + 1} ราคาโปรโมชัน: ต้องระบุราคาโปรและราคาปกติ และราคาโปรต้องต่ำกว่าราคาปกติ`;
         }
-        if (error) { draw(); return; }
+        if (error) { draw(); showFormError(); return; }
 
         if (editing && !editing.ordered && !(await confirmEditReview(rows))) return;
         if (mode === 'receive' && !(await confirmDialog('สินค้าตามรายการในฟอร์มจะเข้าสต๊อกทันที และใบสั่งซื้อจะกลายเป็นใบซื้อ (แก้ไขภายหลังได้เหมือนใบซื้อทั่วไป)',
@@ -1760,6 +1795,12 @@ export async function render(container, { user } = {}) {
         }
         busy = null;
         draw();
+        showFormError();
+    }
+
+    /** draw() keeps the form where it was scrolled: bring a save error into view. */
+    function showFormError() {
+        if (error && formOpen) container.querySelector('.pc-modal-body .error-box')?.scrollIntoView({ block: 'nearest' });
     }
 
 }
