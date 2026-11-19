@@ -191,6 +191,40 @@ class InventoryService
     }
 
     /**
+     * Store goods (not consigned) on hand at the end of $date, from the stock card's documents:
+     * replayed in card order up to that day (an approved count sets the balance to what was
+     * counted). Stock the documents do not explain (the card's opening / closing gap) counts as
+     * already there, unless a count after $date set the stock again by itself.
+     * @return array<int,int> product id => pieces
+     */
+    public function storeStockAt(string $date): array
+    {
+        $events = $this->stockEvents(null);
+        usort($events, fn ($a, $b) => [(int) $a['product_id'], (string) $a['date'], (int) $a['ord'], (string) $a['at'], (int) $a['rid']]
+            <=> [(int) $b['product_id'], (string) $b['date'], (int) $b['ord'], (string) $b['at'], (int) $b['rid']]);
+        $at = [];
+        $all = [];
+        $countAfter = [];
+        foreach ($events as $e) {
+            $pid = (int) $e['product_id'];
+            $apply = fn (int $bal) => $e['kind'] === 'count' ? (int) $e['counted_qty'] : $bal + (int) $e['qty'];
+            $all[$pid] = $apply($all[$pid] ?? 0);
+            if ((string) $e['date'] <= $date) {
+                $at[$pid] = $apply($at[$pid] ?? 0);
+            } elseif ($e['kind'] === 'count') {
+                $countAfter[$pid] = true;
+            }
+        }
+        $out = [];
+        foreach ($this->db->query('SELECT id, qty_stock FROM products WHERE consignor_id IS NULL')->fetchAll() as $p) {
+            $pid = (int) $p['id'];
+            $gap = (int) $p['qty_stock'] - ($all[$pid] ?? 0);
+            $out[$pid] = ($at[$pid] ?? 0) + (empty($countAfter[$pid]) ? $gap : 0);
+        }
+        return $out;
+    }
+
+    /**
      * One product with every document that moved its stock, oldest first, and the balance
      * after each: purchases and consignment receipts in, sales and returns to the consignor
      * out, approved stock counts adjust it by what they found short or over. Stock that came in

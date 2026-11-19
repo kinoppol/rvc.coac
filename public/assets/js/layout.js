@@ -11,6 +11,7 @@ const ICONS = {
     mysales: svg('<path d="M4 2v20l2-1.5L8 22l2-1.5L12 22l2-1.5L16 22l2-1.5L20 22V2l-2 1.5L16 2l-2 1.5L12 2l-2 1.5L8 2 6 3.5z"></path><path d="M8 8h7M8 12h7M8 16h4"></path>'),
     saleedits: svg('<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path><path d="m15 5 3 3"></path>'),
     closing: svg('<path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>'),
+    monthclose: svg('<rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M9 16l2 2 4-4"></path>'),
     drawer: svg('<rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M2 10h20"></path><path d="M10 15h4"></path>'),
     wages: svg('<circle cx="9" cy="7" r="4"></circle><path d="M3 21v-2a4 4 0 0 1 4-4h4"></path><path d="M16 13h6M19 10v6"></path><path d="M15 19h7"></path>'),
     capital: svg('<path d="M3 21h18"></path><path d="M5 21V10l7-5 7 5v11"></path><path d="M12 11v6M10 13h4"></path>'),
@@ -67,6 +68,7 @@ const PAGES = [
     ]},
     { group: 'books', label: 'บัญชีของร้าน', icon: 'ledger', items: [
         { key: 'closing', label: 'สรุปบัญชีรายวัน / ส่งเงิน', perm: 'closing.submit' },
+        { key: 'monthclose', label: 'ปิดบัญชีประจำเดือน', perm: 'reports.view' },
         { key: 'capital', label: 'งบลงทุน / เบิกกำไร', perm: 'capital.manage' },
         { key: 'wages', label: 'เบิกเงินค่าแรงพนักงาน', perm: 'wages.manage' },
     ]},
@@ -107,6 +109,7 @@ const PAGE_TITLES = {
     drawer: ['งานขายหน้าร้าน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
     posimport: ['งานขายหน้าร้าน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
     closing: ['บัญชีของร้าน', 'สรุปบัญชีรายวันและส่งเงินสดให้วิทยาลัย'],
+    monthclose: ['บัญชีของร้าน', 'สรุปยอดปิดบัญชีประจำเดือน'],
     wages: ['บัญชีของร้าน', 'เบิกจ่ายค่าแรงพนักงานและผู้จัดการ'],
     capital: ['บัญชีของร้าน', 'งบลงทุน เบิกเงินออกจากกำไร และกำไรสุทธิรายเดือน'],
     'qr-approve': ['เข้าสู่ระบบ', 'อนุมัติการเข้าสู่ระบบด้วย QR-Code'],

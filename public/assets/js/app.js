@@ -17,6 +17,7 @@ const ROUTE_PERMS = {
     settings: 'settings.view', migrations: 'migrations.manage', security: 'migrations.manage', backup: 'migrations.manage', devices: 'devices.manage', audit: 'audit.view',
     ai: 'ai.manage', purchase: 'purchase.create', reorder: 'purchase.create', suppliers: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
     posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage', closing: 'closing.submit',
+    monthclose: 'reports.view',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 
@@ -27,7 +28,7 @@ const ANDROID_TABS = ['mobileapp', 'devices'];
 
 // Skeleton shape shown while each page loads its data (others: 'list').
 const ROUTE_SKELETON = {
-    dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', closing: 'report', wages: 'report',
+    dashboard: 'dashboard', sales: 'pos', reports: 'report', drawer: 'report', closing: 'report', monthclose: 'report', wages: 'report',
     capital: 'report', mysales: 'report', reorder: 'report', aiusage: 'report', passbook: 'report', mypassbook: 'report', withdraw: 'report', holds: 'report',
     settings: 'form', ai: 'form', receive: 'form', ret: 'form', purchase: 'form',
 };

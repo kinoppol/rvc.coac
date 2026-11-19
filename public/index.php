@@ -43,6 +43,7 @@ use App\Controllers\SettingsController;
 use App\Controllers\SsoController;
 use App\Controllers\StockCountController;
 use App\Controllers\SaleGroupController;
+use App\Controllers\MonthlyClosingController;
 use App\Controllers\UsersController;
 use App\Controllers\WithdrawController;
 use App\Middleware\AuthMiddleware;
@@ -491,6 +492,13 @@ $app->group('/api', function ($group) {
     $group->post('/capital/{id:[0-9]+}/cancel', [CapitalController::class, 'cancel'])
         ->add(new RoleGuard('capital.manage'));
 
+    // Month-end closing (migration 0085): figures kept per month, store goods carried forward.
+    $group->get('/monthly-closings', [MonthlyClosingController::class, 'index'])
+        ->add(new RoleGuard('reports.view'));
+    $group->get('/monthly-closings/{month:[0-9]{4}-[0-9]{2}}', [MonthlyClosingController::class, 'show'])
+        ->add(new RoleGuard('reports.view'));
+    $group->post('/monthly-closings/{month:[0-9]{4}-[0-9]{2}}/close', [MonthlyClosingController::class, 'close'])
+        ->add(new RoleGuard('reports.view'));
     $group->get('/reports/capital/source', [ReportsController::class, 'capitalSource'])
         ->add(new RoleGuard('reports.view'));
     $group->get('/reports/statement/source', [ReportsController::class, 'statementSource'])
