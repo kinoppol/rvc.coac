@@ -101,7 +101,8 @@ export async function render(container) {
         // Saved models first, then anything else the server reported.
         const saved = new Map(editing.models.map((m) => [m.model_id, m]));
         const info = new Map((fetched || []).map((m) => [m.id, m]));
-        const rows = editing.models.map((m) => ({ ...m, saved: true, image_output: info.get(m.model_id)?.image_output }));
+        // After a test, a saved model missing from the provider's list is no longer offered.
+        const rows = editing.models.map((m) => ({ ...m, saved: true, image_output: info.get(m.model_id)?.image_output, gone: !!fetched?.length && !info.has(m.model_id) }));
         (fetched || []).forEach((m) => {
             if (!saved.has(m.id)) rows.push({ model_id: m.id, display_name: '', supports_tools: m.supports_tools !== false, supports_vision: m.supports_vision, image_output: m.image_output, price_in: m.price_in, price_out: m.price_out, enabled: false, saved: false, name: m.name });
         });
@@ -113,6 +114,7 @@ export async function render(container) {
         const e = editing;
         const rows = modelRows();
         const enabledCount = e.models.filter((m) => m.enabled !== false).length;
+        const gone = goneModels();
         return `
         <div class="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="prov-modal-title">
@@ -166,14 +168,21 @@ export async function render(container) {
                 <input id="model-filter" placeholder="ค้นหาโมเดล..." value="${escapeHtml(modelFilter)}">
               </div>
             </div>
+            ${gone.length ? `<div class="pc-warn" style="margin:0 0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div style="flex:1;min-width:220px"><b>โมเดลที่บันทึกไว้ ${gone.length} รายการไม่มีให้บริการแล้ว</b>
+                <div style="font-size:12.5px">ไม่พบในรายชื่อโมเดลที่ผู้ให้บริการส่งมาตอนทดสอบ: ${gone.map((m) => escapeHtml(m.model_id)).join(', ')}</div></div>
+              <button type="button" class="btn danger sm" data-act="drop-gone">ลบออกจากรายการ (${gone.length})</button>
+            </div>` : ''}
             <div class="table-wrap" style="max-height:340px;border:1px solid var(--border);border-radius:10px">
               <table>
                 <thead><tr><th style="width:40px">ใช้</th><th>Model ID</th><th>ชื่อที่แสดง</th><th title="ใช้ function calling เพื่อดึงข้อมูล/ทำรายการในระบบ">เรียกเครื่องมือ</th><th title="อ่านรูปภาพได้ (เช่น อ่านใบเสร็จ)">อ่านรูป</th><th title="ราคาของผู้ให้บริการ (USD ต่อ 1 ล้านโทเคน) ใช้เลือกโมเดลที่ถูกที่สุดในโหมดอัตโนมัติ">ราคา $/1M เข้า · ออก</th></tr></thead>
                 <tbody>
                   ${rows.length ? rows.map((r) => `
-                    <tr>
+                    <tr${r.gone ? ' style="background:var(--surface2)"' : ''}>
                       <td><input type="checkbox" data-model-toggle="${escapeHtml(r.model_id)}" ${r.saved && r.enabled !== false ? 'checked' : ''}></td>
-                      <td style="font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all">${escapeHtml(r.model_id)}${r.name && r.name !== r.model_id ? `<div class="muted" style="font-family:inherit">${escapeHtml(r.name)}</div>` : ''}${r.image_output ? '<div class="pill warn" style="font-family:inherit;margin-top:3px" title="โมเดลนี้ออกแบบมาเพื่อสร้างรูป ราคาสูงและไม่เหมาะกับแชท/อ่านใบเสร็จ">โมเดลสร้างรูป — ไม่แนะนำ</div>' : ''}</td>
+                      <td style="font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all">${r.gone ? `<span style="text-decoration:line-through;color:var(--muted)">${escapeHtml(r.model_id)}</span>
+                        <div style="font-family:inherit;margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="pill bad" title="ไม่พบในรายชื่อโมเดลของผู้ให้บริการตอนทดสอบ">ไม่มีให้บริการแล้ว</span>
+                          <button type="button" class="link-btn" data-model-drop="${escapeHtml(r.model_id)}">ลบ</button></div>` : escapeHtml(r.model_id)}${r.name && r.name !== r.model_id ? `<div class="muted" style="font-family:inherit">${escapeHtml(r.name)}</div>` : ''}${r.image_output ? '<div class="pill warn" style="font-family:inherit;margin-top:3px" title="โมเดลนี้ออกแบบมาเพื่อสร้างรูป ราคาสูงและไม่เหมาะกับแชท/อ่านใบเสร็จ">โมเดลสร้างรูป — ไม่แนะนำ</div>' : ''}</td>
                       <td>${r.saved ? `<input data-model-name="${escapeHtml(r.model_id)}" value="${escapeHtml(r.display_name || '')}" placeholder="(ใช้ Model ID)" style="width:100%;border:1px solid var(--border);background:var(--surface2);color:inherit;border-radius:7px;padding:5px 8px">` : ''}</td>
                       <td>${r.saved ? `<input type="checkbox" data-model-tools="${escapeHtml(r.model_id)}" ${r.supports_tools !== false ? 'checked' : ''}>` : `<span class="muted" style="font-size:12px">${r.supports_tools === false ? 'ไม่รองรับ' : ''}</span>`}</td>
                       <td>${r.saved ? `<input type="checkbox" data-model-vision="${escapeHtml(r.model_id)}" ${r.supports_vision ? 'checked' : ''}>` : `<span class="muted" style="font-size:12px">${r.supports_vision === true ? '🖼 รองรับ' : ''}</span>`}</td>
@@ -295,6 +304,13 @@ export async function render(container) {
         </section>`;
     }
 
+    /** Saved models the provider no longer lists (known only after a test fetched its list). */
+    function goneModels() {
+        if (!editing || !fetched?.length) return []; // an empty list says nothing about what is offered
+        const ids = new Set(fetched.map((m) => m.id));
+        return editing.models.filter((m) => !ids.has(m.model_id));
+    }
+
     function findModel(id) {
         return editing.models.find((m) => m.model_id === id);
     }
@@ -400,6 +416,20 @@ export async function render(container) {
             if (m) m.supports_vision = cb.checked;
         }));
 
+        // Models no longer offered: removed from the list, gone for good once the provider is saved.
+        container.querySelectorAll('[data-model-drop]').forEach((b) => b.addEventListener('click', () => {
+            readForm();
+            editing.models = editing.models.filter((m) => m.model_id !== b.dataset.modelDrop);
+            draw();
+        }));
+        container.querySelector('[data-act="drop-gone"]')?.addEventListener('click', () => {
+            readForm();
+            const drop = new Set(goneModels().map((m) => m.model_id));
+            editing.models = editing.models.filter((m) => !drop.has(m.model_id));
+            status = { type: 'ok', text: `ลบโมเดลที่ไม่มีให้บริการแล้ว ${drop.size} รายการ — กดบันทึกเพื่อยืนยัน` };
+            draw();
+        });
+
         // The modal closes only via its close buttons (no backdrop click / Esc) so edits aren't lost by accident.
         container.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', () => { editing = null; draw(); }));
         container.querySelector('[data-act="add-model"]').addEventListener('click', () => {
@@ -424,7 +454,8 @@ export async function render(container) {
                     const f = fetched.find((x) => x.id === m.model_id);
                     if (f && f.price_in != null) { m.price_in = f.price_in; m.price_out = f.price_out; }
                 });
-                status = { type: 'ok', text: `เชื่อมต่อสำเร็จ (${res.latency_ms} ms) พบ ${res.models.length} โมเดล` };
+                const goneCount = goneModels().length;
+                status = { type: goneCount ? 'warn' : 'ok', text: `เชื่อมต่อสำเร็จ (${res.latency_ms} ms) พบ ${res.models.length} โมเดล${goneCount ? ` · โมเดลที่บันทึกไว้ ${goneCount} รายการไม่มีให้บริการแล้ว` : ''}` };
             } catch (err) {
                 fetched = null;
                 status = { type: 'bad', text: err.message };
