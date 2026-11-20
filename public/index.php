@@ -232,6 +232,7 @@ $app->group('/api/mobile/v1', function ($group) {
     $group->get('/me', [MobileController::class, 'me']);
     $group->get('/sync', [MobileController::class, 'sync']);
     $group->post('/unpair', [MobileController::class, 'unpair']);
+    $group->get('/background', [SettingsController::class, 'posBackgroundImage']);
 })->add(new MobileAuthMiddleware());
 
 // ---- Sign-in through RVC-ONE (SSO) ----

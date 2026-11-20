@@ -76,6 +76,9 @@ class MobileController
             'store_name' => 'ร้านค้าสหการ',
             // The system's name in the app's top bar (ตั้งค่า › หน้าขายสินค้า).
             'app_title' => (new \App\Services\SettingsService(Db::connection()))->appTitle(),
+            // The faint picture behind the screens, the same as the POS app's (ตั้งค่า › POS): token default | none | an
+            // upload (fetched from GET /background once per token), opacity in percent.
+            'background' => (new \App\Services\SettingsService(Db::connection()))->posBackground(),
             'timezone' => date_default_timezone_get(),
             'server_time' => date('c'),
             'sync_minutes' => self::SYNC_MINUTES,
