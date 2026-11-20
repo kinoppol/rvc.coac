@@ -2,7 +2,6 @@ import { uploadProgress } from '../upload-progress.js';
 import { api, getCsrfToken } from '../api.js';
 import { escapeHtml, fmtDateTime, money } from '../util.js';
 import * as dlg from '../dialog.js';
-import { openMobileUpload } from './mobileapp.js';
 
 // อุปกรณ์ POS (Android): pairs the Android POS app like a TV with a phone — the app shows a
 // 6-character code, the admin types it here and picks the sellers who use the device (each
@@ -79,18 +78,15 @@ export async function render(container, { user = {}, params = {} } = {}) {
     let error = null;
     let loaded = false; // the pairing form needs the sellers list
     let form = { code: (params.code || '').toUpperCase(), name: '', user_ids: [], sync_level: null };
-    let mobileRelease = null; // the mobile app for everyone who is not selling (views/mobileapp.js)
     let release = null; // the current .apk: {version, size, sha256, note, uploaded_at, uploaded_by}
     let filt = { q: '', status: '', seller: '', version: '', sort: 'seen' };
     // The address the app connects to: this page's, without the hash.
     const serverUrl = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
     const apkUrl = `${serverUrl}api/app/pos.apk`;
-    const mobileApkUrl = `${serverUrl}api/app/mobile.apk`;
     const fileSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`);
 
     async function load() {
         api.get('/app/pos.json').then((r) => { release = r.data; drawApp(); drawList(); }).catch(() => {});
-        api.get('/app/mobile.json').then((r) => { mobileRelease = r.data; drawMobile(); }).catch(() => {});
         try {
             const res = await api.get('/devices');
             devices = res.data;
@@ -227,112 +223,44 @@ export async function render(container, { user = {}, params = {} } = {}) {
     // ---- top bar: download / upload / pair ----
 
     /*
-     * The two Android apps in one look: name, latest version, who it is for, and the same three buttons
-     * (download, upload a new version, pair a device).
+     * The top of the page, laid out like the manager app's tab (views/mobileapp.js): pairing on the left,
+     * the download (QR-Code, version, download button, upload a new version) on the right.
      */
-    function appCard(box, { title, rel, url, note, onUpload, onPair, pairReady = true }) {
-        box.innerHTML = `
-          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between">
-            <div style="min-width:0">
-              <h2 style="margin:0">${title}</h2>
-              <div class="muted" style="font-size:13px;margin-top:2px">${rel
-                ? `เวอร์ชันล่าสุด <b>${escapeHtml(rel.version)}</b> · ${fileSize(rel.size)} · อัปโหลด ${escapeHtml(fmtDateTime(rel.uploaded_at))} โดย ${escapeHtml(rel.uploaded_by || '-')}`
-                : 'ยังไม่มีไฟล์ติดตั้งแอป — กด "อัปโหลดแอปเวอร์ชันใหม่"'}</div>
-              <div class="muted" style="font-size:12.5px;margin-top:2px">${note}</div>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              ${rel ? `<a class="btn secondary" href="${escapeHtml(url)}" download>⬇ ดาวน์โหลดแอป (.apk)</a>` : ''}
-              <button type="button" class="btn secondary" data-card-upload>⬆ อัปโหลดแอปเวอร์ชันใหม่</button>
-              <button type="button" class="btn" data-card-pair ${pairReady ? '' : 'disabled'}>＋ จับคู่อุปกรณ์</button>
-            </div>
-          </div>`;
-        box.querySelector('[data-card-upload]').addEventListener('click', onUpload);
-        box.querySelector('[data-card-pair]').addEventListener('click', onPair);
-    }
-
     function drawApp() {
         const box = container.querySelector('#d-app');
         if (!box) return;
-        appCard(box, {
-            title: 'แอป Android POS (เครื่องขายหน้าร้าน)',
-            rel: release, url: apkUrl,
-            note: 'สำหรับพนักงานขาย · ผู้ดูแลจับคู่อุปกรณ์และเลือกพนักงานขายที่ใช้เครื่อง (สลับโปรไฟล์บนเครื่องได้)',
-            onUpload: openUpload, onPair: openPair, pairReady: loaded,
-        });
-    }
-
-    // The other Android app: for consignors, managers, executives… Each person pairs it with their own account.
-    function drawMobile() {
-        const box = container.querySelector('#d-mobile');
-        if (!box) return;
-        appCard(box, {
-            title: 'แอปผู้จัดการบนมือถือ (ผู้ใช้อื่นที่ไม่ใช่พนักงานขาย)',
-            rel: mobileRelease, url: mobileApkUrl,
-            note: 'Android 13 ขึ้นไป · แต่ละคนจับคู่แอปกับบัญชีของตนเอง (ปุ่ม "จับคู่อุปกรณ์" หรือที่หน้า <a href="#/mobileapp">แอปบนมือถือ</a>)',
-            onUpload: () => openMobileUpload((r) => { mobileRelease = r; drawMobile(); }),
-            onPair: openMobilePair,
-        });
-    }
-
-    /* Pairs the mobile app with the account signed in here (the same as on แอปบนมือถือ). */
-    function openMobilePair() {
-        let busy = false;
-        const m = openModal({
-            title: 'จับคู่แอปผู้จัดการบนมือถือ (Android)',
-            width: 760,
-            canClose: () => !busy,
-            body: `
-              <p class="muted" style="font-size:13px;margin:0 0 12px">1) ติดตั้งแอปบนมือถือ (สแกน QR-Code ซ้ายด้วยกล้องของมือถือ — ครั้งแรกเครื่องจะถามให้ "อนุญาตให้ติดตั้งแอปที่ไม่รู้จัก" ให้กดอนุญาต)
-                2) เปิดแอปแล้วใส่ที่อยู่เซิร์ฟเวอร์ (หรือสแกน QR-Code ขวา) 3) แอปจะแสดงรหัสจับคู่ 6 ตัว กรอกที่นี่ภายใน 10 นาที
-                — แอปจะใช้งานในชื่อ <b>${escapeHtml(user.full_name || '-')}</b> ตามสิทธิ์ของบัญชีนี้ (ผู้ใช้คนอื่นจับคู่เองที่หน้า <a href="#/mobileapp">แอปบนมือถือ</a>)</p>
-              <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin-bottom:14px">
-                <div style="text-align:center;flex:0 0 170px">${mobileRelease ? qrBox('data-p="apk-qr"') : '<div class="muted" style="width:150px;height:150px;margin:0 auto;display:grid;place-items:center;font-size:12px;border:1px dashed var(--border);border-radius:8px">ยังไม่มีไฟล์แอป</div>'}
-                  <div class="muted" style="font-size:12px;margin-top:6px">① ดาวน์โหลดแอป${mobileRelease ? ` v${escapeHtml(mobileRelease.version)}` : ''}</div></div>
-                <div style="text-align:center;flex:0 0 170px">${qrBox('data-p="srv-qr"')}
-                  <div class="muted" style="font-size:12px;margin-top:6px">② ที่อยู่เซิร์ฟเวอร์<br><code style="word-break:break-all">${escapeHtml(serverUrl)}</code></div></div>
-              </div>
-              <div class="form-grid">
-                <label class="field">รหัสจับคู่ที่แสดงบนมือถือ *
-                  <input data-p="code" maxlength="7" autocomplete="off" spellcheck="false" placeholder="เช่น ABC123"
-                    style="font-size:22px;letter-spacing:4px;text-transform:uppercase;font-family:ui-monospace,monospace"></label>
-                <label class="field">ชื่ออุปกรณ์ <input data-p="name" maxlength="100" placeholder="เช่น มือถือของฉัน (ไม่ใส่ก็ได้)"></label>
-              </div>
-              <div data-p="error" class="error-box" style="margin-top:10px" hidden></div>`,
-            foot: '<button type="button" class="btn" data-p="go">จับคู่กับบัญชีของฉัน</button>',
-        });
-        const $ = (k) => m.el.querySelector(`[data-p="${k}"]`);
-        const fail = (msg) => { $('error').textContent = msg; $('error').hidden = false; };
-        if (mobileRelease) drawQr($('apk-qr'), mobileApkUrl);
-        drawQr($('srv-qr'), serverUrl);
-        m.el.addEventListener('input', () => { $('error').hidden = true; });
-        async function pair() {
-            if (busy) return;
-            const code = $('code').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-            if (code.length !== 6) { fail('กรุณากรอกรหัสจับคู่ 6 ตัวที่แอปแสดง'); return $('code').focus(); }
-            busy = true;
-            $('go').disabled = true;
-            $('go').textContent = 'กำลังจับคู่…';
-            try {
-                const d = (await api.post('/my/mobile-devices/pair', { code, name: $('name').value.trim() || null })).data;
-                busy = false;
-                m.close(true);
-                await alertDialog(`จับคู่ "${d.name}" กับบัญชีของคุณแล้ว แอปจะเริ่มโหลดข้อมูลเองในไม่กี่วินาที`, { title: 'จับคู่สำเร็จ' });
-            } catch (e) {
-                busy = false;
-                $('go').disabled = false;
-                $('go').textContent = 'จับคู่กับบัญชีของฉัน';
-                fail(e.message);
-            }
-        }
-        $('go').addEventListener('click', pair);
-        $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') pair(); });
-        $('code').focus();
+        box.innerHTML = `
+          <section class="card card-pad">
+            <h2 style="margin:0 0 6px;font-size:16px">จับคู่อุปกรณ์ POS กับร้าน</h2>
+            <p class="muted" style="font-size:13px;margin:0 0 12px">สำหรับเครื่องขายหน้าร้าน (แท็บเล็ต / เครื่อง POS Android) ผู้ดูแลจับคู่เครื่องและเลือกพนักงานขายที่ใช้เครื่องนี้ได้หลายคน
+              พนักงานสลับโปรไฟล์ของตนบนเครื่องเพื่อขาย ยอดขายบันทึกเป็นของผู้ที่ขายจริง เปิดแอปแล้วกรอกรหัส 6 ตัวที่แอปแสดง รหัสใช้ได้ 10 นาที</p>
+            <div style="display:flex;justify-content:flex-end;margin-top:12px">
+              <button type="button" class="btn" data-open-pair ${loaded ? '' : 'disabled'}>＋ จับคู่อุปกรณ์</button>
+            </div>
+          </section>
+          <section class="card card-pad">
+            <h2 style="margin:0 0 6px;font-size:16px">ดาวน์โหลดแอป POS (Android)</h2>
+            ${release ? `
+              <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                <div data-app-qr style="width:132px;flex:none"></div>
+                <div style="flex:1;min-width:160px">
+                  <div style="font-weight:600">เวอร์ชัน ${escapeHtml(release.version)} · ${fileSize(release.size)}</div>
+                  ${release.note ? `<div class="muted" style="font-size:12.5px">${escapeHtml(release.note)}</div>` : ''}
+                  <div class="muted" style="font-size:12px">อัปโหลด ${escapeHtml(fmtDateTime(release.uploaded_at))} โดย ${escapeHtml(release.uploaded_by || '-')}</div>
+                  <div class="muted" style="font-size:12px;margin:4px 0 10px">สแกน QR-Code ด้วยกล้องของเครื่อง หรือกดดาวน์โหลดบนเครื่อง ครั้งแรกเครื่องจะถามให้อนุญาตติดตั้งแอปจากแหล่งนี้</div>
+                  <a class="btn secondary" href="${escapeHtml(apkUrl)}" download>ดาวน์โหลดแอป</a>
+                </div>
+              </div>` : '<p class="muted" style="font-size:13px;margin:0">ยังไม่มีไฟล์ติดตั้งแอป</p>'}
+            <div style="margin-top:12px"><button type="button" class="btn sm secondary" data-open-upload>อัปโหลดแอปเวอร์ชันใหม่ (.apk)</button></div>
+          </section>`;
+        if (release) drawQr(box.querySelector('[data-app-qr]'), apkUrl);
+        box.querySelector('[data-open-upload]').addEventListener('click', openUpload);
+        box.querySelector('[data-open-pair]').addEventListener('click', openPair);
     }
 
     function draw() {
         container.innerHTML = `
-        <section class="card card-pad" id="d-app"></section>
-        <section class="card card-pad" id="d-mobile"></section>
+        <div id="d-app" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;align-items:start"></div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
 
         ${failed.length ? `
@@ -355,7 +283,6 @@ export async function render(container, { user = {}, params = {} } = {}) {
         </section>`;
 
         drawApp();
-        drawMobile();
         drawList();
 
         const list = container.querySelector('#d-devices');

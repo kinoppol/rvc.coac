@@ -160,6 +160,7 @@ export async function render(container, { user, permissions, params = {} }) {
                 <div style="flex:1;min-width:160px">
                   <div style="font-weight:600">เวอร์ชัน ${escapeHtml(release.version)} · ${fileSize(release.size)}</div>
                   ${release.note ? `<div class="muted" style="font-size:12.5px">${escapeHtml(release.note)}</div>` : ''}
+                  ${release.uploaded_at ? `<div class="muted" style="font-size:12px">อัปโหลด ${escapeHtml(fmtDateTime(release.uploaded_at))} โดย ${escapeHtml(release.uploaded_by || '-')}</div>` : ''}
                   <div class="muted" style="font-size:12px;margin:4px 0 10px">สแกน QR-Code ด้วยกล้องของมือถือ หรือกดดาวน์โหลดบนมือถือ ครั้งแรกเครื่องจะถามให้อนุญาตติดตั้งแอปจากแหล่งนี้</div>
                   <a class="btn secondary" href="${escapeHtml(apkUrl)}" download>ดาวน์โหลดแอป</a>
                 </div>
