@@ -100,6 +100,8 @@ export function openMobileUpload(onDone = () => {}) {
 }
 
 export async function render(container, { user, permissions, params = {} }) {
+    // Space between the cards (the page stacks them; .card has no margin of its own).
+    container.style.cssText += ";display:flex;flex-direction:column;gap:16px";
     const canUpload = permissions.includes('devices.manage');
     const serverUrl = `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
     const apkUrl = `${serverUrl}api/app/mobile.apk`;
@@ -137,7 +139,7 @@ export async function render(container, { user, permissions, params = {} }) {
         container.innerHTML = `
         ${notMigrated ? `<div class="error-box">${escapeHtml(notMigrated)}</div>` : ''}
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;align-items:start">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:stretch">
           <section class="card card-pad">
             <h2 style="margin:0 0 6px;font-size:16px">จับคู่แอปกับบัญชีของฉัน</h2>
             <p class="muted" style="font-size:13px;margin:0 0 12px">แอปจะใช้งานในชื่อ <b>${escapeHtml(user.full_name)}</b> ตามสิทธิ์ของบัญชีนี้

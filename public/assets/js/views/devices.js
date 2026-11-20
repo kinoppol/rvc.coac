@@ -70,6 +70,8 @@ async function drawQr(box, text) {
 const qrBox = (attr) => `<div ${attr} style="width:150px;height:150px;margin:0 auto;background:#fff;border-radius:8px;padding:6px"></div>`;
 
 export async function render(container, { user = {}, params = {} } = {}) {
+    // Space between the cards (the page stacks them; .card has no margin of its own).
+    container.style.cssText += ";display:flex;flex-direction:column;gap:16px";
     let devices = [];
     let sellers = [];
     let failed = [];
@@ -260,7 +262,7 @@ export async function render(container, { user = {}, params = {} } = {}) {
 
     function draw() {
         container.innerHTML = `
-        <div id="d-app" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;align-items:start"></div>
+        <div id="d-app" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:stretch"></div>
         ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
 
         ${failed.length ? `
