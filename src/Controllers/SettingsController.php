@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Repositories\UserRepo;
+use App\Services\AttachmentService;
 use App\Services\SettingsService;
 use App\Support\AppShell;
 use App\Support\Config;
@@ -128,6 +129,17 @@ class SettingsController
         if (isset($body['app_title'])) {
             $body['app_title'] = mb_substr(trim((string) $body['app_title']), 0, 150);
         }
+        // A new picture is uploaded with POST /settings/pos-background; here only default / none / opacity.
+        if (isset($body['pos_background']) && !in_array($body['pos_background'], ['', 'none'], true)) {
+            unset($body['pos_background']);
+        }
+        if (isset($body['pos_background_opacity'])) {
+            $opacity = (int) $body['pos_background_opacity'];
+            if ($opacity < 0 || $opacity > 60) {
+                return $this->error($response, 'ความเข้มของภาพพื้นหลังต้องอยู่ระหว่าง 0–60%', 422);
+            }
+            $body['pos_background_opacity'] = (string) $opacity;
+        }
         foreach (['store_open_time', 'store_close_time'] as $key) {
             if (isset($body[$key]) && $body[$key] !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $body[$key])) {
                 return $this->error($response, 'เวลาเปิด-ปิดร้านไม่ถูกต้อง', 422);
@@ -174,5 +186,54 @@ class SettingsController
             SessionLifetime::save((int) $body['session_hours']);
         }
         return $this->json($response, ['settings' => $settings->all()]);
+    }
+
+    /** POST /settings/pos-background {data_url} — a new picture behind the POS app's screens. */
+    public function uploadPosBackground(Request $request, Response $response): Response
+    {
+        $body = (array) $request->getParsedBody();
+        $user = $request->getAttribute('user');
+        $db = Db::connection();
+        try {
+            $row = (new AttachmentService($db))->saveDataUrl((string) ($body['data_url'] ?? ''), (int) $user['id'], 'pos-background');
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        $settings = new SettingsService($db);
+        $settings->update(['pos_background' => $row['token']], (int) $user['id']);
+        return $this->json($response, ['settings' => $settings->all(), 'pos_background' => $settings->posBackground()]);
+    }
+
+    /**
+     * GET /pos-background (web) and GET /api/device/v1/background (POS app) — the picture behind the
+     * POS app's screens: the uploaded one, else the default (หอโหวด). ?token= is only there for caching.
+     */
+    public function posBackgroundImage(Request $request, Response $response): Response
+    {
+        $db = Db::connection();
+        $bg = (new SettingsService($db))->posBackground();
+        $path = null;
+        $mime = 'image/jpeg';
+        if (!in_array($bg['token'], ['default', 'none'], true)) {
+            $service = new AttachmentService($db);
+            $row = $service->findByToken($bg['token']);
+            if ($row && AttachmentService::isImage($row)) {
+                try {
+                    $path = $service->absolutePath($row);
+                    $mime = $row['mime'];
+                } catch (\RuntimeException $e) {
+                    $path = null;
+                }
+            }
+        }
+        $path ??= dirname(__DIR__, 2) . '/' . SettingsService::POS_BACKGROUND_DEFAULT;
+        if (!is_file($path)) {
+            return $this->error($response, 'ไม่พบภาพพื้นหลัง', 404);
+        }
+        $response->getBody()->write((string) file_get_contents($path));
+        return $response
+            ->withHeader('Content-Type', $mime)
+            ->withHeader('Cache-Control', 'private, max-age=300')
+            ->withHeader('X-Content-Type-Options', 'nosniff');
     }
 }

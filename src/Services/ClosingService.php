@@ -386,6 +386,18 @@ class ClosingService
             ['closing_date' => $date, 'account' => $method, 'amount' => $amount], $userId, $ip);
     }
 
+    /** The change kept at the last summed-up day before $date: {date, amount}, or null. */
+    private function previousFloat(string $date): ?array
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT business_date, float_kept FROM daily_closings WHERE business_date < ? AND float_kept IS NOT NULL ORDER BY business_date DESC LIMIT 1');
+        $stmt->execute([$date]);
+        $r = $stmt->fetch();
+        return $r ? ['date' => (string) $r['business_date'], 'amount' => (float) $r['float_kept']] : null;
+    }
+
     private function savedFloat(string $date): ?float
     {
         if (!\App\Support\Db::hasColumn($this->db, 'daily_closings', 'float_kept')) {
@@ -459,6 +471,13 @@ class ClosingService
                 'opening_counted' => $drawer['opening_counted'],
                 'opening_adjust' => $adjust,
                 'opening_history' => $adjusts,
+                // The opening as it happened, for the summary to show plainly (no taking back):
+                // what the staff counted in the drawer, the cash sales of this day already in it then
+                // (sold after hours / before the count; opening_cash above is the count less these),
+                // and the change kept for this day at the last summed-up day before it.
+                'counted_at_open' => isset($drawer['counted_at_open']) && $drawer['counted_at_open'] !== null ? (float) $drawer['counted_at_open'] : (float) $drawer['opening_counted'],
+                'cash_before_open' => round((float) ($drawer['cash_sales_before_open'] ?? 0), 2),
+                'prev_float' => $this->previousFloat($date),
                 // Cash that should be in the drawer at closing: the float plus cash sales, less goods bought with it.
                 'should_have' => $atClose,
                 // Left in the drawer after wages and consignors were paid from it (from the count once closed).

@@ -99,6 +99,9 @@ class DeviceController
             'timezone' => date_default_timezone_get(),
             // The system's name in the app's top bar (ตั้งค่า › หน้าขายสินค้า).
             'app_title' => $settings->appTitle(),
+            // The faint picture behind every screen (ตั้งค่า › หน้าขายสินค้า): token default | none | an
+            // upload (fetched from GET /background once per token), opacity in percent.
+            'background' => $settings->posBackground(),
         ];
         return $this->json($response, [
             'api_version' => self::API_VERSION,

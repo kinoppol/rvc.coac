@@ -68,6 +68,10 @@ class SettingsService
         'closing_sent_to' => 'งานศูนย์บ่มเพาะ', // who receives the day's cash for the college
         'closing_payout_method' => 'hold', // how "pay every consignor" pays: hold | cash | promptpay | bank_transfer
         'app_title' => self::APP_TITLE, // the system's name in the top bar of the Android apps ('' = this default)
+        // The faint picture behind every screen of the POS app: '' = the default (หอโหวด, public/assets/img/pos-background.jpg),
+        // 'none' = no picture, else the token of an uploaded attachment (folder pos-background).
+        'pos_background' => '',
+        'pos_background_opacity' => '15', // percent, 0–60
         'asset_mode' => 'production', // production | development — how JS/CSS are cached (App\Support\AppShell)
     ];
 
@@ -75,6 +79,21 @@ class SettingsService
     public function appTitle(): string
     {
         return trim((string) $this->get('app_title')) ?: self::APP_TITLE;
+    }
+
+    /** The default picture behind the POS app's screens. */
+    public const POS_BACKGROUND_DEFAULT = 'public/assets/img/pos-background.jpg';
+
+    /**
+     * The POS app's background as the app reads it: token 'default' (the picture built into the app),
+     * 'none', or an uploaded attachment's token (the app fetches it once per token); opacity 0–60 %.
+     * @return array{token:string, opacity:int}
+     */
+    public function posBackground(): array
+    {
+        $v = trim((string) $this->get('pos_background'));
+        $token = $v === '' ? 'default' : ($v === 'none' ? 'none' : (preg_match('/^[a-f0-9]{32}$/', $v) ? $v : 'default'));
+        return ['token' => $token, 'opacity' => max(0, min(60, (int) $this->get('pos_background_opacity')))];
     }
 
     /** @return array<string,string> date => name of the days off set in store_holidays */

@@ -266,8 +266,8 @@ export async function render(container, { user, permissions = [] } = {}) {
         const drawerBox = box(1, 'เงินในลิ้นชัก', dr ? `
             <table class="cl-t"><tbody>
               ${openingHtml(m, dr, line)}
-              ${line('&nbsp;&nbsp;+ ยอดขายเงินสด', `฿ ${money(f.cash_sales)}`)}
-              ${line('<b>1.1 เงินก่อนปิดร้าน</b> ' + muted('(เงินทอนตั้งต้น + ยอดขายเงินสด)'), `<b>฿ ${money(dr.opening_cash + f.cash_sales)}</b>`)}
+              ${line('&nbsp;&nbsp;+ ยอดขายเงินสดหลังเปิดร้าน', `฿ ${money(f.cash_sales - (dr.cash_before_open || 0))}`)}
+              ${line('<b>1.1 เงินก่อนปิดร้าน</b> ' + muted('(เงินที่นับได้ตอนเปิดร้าน + ยอดขายเงินสดหลังเปิดร้าน)'), `<b>฿ ${money(dr.opening_cash + f.cash_sales)}</b>`)}
               ${line('1.2 หัก ค่าซื้อสินค้าที่ใช้เงินในลิ้นชัก ' + muted('(ข้อ 3.3)'), `฿ ${money(f.purchase_out)}`)}
               ${line('<b>ยอดเงินที่ควรมีในลิ้นชัก</b>', `<b>฿ ${money(dr.should_have)}</b>`)}
               ${countedHtml(m, dr, line)}
@@ -677,49 +677,83 @@ export async function render(container, { user, permissions = [] } = {}) {
 
     /* ---- Opening cash: the staff's count, corrected by whoever sums up the day (with a reason) ---- */
 
+    /*
+     * The opening, step by step with nothing taken back: the change kept from the day before plus the cash of
+     * this day's sales made before the count (sold after hours) is what should be in the drawer; then what was
+     * counted, and the difference. The server keeps the opening cash net of those sales (count − sales before
+     * it), so the amounts shown here add them back.
+     */
     function openingHtml(m, dr, line) {
         const adj = dr.opening_adjust;
         const hist = dr.opening_history || [];
+        const before = dr.cash_before_open || 0;
+        const prev = dr.prev_float;
+        const counted = dr.opening_cash + before; // the count used: corrected, else as counted
+        const staffCounted = dr.opening_counted + before;
+        const should = prev ? prev.amount + before : null;
         const btns = m.can_submit ? `<span class="no-print" style="display:inline-flex;gap:6px;margin-left:8px">
             <button type="button" class="btn sm secondary" data-open-edit>${adj ? 'แก้อีกครั้ง' : 'แก้ยอด'}</button>
             ${adj ? '<button type="button" class="btn sm secondary" data-open-undo>ยกเลิกการแก้ไข</button>' : ''}</span>` : '';
         const histHtml = hist.length ? `<tr class="no-print"><td colspan="2" style="padding-top:2px">
             <details style="font-size:12px"><summary class="muted" style="cursor:pointer">ประวัติการแก้เงินตอนเปิดร้าน (${hist.length})</summary>
             ${hist.map((h) => `<div class="muted" style="margin:3px 0 0 14px">${fmtDateTime(h.created_at)} · ${escapeHtml(h.user_name || '-')} ·
-              ${h.amount === null ? 'ยกเลิกการแก้ไข' : `แก้เป็น ฿${money(h.amount)}`}${h.reason ? ` · ${escapeHtml(h.reason)}` : ''}</div>`).join('')}
+              ${h.amount === null ? 'ยกเลิกการแก้ไข' : `แก้ยอดที่นับได้เป็น ฿${money(h.amount + before)}`}${h.reason ? ` · ${escapeHtml(h.reason)}` : ''}</div>`).join('')}
             </details></td></tr>` : '';
-        if (!adj) {
-            return `${line(`&nbsp;&nbsp;เงินทอนตั้งต้น (ก่อนเปิดร้าน) <span class="muted" style="font-size:12px">(พนักงานนับ)</span>${btns}`, `฿ ${money(dr.opening_cash)}`)}${histHtml}`;
+        const small = (t) => `<span class="muted" style="font-size:12px">${t}</span>`;
+        const match = should !== null && !isDiff(counted, should);
+        const amountHtml = `<span style="font-weight:700;${match ? 'color:var(--ok)' : ''}">฿ ${money(counted)}${match ? ' ✓' : ''}</span>`;
+        const countLabel = '4) ยอดเงินที่นับได้ตอนเปิดร้าน';
+        const countRows = !adj
+            ? line(`&nbsp;&nbsp;<b>${countLabel}</b> ${small('(พนักงานนับ)')}${btns}`, amountHtml)
+            : `${line(`<span class="muted">&nbsp;&nbsp;${countLabel} ที่พนักงานนับ</span>`, `<span class="muted" style="text-decoration:line-through">฿ ${money(staffCounted)}</span>`)}
+               ${line(`&nbsp;&nbsp;<b>${countLabel}</b> <span class="pill warn" style="font-size:11.5px">ผู้สรุปบัญชีแก้</span>${btns}
+                 <div class="muted" style="font-size:12px;margin-top:2px">เหตุผล: ${escapeHtml(adj.reason || '-')} · ${escapeHtml(adj.user_name || '-')} ${fmtDateTime(adj.created_at)}
+                   · ต่างจากที่นับ ${signed(counted - staffCounted)}</div>`, amountHtml)}`;
+        let diffRow = '';
+        if (should !== null) {
+            const d = Math.round((counted - should) * 100) / 100;
+            const label = '&nbsp;&nbsp;5) ส่วนต่างตอนเปิดร้าน';
+            diffRow = !isDiff(counted, should)
+                ? line(label, '<span style="color:var(--ok);font-weight:600">ยอดตรง ✓</span>')
+                : d > 0
+                    ? line(`${label} <span class="pill warn" style="font-size:11.5px">เงินเกิน</span>`, `<span style="color:var(--amber, var(--warn));font-weight:700">${signed(d)}</span>`)
+                    : line(`${label} <span class="pill bad" style="font-size:11.5px">เงินขาด</span>`, `<span style="color:var(--bad);font-weight:700">${signed(d)}</span>`);
         }
         return `
-            ${line('<span class="muted">&nbsp;&nbsp;เงินทอนตั้งต้น ที่พนักงานนับ</span>', `<span class="muted" style="text-decoration:line-through">฿ ${money(dr.opening_counted)}</span>`)}
-            ${line(`&nbsp;&nbsp;เงินทอนตั้งต้น (ก่อนเปิดร้าน) <span class="pill warn" style="font-size:11.5px">ผู้สรุปบัญชีแก้</span>${btns}
-              <div class="muted" style="font-size:12px;margin-top:2px">เหตุผล: ${escapeHtml(adj.reason || '-')} · ${escapeHtml(adj.user_name || '-')} ${fmtDateTime(adj.created_at)}
-                · ต่างจากที่นับ ${signed(adj.amount - dr.opening_counted)}</div>`, `<b>฿ ${money(dr.opening_cash)}</b>`)}
+            ${line(`&nbsp;&nbsp;1) ยอดเงินที่เตรียมไว้ทอนจากวันก่อนหน้า ${prev ? small(`(คงไว้เป็นเงินทอนตอนสรุปบัญชีวันที่ ${escapeHtml(fmtDate(prev.date))})`) : ''}`,
+                prev ? `฿ ${money(prev.amount)}` : '<span class="muted">ไม่มีข้อมูล</span>')}
+            ${line(`&nbsp;&nbsp;2) + ยอดขายล่วงเวลาที่เป็นเงินสด ${small('(ขายก่อนนับเงินเปิดร้าน นับเป็นยอดขายของวันนี้)')}`, `฿ ${money(before)}`)}
+            ${should !== null ? line('&nbsp;&nbsp;<b>3) ยอดเงินที่ควรมีในลิ้นชักตอนเปิดร้าน</b>', `<b>฿ ${money(should)}</b>`) : ''}
+            ${countRows}
+            ${diffRow}
             ${histHtml}`;
     }
 
+    /* The closer types the whole count at opening; the server keeps it net of the cash sales already in the drawer. */
     async function editOpening(m) {
         const dr = m.figures.drawer;
-        const amount = await promptDialog(`พนักงานนับได้ ฿${money(dr.opening_counted)}${dr.opening_adjust ? ` · ตอนนี้ใช้ ฿${money(dr.opening_cash)}` : ''}`, {
-            title: 'แก้เงินในลิ้นชักตอนเปิดร้าน (บาท)', okText: 'ถัดไป', value: String(dr.opening_cash), required: 'กรุณากรอกจำนวนเงิน',
+        const before = dr.cash_before_open || 0;
+        const staff = dr.opening_counted + before;
+        const amount = await promptDialog(`พนักงานนับได้ตอนเปิดร้าน ฿${money(staff)}${dr.opening_adjust ? ` · ตอนนี้ใช้ ฿${money(dr.opening_cash + before)}` : ''}${before ? ` (รวมยอดขายล่วงเวลาที่เป็นเงินสด ฿${money(before)} ที่อยู่ในลิ้นชักแล้ว)` : ''}`, {
+            title: 'แก้ยอดเงินที่นับได้ตอนเปิดร้าน (บาท)', okText: 'ถัดไป', value: String(dr.opening_cash + before), required: 'กรุณากรอกจำนวนเงิน',
         });
         if (amount === null || amount === undefined || docModalGone(m)) return;
         const v = Number(String(amount).replace(/,/g, ''));
-        if (!Number.isFinite(v) || v < 0) {
-            alertDialog('จำนวนเงินไม่ถูกต้อง', { tone: 'error' });
+        if (!Number.isFinite(v) || v < before) {
+            alertDialog(before ? `ยอดที่นับได้ต้องไม่น้อยกว่ายอดขายล่วงเวลาที่เป็นเงินสด (฿${money(before)})` : 'จำนวนเงินไม่ถูกต้อง', { tone: 'error' });
             return;
         }
-        const reason = await promptDialog(`แก้จาก ฿${money(dr.opening_counted)} (พนักงานนับ) เป็น ฿${money(v)}`, {
+        const reason = await promptDialog(`แก้ยอดที่นับได้ตอนเปิดร้านจาก ฿${money(staff)} (พนักงานนับ) เป็น ฿${money(v)}`, {
             title: 'เหตุผลที่แก้', okText: 'บันทึก', placeholder: 'เช่น นับผิด ธนบัตร 100 บาทติดกัน 1 ใบ', required: 'กรุณาระบุเหตุผล', multiline: true,
         });
         if (reason === null || reason === undefined || docModalGone(m)) return;
-        await postOpening(m, { amount: v, reason: String(reason).trim() });
+        await postOpening(m, { amount: Math.round((v - before) * 100) / 100, reason: String(reason).trim() });
     }
 
     async function undoOpening(m) {
         const dr = m.figures.drawer;
-        const note = await promptDialog(`กลับไปใช้ยอดที่พนักงานนับ ฿${money(dr.opening_counted)} (แทน ฿${money(dr.opening_cash)})`, {
+        const before = dr.cash_before_open || 0;
+        const note = await promptDialog(`กลับไปใช้ยอดที่พนักงานนับ ฿${money(dr.opening_counted + before)} (แทน ฿${money(dr.opening_cash + before)})`, {
             title: 'ยกเลิกการแก้เงินตอนเปิดร้าน?', okText: 'ยกเลิกการแก้ไข', placeholder: 'หมายเหตุ (ไม่บังคับ)', danger: true,
         });
         if (note === null || note === undefined || docModalGone(m)) return;

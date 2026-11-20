@@ -155,6 +155,8 @@ export async function render(page, { user, permissions, params = {} }) {
             return `<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px">${POS_ROLES.map((r) => `
               <label style="display:flex;align-items:center;gap:8px;font-size:14px"><input type="checkbox" name="${name}" value="${r}" ${picked.includes(r) ? 'checked' : ''} style="width:20px;height:20px"> ${escapeHtml(ROLE_LABEL[r])}</label>`).join('')}</div>`;
         };
+        const bgMode = !s.pos_background ? 'default' : s.pos_background === 'none' ? 'none' : 'custom';
+        const bgOpacity = Math.max(0, Math.min(60, parseInt(s.pos_background_opacity ?? '15', 10) || 0));
         pane.innerHTML = `
           <div style="max-width:720px">
             <form id="pos-form">
@@ -164,6 +166,28 @@ export async function render(page, { user, permissions, params = {} }) {
                   <p class="muted" style="font-size:13px;margin:0 0 14px">แสดงถัดจากสัญลักษณ์ สอศ. ที่แถบด้านบนของแอปขายสินค้า (POS) และแอปผู้จัดการ เว้นว่าง = ใช้ชื่อเริ่มต้น
                     แอปจะเปลี่ยนตามเมื่อโหลดข้อมูลรอบถัดไป</p>
                   <label class="field">ชื่อระบบ <input name="app_title" maxlength="150" value="${escapeHtml(s.app_title || '')}" placeholder="ระบบบัญชีสหการวิทยาลัยอาชีวศึกษาร้อยเอ็ด"></label>
+                </section>
+                <section class="card card-pad" style="margin-top:16px">
+                  <h2 style="margin-bottom:6px">ภาพพื้นหลังแอปขายสินค้า (POS)</h2>
+                  <p class="muted" style="font-size:13px;margin:0 0 14px">ภาพจาง ๆ ด้านหลังทุกหน้าของแอป POS ค่าเริ่มต้นเป็นรูปหอโหวด ร้อยเอ็ด
+                    แอปจะเปลี่ยนตามเมื่อโหลดข้อมูลรอบถัดไป (ภาพที่อัปโหลดดาวน์โหลดเก็บในเครื่อง ใช้ได้แม้ออฟไลน์)</p>
+                  <div id="bg-preview" style="position:relative;height:190px;border-radius:12px;overflow:hidden;background:#eef4fb;border:1px solid var(--line, #dde3ea)">
+                    <img id="bg-img" alt="ภาพพื้นหลัง" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;${bgMode === 'none' ? 'display:none;' : ''}opacity:${bgOpacity / 100}" src="${api.downloadUrl(`/pos-background?v=${encodeURIComponent(s.pos_background || 'default')}`)}">
+                    <div style="position:absolute;left:14px;top:14px;right:14px;display:flex;gap:10px">
+                      <div style="flex:1;background:rgba(255,255,255,.75);border-radius:10px;padding:10px;font-size:13px">ตัวอย่างหน้าขายสินค้า</div>
+                      <div style="width:30%;background:rgba(255,255,255,.75);border-radius:10px;padding:10px;font-size:13px">ตะกร้า</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px">
+                    <span class="pill" style="margin-right:4px">${bgMode === 'none' ? 'ไม่แสดงภาพ' : bgMode === 'default' ? 'รูปเริ่มต้น (หอโหวด)' : 'รูปที่อัปโหลด'}</span>
+                    ${canEdit ? `<label class="btn secondary sm" style="cursor:pointer">เปลี่ยนรูป…<input id="bg-file" type="file" accept="image/jpeg,image/png,image/webp" hidden></label>
+                    ${bgMode !== 'default' ? '<button type="button" class="btn secondary sm" data-bg="">ใช้รูปเริ่มต้น (หอโหวด)</button>' : ''}
+                    ${bgMode !== 'none' ? '<button type="button" class="btn secondary sm" data-bg="none">ไม่แสดงภาพ</button>' : ''}` : ''}
+                    <span id="bg-msg" class="muted" style="font-size:12.5px"></span>
+                  </div>
+                  <label class="field" style="margin-top:12px">ความเข้มของภาพ <span id="bg-op-label">${bgOpacity}%</span>
+                    <input type="range" name="pos_background_opacity" min="0" max="60" step="1" value="${bgOpacity}" style="width:100%"></label>
+                  <p class="muted" style="font-size:12px;margin:2px 0 0">แนะนำ 10–20% เพื่อให้อ่านตัวหนังสือได้ชัด กด "บันทึก" ด้านล่างเพื่อใช้ความเข้มใหม่</p>
                 </section>
                 <section class="card card-pad" style="margin-top:16px">
                   <h2 style="margin-bottom:6px">วิธีรับชำระเงินที่หน้าขายสินค้า (POS)</h2>
@@ -289,7 +313,32 @@ export async function render(page, { user, permissions, params = {} }) {
         drawPreview();
         loadThaiQr().then(drawPreview);
         ['promptpay_target', 'promptpay_title', 'promptpay_account', 'promptpay_warning_title', 'promptpay_warning_detail'].forEach((n) => form.elements[n].addEventListener('input', drawPreview));
+        form.elements.pos_background_opacity.addEventListener('input', (e) => {
+            pane.querySelector('#bg-op-label').textContent = `${e.target.value}%`;
+            pane.querySelector('#bg-img').style.opacity = String(e.target.value / 100);
+        });
         if (!canEdit) return;
+        const bgMsg = (text) => { pane.querySelector('#bg-msg').textContent = text; };
+        pane.querySelector('#bg-file').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                bgMsg('กำลังอัปโหลด…');
+                const { fileToDataUrl } = await import('../images.js');
+                await api.post('/settings/pos-background', { data_url: await fileToDataUrl(file) });
+                await load();
+            } catch (err) {
+                bgMsg(err.message);
+            }
+        });
+        pane.querySelectorAll('[data-bg]').forEach((b) => b.addEventListener('click', async () => {
+            try {
+                await api.put('/settings', { pos_background: b.dataset.bg });
+                await load();
+            } catch (err) {
+                bgMsg(err.message);
+            }
+        }));
         pane.querySelector('#holiday-add').addEventListener('click', () => {
             const list = pane.querySelector('#holiday-list');
             list.insertAdjacentHTML('beforeend', holidayRow({ date: '', name: '' }));
@@ -302,7 +351,7 @@ export async function render(page, { user, permissions, params = {} }) {
             e.preventDefault();
             const fd = new FormData(e.target);
             try {
-                await api.put('/settings', { app_title: fd.get('app_title').trim(), pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
+                await api.put('/settings', { app_title: fd.get('app_title').trim(), pos_background_opacity: fd.get('pos_background_opacity'), pos_payment_methods: fd.getAll('method').join(','), pos_mixed_roles: fd.getAll('mixed_roles').join(','), pos_short_stock_roles: fd.getAll('short_roles').join(','),
                     pos_short_stock_always: fd.get('short_always') === '1' ? '1' : '0',
                     ...(isAdmin ? {
                         pos_promptpay_enabled: fd.get('promptpay_enabled') === '1' ? '1' : '0',

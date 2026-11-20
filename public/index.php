@@ -149,6 +149,7 @@ $app->group('/api/device/v1', function ($group) {
         ->add(new RoleGuard('sales.create'));
     $group->get('/promos', [DeviceController::class, 'promos'])
         ->add(new RoleGuard('sales.create'));
+    $group->get('/background', [SettingsController::class, 'posBackgroundImage']);
     $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
     $group->post('/sales', [DeviceController::class, 'syncSales'])
         ->add(new RoleGuard('sales.create'));
@@ -627,6 +628,9 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('settings.view'));
     $group->put('/settings', [SettingsController::class, 'update'])
         ->add(new RoleGuard('settings.edit'));
+    $group->post('/settings/pos-background', [SettingsController::class, 'uploadPosBackground'])
+        ->add(new RoleGuard('settings.edit'));
+    $group->get('/pos-background', [SettingsController::class, 'posBackgroundImage']);
 
     $group->get('/users', [UsersController::class, 'index'])
         ->add(new RoleGuard('settings.edit'));

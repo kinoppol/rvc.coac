@@ -518,9 +518,17 @@ export function printClosingReport(r, { weekday, status, send }) {
     const box = (title, body) => `<div class="box"><div class="box-h">${title}</div><table class="led"><tbody>${body}</tbody></table></div>`;
 
     // 1. Cash in the drawer.
+    // The opening as it happened: the change from the day before + after-hours cash sales = what should be there; the count; the difference.
+    const before = dr?.cash_before_open || 0;
+    const prev = dr?.prev_float;
+    const shouldOpen = prev ? prev.amount + before : null;
     const drawer = box('1. เงินในลิ้นชัก', dr ? `
-        ${row(dr.opening_adjust ? `เงินทอนตั้งต้น (ผู้สรุปบัญชีแก้จาก ${n(dr.opening_counted)}: ${escapeHtml(dr.opening_adjust.reason || '-')})` : 'เงินทอนตั้งต้น (ก่อนเปิดร้าน)', n(dr.opening_cash))}
-        ${row('บวก ยอดขายเงินสด', n(f.cash_sales))}
+        ${row(`1) ยอดเงินที่เตรียมไว้ทอนจากวันก่อนหน้า${prev ? ` (สรุปบัญชีวันที่ ${escapeHtml(fmtDate(prev.date))})` : ''}`, prev ? n(prev.amount) : '-')}
+        ${row('2) บวก ยอดขายล่วงเวลาที่เป็นเงินสด (ก่อนนับเงินเปิดร้าน)', n(before))}
+        ${shouldOpen !== null ? row('3) ยอดเงินที่ควรมีในลิ้นชักตอนเปิดร้าน', n(shouldOpen), 'sub') : ''}
+        ${row(dr.opening_adjust ? `4) ยอดเงินที่นับได้ตอนเปิดร้าน (ผู้สรุปบัญชีแก้จาก ${n(dr.opening_counted + before)}: ${escapeHtml(dr.opening_adjust.reason || '-')})` : '4) ยอดเงินที่นับได้ตอนเปิดร้าน', n(dr.opening_cash + before))}
+        ${shouldOpen !== null ? row('5) ส่วนต่างตอนเปิดร้าน', os(Math.round((dr.opening_cash + before - shouldOpen) * 100) / 100)) : ''}
+        ${row('บวก ยอดขายเงินสดหลังเปิดร้าน', n(f.cash_sales - before))}
         ${row('1.1 เงินก่อนปิดร้าน', n(dr.opening_cash + f.cash_sales), 'sub')}
         ${row('1.2 หัก ค่าซื้อสินค้าที่ใช้เงินในลิ้นชัก (ข้อ 3.3)', n(f.purchase_out))}
         ${row('ยอดเงินที่ควรมีในลิ้นชัก', n(dr.should_have), 'sub')}
