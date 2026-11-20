@@ -1,3 +1,4 @@
+import { uploadProgress } from '../upload-progress.js';
 import { api, getCsrfToken } from '../api.js';
 import { escapeHtml, fmtDateTime, money } from '../util.js';
 import * as dlg from '../dialog.js';
@@ -425,7 +426,7 @@ export async function render(container, { user = {}, params = {} } = {}) {
             if (!version) return fail('กรุณาระบุเวอร์ชันของแอป');
             $('error').hidden = true;
             setBusy(true);
-            const progress = (text) => { $('progress').textContent = text; };
+            const up = uploadProgress($('progress'), $('go'));
             const id = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
             const CHUNK = 1048576; // AppReleaseService::CHUNK
             try {
@@ -438,18 +439,19 @@ export async function render(container, { user = {}, params = {} } = {}) {
                     const data = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(data.error || `อัปโหลดไม่สำเร็จ (${res.status})`);
                     const done = Math.min(file.size, off + CHUNK);
-                    progress(`${Math.round((done / file.size) * 100)}% · ${fileSize(done)} / ${fileSize(file.size)}`);
+                    up.sent(done, file.size);
                 }
-                progress('กำลังตรวจไฟล์…');
+                up.checking();
                 release = (await api.post('/devices/app/finish', { upload_id: id, size: file.size, version, note: $('note').value })).data;
+                up.stop();
                 setBusy(false);
                 m.close(true);
                 drawApp();
                 drawList();
                 await alertDialog(`อัปโหลดแอปเวอร์ชัน ${release.version} แล้ว ดาวน์โหลดได้จากปุ่ม "ดาวน์โหลดแอป" หรือ QR-Code ในหน้าจับคู่อุปกรณ์`, { title: 'อัปโหลดสำเร็จ' });
             } catch (e) {
+                up.stop();
                 setBusy(false);
-                progress('');
                 fail(e.message);
             }
         });

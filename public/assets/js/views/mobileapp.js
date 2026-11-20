@@ -1,3 +1,4 @@
+import { uploadProgress } from '../upload-progress.js';
 import { api, getCsrfToken } from '../api.js';
 import { escapeHtml, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
@@ -66,6 +67,7 @@ export function openMobileUpload(onDone = () => {}) {
         uploading = true;
         $('go').disabled = true;
         $('go').textContent = 'กำลังอัปโหลด…';
+        const up = uploadProgress($('progress'), $('go'));
         const id = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
         const CHUNK = 1048576; // AppReleaseService::CHUNK
         try {
@@ -78,10 +80,11 @@ export function openMobileUpload(onDone = () => {}) {
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.error || `อัปโหลดไม่สำเร็จ (${res.status})`);
                 const done = Math.min(file.size, off + CHUNK);
-                $('progress').textContent = `${Math.round((done / file.size) * 100)}% · ${fileSize(done)} / ${fileSize(file.size)}`;
+                up.sent(done, file.size);
             }
-            $('progress').textContent = 'กำลังตรวจไฟล์…';
+            up.checking();
             const release = (await api.post('/devices/app/finish?kind=mobile', { upload_id: id, size: file.size, version, note: $('note').value })).data;
+            up.stop();
             uploading = false;
             el.remove();
             onDone(release);
@@ -89,8 +92,8 @@ export function openMobileUpload(onDone = () => {}) {
         } catch (e) {
             uploading = false;
             $('go').disabled = false;
+            up.stop();
             $('go').textContent = 'อัปโหลด';
-            $('progress').textContent = '';
             fail(e.message);
         }
     });
