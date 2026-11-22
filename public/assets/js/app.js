@@ -18,6 +18,7 @@ const ROUTE_PERMS = {
     ai: 'ai.manage', purchase: 'purchase.create', reorder: 'purchase.create', suppliers: 'purchase.create', inventory: 'reports.view', aiusage: 'ai.usage',
     posimport: 'sales.import', drawer: 'sales.create', mysales: 'sales.create', saleedits: 'sales.edit.approve', wages: 'wages.manage', capital: 'capital.manage', closing: 'closing.submit',
     monthclose: 'reports.view', promos: 'reports.view',
+    members: 'members.view', member: 'members.view', memberstats: 'members.view', surveys: 'members.view', membersettings: 'members.view',
     mypassbook: 'consignor.portal', myproducts: 'consignor.portal', myrequests: 'consignor.portal',
 };
 

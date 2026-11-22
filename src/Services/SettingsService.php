@@ -72,6 +72,12 @@ class SettingsService
         // 'none' = no picture, else the token of an uploaded attachment (folder pos-background).
         'pos_background' => '',
         'pos_background_opacity' => '15', // percent, 0–60
+        // Store members' points (MemberService, migration 0088): 1 point per member_baht_per_point baht paid,
+        // fractions dropped; member_welcome_points on a member's first purchase; held points come back after member_hold_minutes.
+        'member_points_enabled' => '1',
+        'member_baht_per_point' => '25',
+        'member_welcome_points' => '5',
+        'member_hold_minutes' => '60',
         'asset_mode' => 'production', // production | development — how JS/CSS are cached (App\Support\AppShell)
     ];
 

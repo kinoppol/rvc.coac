@@ -75,6 +75,8 @@ class OaUserRepo
             }
         }
 
+        $this->saveIdentity($id, $u);
+
         $fullName = trim($first . ' ' . $last);
         $link = $this->db->prepare(
             'UPDATE users SET oa_status = ?, full_name = IF(? = \'\', full_name, ?) WHERE oa_user_id = ?'
@@ -82,6 +84,57 @@ class OaUserRepo
         $link->execute([$status, $fullName, $fullName, $id]);
 
         return $result;
+    }
+
+    /**
+     * Store members (migration 0088): the national ID, student code and phone numbers RVC-ONE holds
+     * from RMS, sent when this app is granted them. A field left out of the payload is kept as it is.
+     * phone / phones: one number or a list ("0812345678", "081-234-5678, 043-511-xxx", or an array).
+     */
+    private function saveIdentity(int $id, array $u): void
+    {
+        if (!\App\Support\Db::hasColumn($this->db, 'oa_users', 'national_id')) {
+            return;
+        }
+        $sets = [];
+        $args = [];
+        if (array_key_exists('national_id', $u)) {
+            $nid = preg_replace('/\D/', '', (string) $u['national_id']);
+            $sets[] = 'national_id = ?';
+            $args[] = strlen($nid) === 13 ? $nid : null;
+        }
+        if (array_key_exists('student_code', $u)) {
+            $sets[] = 'student_code = ?';
+            $args[] = self::str($u['student_code']);
+        }
+        if ($sets) {
+            $this->db->prepare('UPDATE oa_users SET ' . implode(', ', $sets) . ' WHERE oa_user_id = ?')->execute([...$args, $id]);
+        }
+        if (!array_key_exists('phone', $u) && !array_key_exists('phones', $u)) {
+            return;
+        }
+        $raw = [];
+        foreach (['phone', 'phones'] as $k) {
+            $v = $u[$k] ?? null;
+            foreach (is_array($v) ? $v : preg_split('/[,;\/]+/', (string) $v) as $one) {
+                $raw[] = (string) $one;
+            }
+        }
+        $phones = [];
+        foreach ($raw as $one) {
+            $d = preg_replace('/\D/', '', $one);
+            if (str_starts_with($d, '66') && strlen($d) === 11) {
+                $d = '0' . substr($d, 2);
+            }
+            if (strlen($d) >= 9 && strlen($d) <= 15) {
+                $phones[$d] = true;
+            }
+        }
+        $this->db->prepare('DELETE FROM oa_user_phones WHERE oa_user_id = ?')->execute([$id]);
+        $ins = $this->db->prepare('INSERT IGNORE INTO oa_user_phones (phone, oa_user_id) VALUES (?, ?)');
+        foreach (array_keys($phones) as $p) {
+            $ins->execute([(string) $p, $id]);
+        }
     }
 
     public function find(int $oaUserId): ?array

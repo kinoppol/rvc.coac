@@ -58,6 +58,23 @@ class SaleService
                         . ') — ตรวจยอดในตะกร้าแล้วชำระเงินอีกครั้ง');
                 }
             }
+            // The buyer (migration 0088): lines that used points take their discount from the points held for them.
+            $memberId = (int) ($opts['member_id'] ?? 0);
+            $memberId = $memberId > 0 && MemberService::ready($this->db) ? $memberId : 0;
+            $members = $memberId ? new MemberService($this->db, $this->audit) : null;
+            $holds = [];
+            $pointWarnings = [];
+            if ($members) {
+                [$items, $holds, $pointWarnings] = $members->applyToSale($items, $memberId, !empty($opts['offline']));
+            } else {
+                foreach ($items as $i => $l) {
+                    unset($items[$i]['points_discount']);
+                }
+            }
+            foreach ($items as $i => $l) {
+                $items[$i]['_line'] = $i;
+            }
+            $pointsByLine = [];
             // A sale group (migration 0084) sold as one item: one line per member product, taken in turn.
             $items = (new SaleGroupService($this->db, $this->audit))->expand($items, !empty($opts['allow_short_stock']));
             $docNo = $this->docs->next('SL', 'sales', 'doc_no');
@@ -96,8 +113,15 @@ class SaleService
                     throw new \RuntimeException('จำนวนขายเกินสต๊อกคงเหลือของ ' . $product['name']);
                 }
 
-                $discount = round((float) ($line['promo_discount'] ?? 0), 2);
-                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1), $discount);
+                $promoOff = round((float) ($line['promo_discount'] ?? 0), 2);
+                $pointsOff = round((float) ($line['points_discount'] ?? 0), 2);
+                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1), $promoOff + $pointsOff);
+                // The line's price caps both discounts: the promotion first, points take what is left.
+                $promoPart = min($promoOff, $fig['discount']);
+                $pointsPart = round($fig['discount'] - $promoPart, 2);
+                if ($pointsOff > 0 && isset($line['_line'])) {
+                    $pointsByLine[$line['_line']] = ($pointsByLine[$line['_line']] ?? 0) + $pointsPart;
+                }
                 $unitPrice = $fig['unit_price'];
                 $packSize = $fig['pack_size'];
                 $feeOutPerUnit = $fig['fee_per_unit'];
@@ -122,9 +146,12 @@ class SaleService
                     $insItem->execute($row);
                 }
                 $itemId = (int) $this->db->lastInsertId();
-                if ($fig['discount'] > 0) {
+                if ($promoPart > 0) {
                     $this->db->prepare('UPDATE sale_items SET promo_discount = ?, promo_id = ? WHERE id = ?')
-                        ->execute([$fig['discount'], $line['promo_id'] ?? null, $itemId]);
+                        ->execute([$promoPart, $line['promo_id'] ?? null, $itemId]);
+                }
+                if ($pointsPart > 0) {
+                    $this->db->prepare('UPDATE sale_items SET points_discount = ? WHERE id = ?')->execute([$pointsPart, $itemId]);
                 }
 
                 $left = $this->products->applySale((int) $product['id'], $qty, $cashierId, $ip);
@@ -134,7 +161,7 @@ class SaleService
                 // A promotion's price per piece may run past the satang: the line comes to its regular price less its discount.
                 $lineValue = $fig['discount'] > 0 ? $fig['regular_price'] * $qty - $fig['discount'] : $unitPrice * $qty;
                 $totalValue += $lineValue;
-                $lineDiscounts += $fig['discount'];
+                $lineDiscounts += $promoPart;
 
                 if ($isStoreOwned) {
                     continue;
@@ -193,6 +220,16 @@ class SaleService
                 [$change, $paymentWarning] = $this->recordPayments($saleId, round($totalValue, 2), $opts['payments']);
             }
 
+            $memberResult = null;
+            if ($members) {
+                $used = [];
+                foreach ($holds as $i => $h) {
+                    $used[] = ['id' => $h['id'], 'points' => $h['points'], 'held_discount' => $h['discount'], 'discount' => round($pointsByLine[$i] ?? 0, 2)];
+                }
+                $memberResult = $members->settleSale($saleId, $memberId, round($totalValue, 2), $used, $cashierId, $saleAt, $docNo)
+                    + ['warnings' => $pointWarnings];
+            }
+
             $this->audit->log('sales', $saleId, 'create', null, [
                 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
                 'business_date' => $businessDate, 'after_hours' => $afterHours,
@@ -204,7 +241,7 @@ class SaleService
             return [
                 'id' => $saleId, 'doc_no' => $docNo, 'total_qty' => $totalQty, 'total_value' => round($totalValue, 2),
                 'change' => $change, 'business_date' => $businessDate, 'after_hours' => $afterHours,
-                'payment_warning' => $paymentWarning, 'promo_discount' => round($promoTotal, 2),
+                'payment_warning' => $paymentWarning, 'promo_discount' => round($promoTotal, 2), 'member' => $memberResult,
             ];
         } catch (\Throwable $e) {
             if ($own) {

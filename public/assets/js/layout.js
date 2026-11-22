@@ -43,6 +43,10 @@ const ICONS = {
 };
 
 ICONS.android = ICONS.mobileapp;
+ICONS.members = svg('<circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path><path d="m15.5 3.5 1 2 2 .3-1.5 1.4.4 2-1.9-1-1.9 1 .4-2-1.5-1.4 2-.3z"></path>');
+ICONS.memberstats = svg('<path d="M3 3v18h18"></path><path d="m7 15 4-4 3 3 5-6"></path><circle cx="19" cy="8" r="1.5"></circle>');
+ICONS.surveys = svg('<rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h5"></path><path d="m15 16 1.5 1.5L19 15"></path>');
+ICONS.membersettings = svg('<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path><path d="M8 3.5 6 2M16 3.5 18 2"></path>');
 ICONS.suppliers = svg('<path d="M3 21V9l9-6 9 6v12"></path><path d="M9 21v-6h6v6"></path><path d="M3 21h18"></path>');
 ICONS.ledger = svg('<path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"></path><path d="M18 8h2v12a2 2 0 0 1-2 2H6"></path><path d="M8 8h6M8 12h6M8 16h3"></path>');
 
@@ -55,10 +59,16 @@ const PAGES = [
         { key: 'sales', label: 'ขายสินค้า (POS)', perm: 'sales.create' },
         { key: 'mysales', label: 'ประวัติการขาย', perm: 'sales.create' },
         { key: 'drawer', label: 'เงินในลิ้นชัก / ปิดยอด', perm: 'sales.create' },
-        { key: 'promos', label: 'โปรโมชั่นจับคู่สินค้า', perm: 'reports.view' },
+        { key: 'promos', label: 'โปรโมชั่น / ใช้แต้ม', perm: 'reports.view' },
         { key: 'saleedits', label: 'อนุมัติแก้ไขการขาย', perm: 'sales.edit.approve' },
         { key: 'posimport', label: 'นำเข้ายอดขายจาก POS', perm: 'sales.import' },
     ]},
+    { group: 'members', label: 'สมาชิกร้าน', icon: 'members', items: [
+        { key: 'members', label: 'ทะเบียนสมาชิก / แต้มสะสม', perm: 'members.view' },
+        { key: 'memberstats', label: 'สถิติการใช้แต้มสะสม', perm: 'members.view' },
+        { key: 'surveys', label: 'แบบสอบถามรับแต้ม', perm: 'members.view' },
+        { key: 'membersettings', label: 'ตั้งค่าแต้มสะสม', perm: 'members.view' },
+    ] },
     { group: 'buy', label: 'ซื้อสินค้าเข้าร้าน', icon: 'purchase', items: [
         { key: 'purchase', label: 'บันทึกรายการซื้อสินค้า', perm: 'purchase.create' },
         { key: 'reorder', label: 'รายการซื้อสินค้าใกล้หมด', perm: 'purchase.create' },
@@ -100,7 +110,7 @@ const PAGES = [
 ];
 
 // Routes shown under another menu item (tabs of one page).
-const NAV_ALIAS = { mobileapp: 'android', devices: 'android' };
+const NAV_ALIAS = { mobileapp: 'android', devices: 'android', member: 'members' };
 
 const ANDROID_TITLE = ['ระบบ', 'แอป Android: แอปผู้จัดการบนมือถือ และแอป POS'];
 const PAGE_TITLES = {
@@ -108,7 +118,12 @@ const PAGE_TITLES = {
     sales: ['งานขายหน้าร้าน', 'ขายสินค้า (POS)'],
     mysales: ['งานขายหน้าร้าน', 'ประวัติการขาย และขอแก้ไขการขาย'],
     saleedits: ['งานขายหน้าร้าน', 'อนุมัติคำขอแก้ไขการขาย'],
-    promos: ['งานขายหน้าร้าน', 'โปรโมชั่นจับคู่สินค้า'],
+    promos: ['งานขายหน้าร้าน', 'โปรโมชั่นจับคู่สินค้า และการใช้แต้มสะสมเป็นส่วนลด'],
+    members: ['สมาชิกร้าน', 'ทะเบียนสมาชิก (นักเรียนและบุคลากร) และแต้มสะสม'],
+    member: ['สมาชิกร้าน', 'ข้อมูลสมาชิก ประวัติแต้ม และพฤติกรรมการซื้อ'],
+    memberstats: ['สมาชิกร้าน', 'สถิติการสะสมและการใช้แต้ม'],
+    surveys: ['สมาชิกร้าน', 'แบบสอบถามรับแต้มพิเศษ'],
+    membersettings: ['สมาชิกร้าน', 'ตั้งค่าการสะสมแต้ม'],
     drawer: ['งานขายหน้าร้าน', 'เงินในลิ้นชักและปิดยอดประจำวัน'],
     posimport: ['งานขายหน้าร้าน', 'นำเข้ายอดขายจากระบบ POS ภายนอก'],
     closing: ['บัญชีของร้าน', 'สรุปบัญชีรายวันและส่งเงินสดให้วิทยาลัย'],

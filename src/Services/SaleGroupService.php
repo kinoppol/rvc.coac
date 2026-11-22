@@ -318,15 +318,27 @@ class SaleGroupService
                 $take[$best] = ($take[$best] ?? 0) + 1;
             }
             // A bundle promotion's discount on the group line (PromoService) is shared by the pieces.
+            // So are points taken off it (migration 0088).
             $off = round((float) ($line['promo_discount'] ?? 0), 2);
+            $pts = round((float) ($line['points_discount'] ?? 0), 2);
             $given = 0.0;
+            $givenPts = 0.0;
             $k = 0;
             foreach ($take as $pid => $n) {
                 $row = ['product_id' => $pid, 'qty' => $n, 'unit_price' => (float) $g['sale_price'], 'group_id' => $gid];
+                $last = ++$k === count($take);
                 if ($off > 0) {
-                    $share = ++$k === count($take) ? round($off - $given, 2) : round($off * $n / $qty, 2);
+                    $share = $last ? round($off - $given, 2) : round($off * $n / $qty, 2);
                     $given += $share;
                     $row += ['promo_discount' => $share, 'promo_id' => $line['promo_id'] ?? null];
+                }
+                if ($pts > 0) {
+                    $share = $last ? round($pts - $givenPts, 2) : round($pts * $n / $qty, 2);
+                    $givenPts += $share;
+                    $row['points_discount'] = $share;
+                }
+                if (isset($line['_line'])) {
+                    $row['_line'] = $line['_line'];
                 }
                 $out[] = $row;
             }

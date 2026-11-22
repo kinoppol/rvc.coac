@@ -23,6 +23,7 @@ use App\Controllers\DeviceController;
 use App\Controllers\InventoryController;
 use App\Controllers\SupplierController;
 use App\Controllers\MobileController;
+use App\Controllers\MemberController;
 use App\Controllers\MigrationsController;
 use App\Controllers\SecurityController;
 use App\Controllers\MyConsignorController;
@@ -153,6 +154,15 @@ $app->group('/api/device/v1', function ($group) {
     $group->get('/products/{id:[0-9]+}/photo', [StockCountController::class, 'photo']);
     $group->post('/sales', [DeviceController::class, 'syncSales'])
         ->add(new RoleGuard('sales.create'));
+    // Store members and points (migration 0088): the same as on the web POS. Naming the buyer and
+    // spending points need the server; a sale made offline still carries the buyer and the points held.
+    $group->get('/sales/members', [MemberController::class, 'posSearch'])->add(new RoleGuard('sales.create'));
+    $group->get('/sales/members/{oa:[0-9]+}', [MemberController::class, 'posPick'])->add(new RoleGuard('sales.create'));
+    $group->get('/sales/member-card/{id:[0-9]+}', [MemberController::class, 'posCard'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/points/hold', [MemberController::class, 'hold'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/points/release', [MemberController::class, 'release'])->add(new RoleGuard('sales.create'));
+    $group->get('/redeems', [MemberController::class, 'posRedeems'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/surveys/{id:[0-9]+}/answer', [MemberController::class, 'answer'])->add(new RoleGuard('sales.create'));
     // The same as on the web POS.
     $group->get('/sales/products', [SalesController::class, 'searchProducts']);
     $group->get('/sales/options', [SalesController::class, 'options']);
@@ -342,6 +352,34 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('sales.create'));
     $group->post('/sale-edits/{id:[0-9]+}/cancel', [SaleEditController::class, 'cancel'])
         ->add(new RoleGuard('sales.create'));
+    // Store members and points (migration 0088).
+    $group->get('/sales/members', [MemberController::class, 'posSearch'])->add(new RoleGuard('sales.create'));
+    $group->get('/sales/members/{oa:[0-9]+}', [MemberController::class, 'posPick'])->add(new RoleGuard('sales.create'));
+    $group->get('/sales/member-card/{id:[0-9]+}', [MemberController::class, 'posCard'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/points/hold', [MemberController::class, 'hold'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/points/release', [MemberController::class, 'release'])->add(new RoleGuard('sales.create'));
+    $group->get('/sales/redeems', [MemberController::class, 'posRedeems'])->add(new RoleGuard('sales.create'));
+    $group->post('/sales/surveys/{id:[0-9]+}/answer', [MemberController::class, 'answer'])->add(new RoleGuard('sales.create'));
+    $group->get('/members', [MemberController::class, 'index'])->add(new RoleGuard('members.view'));
+    $group->get('/members/stats', [MemberController::class, 'stats'])->add(new RoleGuard('members.view'));
+    $group->get('/members/settings', [MemberController::class, 'settings'])->add(new RoleGuard('members.view'));
+    $group->put('/members/settings', [MemberController::class, 'saveSettings'])->add(new RoleGuard('members.view'));
+    $group->get('/members/{oa:[0-9]+}', [MemberController::class, 'show'])->add(new RoleGuard('members.view'));
+    $group->get('/members/{oa:[0-9]+}/points', [MemberController::class, 'points'])->add(new RoleGuard('members.view'));
+    $group->get('/members/{oa:[0-9]+}/purchases', [MemberController::class, 'purchases'])->add(new RoleGuard('members.view'));
+    $group->post('/members/{oa:[0-9]+}/adjust', [MemberController::class, 'adjust'])->add(new RoleGuard('members.view'));
+    $group->get('/point-redeems', [MemberController::class, 'redeems'])->add(new RoleGuard('reports.view'));
+    $group->get('/point-redeems/items', [MemberController::class, 'redeemItems'])->add(new RoleGuard('reports.view'));
+    $group->post('/point-redeems', [MemberController::class, 'redeemSave']);
+    $group->put('/point-redeems/{id:[0-9]+}', [MemberController::class, 'redeemSave']);
+    $group->post('/point-redeems/{id:[0-9]+}/active', [MemberController::class, 'redeemActive']);
+    $group->post('/point-redeems/{id:[0-9]+}/delete', [MemberController::class, 'redeemDelete']);
+    $group->get('/surveys', [MemberController::class, 'surveys'])->add(new RoleGuard('members.view'));
+    $group->get('/surveys/{id:[0-9]+}/results', [MemberController::class, 'surveyResults'])->add(new RoleGuard('members.view'));
+    $group->post('/surveys', [MemberController::class, 'surveySave']);
+    $group->put('/surveys/{id:[0-9]+}', [MemberController::class, 'surveySave']);
+    $group->post('/surveys/{id:[0-9]+}/active', [MemberController::class, 'surveyActive']);
+    $group->post('/surveys/{id:[0-9]+}/delete', [MemberController::class, 'surveyDelete']);
     $group->get('/sale-edits', [SaleEditController::class, 'index'])
         ->add(new RoleGuard('sales.edit.approve'));
     $group->post('/sale-edits/{id:[0-9]+}/approve', [SaleEditController::class, 'approve'])

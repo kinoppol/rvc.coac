@@ -137,6 +137,12 @@ export async function render(container, { user } = {}) {
     const itemKey = (p) => (p.id < 0 ? `g${-p.id}` : `p${p.id}`);
     const promosOf = (p) => promos.filter((r) => r.slots.some((s) => s.keys.includes(itemKey(p))));
     const promoName = (id) => promos.find((r) => r.id === Number(id))?.name || promo.applied.find((a) => a.promo_id === Number(id))?.name || 'โปรโมชั่น';
+    // The buyer (member card from /sales/members); null = ลูกค้าทั่วไป, no points. Kept with the open cart.
+    // A cart line that uses points carries line.hold = {id, points, discount, name}: points held on the server.
+    const MEMBER_KEY = `pos.member.${user?.id ?? 0}`;
+    let member = (() => { try { return JSON.parse(localStorage.getItem(MEMBER_KEY)); } catch (e) { return null; } })();
+    let redeems = []; // GET /sales/redeems: goods points can come off now
+    const redeemOf = (p) => (p.pack ? null : redeems.find((r) => r.keys.includes(itemKey(p))));
 
     const life = new AbortController();
     const on = (target, type, fn, capture = false) => target.addEventListener(type, fn, { signal: life.signal, capture });
@@ -179,10 +185,12 @@ export async function render(container, { user } = {}) {
           <aside class="pos-cart card">
             <div class="pos-cart-head"><h2 data-el="cart-title">ตะกร้าสินค้า</h2>
               <div class="pos-cart-tools">
+                <button type="button" class="btn secondary sm" data-act="member" title="ระบุสมาชิกผู้ซื้อ (เลขบัตรประชาชน รหัสนักศึกษา เบอร์โทร หรือชื่อ)">👤 ระบุสมาชิก</button>
                 <button type="button" class="btn secondary sm" data-act="hold" title="พักตะกร้านี้ไว้ แล้วเปิดรายการขายใหม่">⏸ พักตะกร้า</button>
                 <button type="button" class="btn secondary sm" data-act="clear-cart">ล้างตะกร้า</button>
               </div>
             </div>
+            <div class="pos-member" data-el="member"></div>
             <div class="pos-held" data-el="held" hidden></div>
             <div class="pos-cart-list" data-el="cart"></div>
             <div class="pos-last" data-el="last" hidden></div>
@@ -530,8 +538,251 @@ export async function render(container, { user } = {}) {
         return promo.key === JSON.stringify(saleItems()) ? promo : { total: 0, lines: {}, applied: [] };
     }
 
+    function pointsOff() {
+        return Math.round(cart.reduce((s, c) => s + (c.hold ? c.hold.discount : 0), 0) * 100) / 100;
+    }
+
     function cartTotal() {
-        return Math.round((cartSubtotal() - promoNow().total) * 100) / 100;
+        return Math.max(0, Math.round((cartSubtotal() - promoNow().total - pointsOff()) * 100) / 100);
+    }
+
+    // ---------- Members and points ----------
+
+    /** A 13-digit Thai national ID (check digit right) or a 10-digit mobile number: worth asking the member list. */
+    function memberRef(code) {
+        if (/^0\d{9}$/.test(code)) return true;
+        if (!/^\d{13}$/.test(code)) return false;
+        let sum = 0;
+        for (let i = 0; i < 12; i += 1) sum += Number(code[i]) * (13 - i);
+        return (11 - (sum % 11)) % 10 === Number(code[12]);
+    }
+
+    function saveMember() {
+        try {
+            if (member) localStorage.setItem(MEMBER_KEY, JSON.stringify(member));
+            else localStorage.removeItem(MEMBER_KEY);
+        } catch (e) { /* private mode */ }
+    }
+
+    /** Gives the points held by these lines back (fire and forget; an expired hold is gone anyway). */
+    function releaseHolds(lines) {
+        const ids = lines.filter((c) => c?.hold).map((c) => c.hold.id);
+        lines.forEach((c) => { if (c) delete c.hold; });
+        if (!ids.length || !member) return;
+        const id = member.member_id;
+        api.post('/sales/points/release', { member_id: id, hold_ids: ids }).then((r) => {
+            if (member?.member_id === id) { member = r.data; saveMember(); drawMember(); }
+        }).catch(() => {});
+    }
+
+    function setMember(card) {
+        if (member && card?.member_id !== member.member_id) releaseHolds(cart);
+        member = card;
+        saveMember();
+        play('scan');
+        message(card ? `ผู้ซื้อ: ${card.name} · แต้มใช้ได้ ${card.available} แต้ม` : 'เปลี่ยนเป็นลูกค้าทั่วไป (ไม่สะสมแต้ม)');
+        drawCart();
+    }
+
+    function drawMember() {
+        const box = el('member');
+        root.querySelector('.pos-cart-tools [data-act="member"]').hidden = !options.members;
+        if (!options.members) { box.innerHTML = ''; return; }
+        if (!member) {
+            box.innerHTML = `<div class="pos-member-none"><span>👥 ลูกค้าทั่วไป <small>(ไม่สะสมแต้ม)</small></span>
+              <button type="button" class="link-btn" data-act="member">ระบุสมาชิก</button></div>`;
+            return;
+        }
+        const earn = member.earning ? Math.floor(cartTotal() / member.baht_per_point + 1e-9) : 0;
+        box.innerHTML = `<div class="pos-member-card">
+            <div class="pos-member-info"><b>👤 ${escapeHtml(member.name)}</b>
+              <small>${escapeHtml(member.type_label)}${member.student_code ? ` · ${escapeHtml(member.student_code)}` : ''}${member.department ? ` · ${escapeHtml(member.department)}` : ''}</small></div>
+            <div class="pos-member-pts"><b>${member.available}</b><small>แต้มใช้ได้${member.held ? ` (จอง ${member.held})` : ''}</small></div>
+            <div class="pos-member-tools">
+              ${member.surveys?.length ? `<button type="button" class="btn secondary sm" data-act="survey">📝 แบบสอบถาม +${member.surveys.reduce((s, x) => s + x.points, 0)}</button>` : ''}
+              <button type="button" class="btn secondary sm" data-act="member">เปลี่ยน</button>
+              <button type="button" class="pos-icon-btn" data-act="member-off" aria-label="ไม่ระบุสมาชิก" title="ไม่ระบุสมาชิก (ลูกค้าทั่วไป)">✕</button>
+            </div>
+            ${cart.length && member.earning ? `<div class="pos-member-earn">บิลนี้ได้ <b>${earn}</b> แต้ม${member.first_purchase ? ` + ซื้อครั้งแรก <b>${member.first_purchase}</b> แต้ม` : ''}${pointsOff() ? ` · ใช้แต้มลด <b>฿${money(pointsOff())}</b>` : ''}</div>` : ''}
+          </div>`;
+    }
+
+    /** "ระบุสมาชิก": find the buyer by national ID, student code, phone or name. */
+    function openMemberSearch(prefill = '') {
+        closeKeyboard();
+        const box = document.createElement('div');
+        box.className = 'modal-backdrop';
+        root.appendChild(box);
+        modal = box;
+        let people = [];
+        let note = '';
+        let busy = false;
+        const close = () => { box.remove(); if (modal === box) modal = null; focusSearch(); };
+        box.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="width:560px">
+          <div class="modal-head"><h2>ระบุสมาชิกผู้ซื้อ</h2><button type="button" class="modal-close" data-m="close" aria-label="ปิด">✕</button></div>
+          <div class="modal-body">
+            <div class="pos-search" style="margin-bottom:8px"><span aria-hidden="true">🔍</span>
+              <input data-m="q" placeholder="เลขบัตรประชาชน รหัสนักศึกษา เบอร์โทร หรือชื่อ" autocomplete="off" inputmode="search" value="${escapeHtml(prefill)}">
+              <button type="button" class="pos-search-go" data-m="go">ค้นหา</button></div>
+            <div data-m="list"></div>
+          </div>
+          <div class="modal-foot"><button type="button" class="btn secondary" data-m="close">ยกเลิก</button>
+            ${member ? '<button type="button" class="btn secondary" data-m="none">ลูกค้าทั่วไป (ไม่ระบุ)</button>' : ''}</div></div>`;
+        const input = box.querySelector('[data-m="q"]');
+        const drawList = () => {
+            box.querySelector('[data-m="list"]').innerHTML = busy ? '<div class="muted">กำลังค้นหา...</div>'
+                : people.length ? `<div class="pos-list">${people.map((p) => `<button type="button" class="pos-row" data-oa="${p.oa_user_id}">
+                    <span class="pos-row-name">${escapeHtml(p.name)}<small>${escapeHtml(p.type_label)}${p.student_code ? ` · ${escapeHtml(p.student_code)}` : ''}${p.department ? ` · ${escapeHtml(p.department)}` : ''}</small></span>
+                    <span class="muted" style="font-size:12px">${escapeHtml(p.national_id_masked || '')}</span></button>`).join('')}</div>`
+                : `<div class="muted">${escapeHtml(note || 'พิมพ์ข้อมูลอ้างอิง แล้วกด Enter · สแกนบัตรหรือพิมพ์เลข 13 หลัก/เบอร์โทร 10 หลักที่ช่องค้นหาสินค้าก็ได้')}</div>`;
+        };
+        const pick = async (oa) => {
+            try {
+                setMember((await api.get(`/sales/members/${oa}`)).data);
+                close();
+            } catch (e) {
+                note = e.message;
+                people = [];
+                drawList();
+            }
+        };
+        const search = async () => {
+            const term = input.value.trim();
+            if (!term) return;
+            busy = true;
+            drawList();
+            try {
+                const r = (await api.get(`/sales/members?q=${encodeURIComponent(term)}`)).data;
+                busy = false;
+                if (r.card) { setMember(r.card); close(); return; }
+                people = r.people;
+                note = people.length ? '' : `ไม่พบสมาชิก "${term}"`;
+                if (people.length === 1 && people[0].matched_by !== 'name') return pick(people[0].oa_user_id);
+            } catch (e) {
+                busy = false;
+                people = [];
+                note = e.message;
+            }
+            drawList();
+        };
+        box.addEventListener('click', (e) => {
+            const t = e.target.closest('button');
+            if (!t) return;
+            if (t.dataset.m === 'close') close();
+            else if (t.dataset.m === 'go') search();
+            else if (t.dataset.m === 'none') { setMember(null); close(); }
+            else if (t.dataset.oa) pick(Number(t.dataset.oa));
+        });
+        box.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); close(); }
+            else if (e.key === 'Enter' && e.target === input) { e.preventDefault(); search(); }
+        });
+        drawList();
+        input.focus();
+        if (prefill) search();
+    }
+
+    /** "ใช้แต้ม" on a cart line: holds the points on the server at once, or gives them back. */
+    async function togglePoints(i) {
+        const line = cart[i];
+        if (!line || !member) return;
+        if (line.hold) {
+            releaseHolds([line]);
+            message(`ยกเลิกการใช้แต้มของ ${line.name} แล้ว`);
+            drawCart();
+            return;
+        }
+        await quotePromo();
+        const idx = cart.indexOf(line);
+        if (idx < 0) return;
+        const promoLine = promoNow().lines[idx];
+        try {
+            const r = (await api.post('/sales/points/hold', {
+                member_id: member.member_id, qty: line.qty, ...(line.id < 0 ? { group_id: -line.id } : { product_id: line.id, unit_price: line.sale_price }),
+                line_value: Math.round((linePrice(line) * line.qty - (promoLine?.discount || 0)) * 100) / 100,
+            })).data;
+            if (!cart.includes(line) || member?.member_id !== r.member.member_id) {
+                api.post('/sales/points/release', { member_id: r.member.member_id, hold_ids: [r.hold_id] }).catch(() => {});
+                return;
+            }
+            line.hold = { id: r.hold_id, points: r.points, discount: r.discount, name: r.redeem_name };
+            member = r.member;
+            saveMember();
+            play('pack');
+            message(`ใช้ ${r.points} แต้ม ลด ${line.name} ฿${money(r.discount)} · แต้มคงเหลือใช้ได้ ${member.available}`);
+        } catch (e) {
+            play('error');
+            message(e.message, 'error');
+        }
+        drawCart();
+    }
+
+    /** แบบสอบถาม: the member answers on this screen and gets the points at once. */
+    function openSurvey() {
+        const list = member?.surveys || [];
+        if (!list.length) return;
+        closeKeyboard();
+        let s = list.length === 1 ? list[0] : null;
+        let answers = [];
+        let error = null;
+        let busy = false;
+        const box = document.createElement('div');
+        box.className = 'modal-backdrop';
+        root.appendChild(box);
+        modal = box;
+        const close = () => { box.remove(); if (modal === box) modal = null; focusSearch(); };
+        const draw = () => {
+            box.innerHTML = `<div class="modal" role="dialog" aria-modal="true" style="width:640px">
+              <div class="modal-head"><h2>${s ? escapeHtml(s.title) : 'แบบสอบถามรับแต้ม'}</h2><button type="button" class="modal-close" data-s="close" aria-label="ปิด">✕</button></div>
+              <div class="modal-body">${!s ? list.map((x) => `<button type="button" class="pos-row" data-pick-survey="${x.id}" style="width:100%">
+                  <span class="pos-row-name">${escapeHtml(x.title)}<small>${x.questions.length} ข้อ</small></span><b>+${x.points} แต้ม</b></button>`).join('')
+                : `<div class="muted" style="margin-bottom:8px">${escapeHtml(member.name)} · ตอบครบรับ <b>${s.points} แต้ม</b>${s.description ? ` · ${escapeHtml(s.description)}` : ''}</div>
+                  ${s.questions.map((q, i) => `<div class="pos-survey-q"><b>${i + 1}. ${escapeHtml(q.label)}${q.required ? ' <span style="color:var(--bad)">*</span>' : ''}</b>
+                    <div class="pos-survey-opts">${q.kind === 'rating' ? [1, 2, 3, 4, 5].map((n) => `<button type="button" class="pos-method${answers[i] === n ? ' active' : ''}" data-q="${i}" data-v="${n}">${'★'.repeat(n)}</button>`).join('')
+                        : q.kind === 'text' ? `<textarea rows="2" data-qt="${i}" style="width:100%">${escapeHtml(answers[i] || '')}</textarea>`
+                        : q.options.map((o) => `<button type="button" class="pos-method${(q.kind === 'multi' ? (answers[i] || []).includes(o) : answers[i] === o) ? ' active' : ''}" data-q="${i}" data-v="${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')}</div></div>`).join('')}
+                  ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}`}</div>
+              <div class="modal-foot"><button type="button" class="btn secondary pos-big" data-s="close">ปิด</button>
+                ${s ? `<button type="button" class="btn pos-big" data-s="send" ${busy ? 'disabled' : ''}>${busy ? 'กำลังส่ง...' : `ส่งคำตอบ รับ ${s.points} แต้ม`}</button>` : ''}</div></div>`;
+        };
+        box.addEventListener('input', (e) => { if (e.target.dataset.qt !== undefined) answers[Number(e.target.dataset.qt)] = e.target.value; });
+        box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
+        box.addEventListener('click', async (e) => {
+            const t = e.target.closest('button');
+            if (!t) return;
+            if (t.dataset.s === 'close') return close();
+            if (t.dataset.pickSurvey) { s = list.find((x) => x.id === Number(t.dataset.pickSurvey)); answers = []; draw(); return; }
+            if (t.dataset.q !== undefined) {
+                const i = Number(t.dataset.q);
+                const q = s.questions[i];
+                const v = q.kind === 'rating' ? Number(t.dataset.v) : t.dataset.v;
+                if (q.kind === 'multi') {
+                    const a = answers[i] || [];
+                    answers[i] = a.includes(v) ? a.filter((x) => x !== v) : [...a, v];
+                } else answers[i] = v;
+                error = null;
+                draw();
+                return;
+            }
+            if (t.dataset.s !== 'send' || busy) return;
+            busy = true;
+            error = null;
+            draw();
+            try {
+                const r = (await api.post(`/sales/surveys/${s.id}/answer`, { member_id: member.member_id, answers: s.questions.map((q, i) => answers[i] ?? null) })).data;
+                member = r.member;
+                saveMember();
+                play('pay');
+                message(`ขอบคุณที่ตอบแบบสอบถาม ได้รับ ${r.points} แต้ม · แต้มสะสม ${r.balance} แต้ม`);
+                drawCart();
+                close();
+            } catch (err) {
+                busy = false;
+                error = err.message;
+                draw();
+            }
+        });
+        draw();
     }
 
     /** Asks the server for the cart's bundle discount; resolves once the quote for the current cart is in. */
@@ -582,10 +833,16 @@ export async function render(container, { user } = {}) {
         root.querySelector('[data-act="hold"]').disabled = !cart.length;
         saveJson(CART_KEY, cart);
         drawHeld();
+        drawMember();
+        const pointsBtn = (it, i) => {
+            if (!member || !redeemOf(it)) return '';
+            if (it.hold) return `<button type="button" class="pos-points-btn on" data-points="${i}" title="กดเพื่อยกเลิกและคืนแต้ม">⭐ ใช้ ${it.hold.points} แต้ม −฿${money(it.hold.discount)} ✕</button>`;
+            return member.available >= redeemOf(it).points ? `<button type="button" class="pos-points-btn" data-points="${i}" title="${escapeHtml(redeemOf(it).name)}: ${redeemOf(it).points} แต้ม ลด ฿${money(redeemOf(it).baht)}">⭐ ใช้แต้ม</button>` : '';
+        };
         el('cart').innerHTML = cart.map((it, i) => `
           <div class="pos-line">
             <span class="pos-line-img">${photoImg(it)}</span>
-            <div class="pos-line-name">${escapeHtml(it.name)}${it.pack ? ` <span class="pill ok pos-pack-pill">ยกแพ็ค ×${it.pack.pack_size}</span>` : ''}${promoLines[i]?.discount > 0 ? ` <span class="pos-promo-tag inline">🏷 ${escapeHtml(promoName(promoLines[i].promo_id))}</span>` : ''}
+            <div class="pos-line-name">${escapeHtml(it.name)}${it.pack ? ` <span class="pill ok pos-pack-pill">ยกแพ็ค ×${it.pack.pack_size}</span>` : ''}${promoLines[i]?.discount > 0 ? ` <span class="pos-promo-tag inline">🏷 ${escapeHtml(promoName(promoLines[i].promo_id))}</span>` : ''}${pointsBtn(it, i)}
               <small>${it.pack ? `แพ็คละ ฿${money(it.pack.sale_price)} (${it.pack.pack_size} ชิ้น)` : `฿${money(it.sale_price)}`} · ${escapeHtml(it.consignor_name)}</small>
               ${!it.pack && it.packs?.length ? `<span class="pos-pack-adds">${it.packs.map((k) => `<button type="button" class="link-btn" data-add-pack="${i}" data-size="${k.pack_size}" title="เพิ่มยกแพ็ค ${k.pack_size} ชิ้น ราคาแพ็ค">+ ยกแพ็ค ×${k.pack_size} ฿${money(k.sale_price)}</button>`).join(' ')}</span>` : ''}</div>
             <div class="pos-qty">
@@ -593,7 +850,7 @@ export async function render(container, { user } = {}) {
               <input data-qty="${i}" inputmode="numeric" value="${it.qty}" aria-label="${it.pack ? 'จำนวนแพ็ค' : 'จำนวน'}">
               <button type="button" data-inc="${i}" aria-label="เพิ่มจำนวน" ${inCart(it.id) + lineSize(it) > it.qty_stock && !mayShort(it) ? 'disabled' : ''}>+</button>
             </div>
-            <b class="pos-line-total">฿${money(linePrice(it) * it.qty)}${promoLines[i]?.discount > 0 ? `<small class="pos-line-promo">โปร −฿${money(promoLines[i].discount)}</small>` : ''}</b>
+            <b class="pos-line-total">฿${money(linePrice(it) * it.qty)}${promoLines[i]?.discount > 0 ? `<small class="pos-line-promo">โปร −฿${money(promoLines[i].discount)}</small>` : ''}${it.hold ? `<small class="pos-line-promo">แต้ม −฿${money(it.hold.discount)}</small>` : ''}</b>
             <button type="button" class="pos-line-del" data-remove="${i}" aria-label="เอาออกจากตะกร้า">✕</button>
           </div>`).join('') || '<div class="empty">ยังไม่มีสินค้าในตะกร้า<br><small class="muted">สแกนบาร์โค้ด หรือแตะสินค้าเพื่อเพิ่ม</small></div>';
     }
@@ -606,7 +863,7 @@ export async function render(container, { user } = {}) {
             const pieces = h.items.reduce((s, i) => s + i.qty * lineSize(i), 0);
             return `<span class="pos-held-chip">
               <button type="button" data-resume="${h.id}" title="${escapeHtml(h.items.map((i) => `${i.name}${i.pack ? ` (แพ็ค ×${i.pack.pack_size})` : ''} x${i.qty}`).join(', '))}">
-                <b>#${h.no}</b> ${pieces} ชิ้น · ฿${money(total)}<small>พักเมื่อ ${escapeHtml(h.at)}</small></button>
+                <b>#${h.no}</b> ${pieces} ชิ้น · ฿${money(total)}${h.member ? ` · 👤 ${escapeHtml(h.member.name)}` : ''}<small>พักเมื่อ ${escapeHtml(h.at)}</small></button>
               <button type="button" class="pos-held-del" data-drop="${h.id}" aria-label="ลบตะกร้าที่พัก #${h.no}">✕</button>
             </span>`;
         }).join('')}` : '';
@@ -616,9 +873,13 @@ export async function render(container, { user } = {}) {
     function holdCart() {
         const no = held.reduce((m, h) => Math.max(m, h.no), 0) + 1;
         const at = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-        held.push({ id: Date.now(), no, at, items: cart });
+        // Held points go back; the buyer stays with the held cart and presses "ใช้แต้ม" again on resume.
+        releaseHolds(cart);
+        held.push({ id: Date.now(), no, at, items: cart, member: member ? { member_id: member.member_id, name: member.name } : null });
         saveJson(HELD_KEY, held);
         cart = [];
+        member = null;
+        saveMember();
         return no;
     }
 
@@ -630,6 +891,9 @@ export async function render(container, { user } = {}) {
         held = held.filter((x) => x !== h);
         cart = h.items.map((c) => freshLine(c, products.find((p) => p.id === c.id) || c));
         saveJson(HELD_KEY, held);
+        if (h.member) {
+            api.get(`/sales/member-card/${h.member.member_id}`).then((r) => { member = r.data; saveMember(); drawCart(); }).catch(() => {});
+        }
         message(`เปิดตะกร้าที่พัก #${h.no}${swapped ? ` (พักตะกร้าเดิมไว้เป็น #${swapped})` : ''}`);
         redraw();
     }
@@ -828,9 +1092,15 @@ export async function render(container, { user } = {}) {
             message(`${p.name} มีคงเหลือเพียง ${p.qty_stock} ชิ้น${size > 1 ? ` (ยกแพ็คใช้ ${size} ชิ้น)` : ''}`, 'error');
             return;
         }
+        // Points held for a line are worked out for its quantity: a new quantity gives them back.
         if (pieces) {
+            releaseHolds([pieces]);
             pieces.qty -= absorbed;
             if (pieces.qty < 1) cart.splice(cart.indexOf(pieces), 1);
+        }
+        if (line?.hold) {
+            releaseHolds([line]);
+            message(`${line.name}: จำนวนเปลี่ยน คืนแต้มที่จองไว้แล้ว กด "ใช้แต้ม" อีกครั้งได้`, 'warn');
         }
         if (line) line.qty += 1;
         else {
@@ -873,6 +1143,17 @@ export async function render(container, { user } = {}) {
             return [null, null];
         };
         let [p, pack] = byCode(products);
+        // Not a product barcode on this page: a national ID (13 digits) or phone (10 digits) names the buyer.
+        if (!p && options.members && memberRef(code)) {
+            const r = await api.get(`/sales/members?q=${code}`).then((x) => x.data).catch(() => null);
+            if (r?.card) {
+                q.value = '';
+                searched = '';
+                drawProducts();
+                setMember(r.card);
+                return;
+            }
+        }
         if (!p) {
             const list = matches();
             if (list.length === 1) p = list[0];
@@ -911,12 +1192,14 @@ export async function render(container, { user } = {}) {
 
     async function loadProducts() {
         try {
-            const [res, running] = await Promise.all([
+            const [res, running, points] = await Promise.all([
                 api.get(`/sales/products?all=1&groups=1&sort=popular${allowShort() ? '&short=1' : ''}`),
                 api.get('/sales/promos').catch(() => ({ data: [] })),
+                options.members ? api.get('/sales/redeems').catch(() => ({ data: [] })) : { data: [] },
             ]);
             products = res.data.map(normalize);
             promos = running.data || [];
+            redeems = points.data || [];
             loaded = true;
         } catch (e) {
             message(e.message, 'error');
@@ -925,10 +1208,15 @@ export async function render(container, { user } = {}) {
         }
         // Keep cart lines in step with the new prices and stock figures.
         const gone = [];
-        cart = cart.filter((c) => c.discontinued || products.some((p) => p.id === c.id) || !gone.push(c.name)).map((c) => {
+        const dropped = [];
+        cart = cart.filter((c) => c.discontinued || products.some((p) => p.id === c.id) || !gone.push(c.name) || !dropped.push(c)).map((c) => {
             const line = freshLine(c, products.find((x) => x.id === c.id) || c);
-            return { ...line, qty: mayShort(line) ? line.qty : Math.min(line.qty, Math.floor(line.qty_stock / lineSize(line))) };
+            const out = { ...line, qty: mayShort(line) ? line.qty : Math.min(line.qty, Math.floor(line.qty_stock / lineSize(line))) };
+            if (c.hold && out.qty === c.qty && !out.pack) out.hold = c.hold;
+            else if (c.hold) dropped.push(c);
+            return out;
         }).filter((c) => c.qty > 0);
+        releaseHolds(dropped);
         if (gone.length) message(`เอาออกจากตะกร้าเพราะสินค้าหมด: ${gone.join(', ')}`, 'warn');
         redraw();
     }
@@ -1010,6 +1298,7 @@ export async function render(container, { user } = {}) {
                       <div class="muted">เลขที่ ${escapeHtml(done.doc_no)} · ยอดขาย ฿${money(done.total_value)}</div>
                       ${done.after_hours ? `<div class="pos-hours-note">ขายนอกเวลาทำการ · ลงบัญชีวันที่ ${escapeHtml(fmtDate(done.business_date))}</div>` : ''}
                       ${done.change > 0 ? `<div class="pos-change">เงินทอน <b>฿${money(done.change)}</b></div>` : ''}
+                      ${done.member ? `<div class="pos-done-points">⭐ ${escapeHtml(member?.name || 'สมาชิก')}: ได้ <b>${done.member.earned + done.member.welcome}</b> แต้ม${done.member.welcome ? ` (รวมซื้อครั้งแรก ${done.member.welcome})` : ''}${done.member.used ? ` · ใช้ ${done.member.used} แต้ม ลด ฿${money(done.member.discount)}` : ''} · คงเหลือ <b>${done.member.balance}</b> แต้ม</div>` : ''}
                       <button type="button" class="btn pos-big pos-next" data-pay="next">
                         <svg class="pos-next-ring" viewBox="0 0 26 26" aria-hidden="true"><circle class="track" cx="13" cy="13" r="10"/><circle class="run" cx="13" cy="13" r="10"/></svg>
                         เริ่มขายรายการถัดไปใน <span data-secs>${secs}</span> วินาที</button>
@@ -1032,7 +1321,7 @@ export async function render(container, { user } = {}) {
               <div class="modal pos-modal" role="dialog" aria-modal="true" aria-label="ชำระเงิน">
                 <div class="modal-head"><h2>ชำระเงิน</h2><button type="button" class="modal-close" data-pay="close" aria-label="ปิด">✕</button></div>
                 <div class="modal-body pos-pay-grid">
-                  <div class="pos-due"><span>ยอดที่ต้องชำระ</span><b>฿${money(total)}</b></div>
+                  <div class="pos-due"><span>ยอดที่ต้องชำระ${member ? `<small>👤 ${escapeHtml(member.name)}${pointsOff() ? ` · ใช้แต้มลด ฿${money(pointsOff())}` : ''}</small>` : ''}</span><b>฿${money(total)}</b></div>
                   <div class="pos-pay-left">
                   ${options.promptpay ? thaiQrWarning(options.promptpay) + thaiQrCard(options.promptpay, qrAmount()) : ''}
                   <div class="pos-methods">
@@ -1092,7 +1381,9 @@ export async function render(container, { user } = {}) {
             modal = null;
             if (done) {
                 cart = [];
-                message(`บันทึกการขาย ${done.doc_no} แล้ว`);
+                member = null;
+                saveMember();
+                message(`บันทึกการขาย ${done.doc_no} แล้ว${done.member ? ` · สมาชิกได้ ${done.member.earned + done.member.welcome} แต้ม` : ''}`);
                 last = {
                     id: done.id, doc_no: done.doc_no, total: Number(done.total_value) || 0, change: Number(done.change) || 0,
                     methods: paidWith, until: Date.now() + PAYMENT_FIX_MS, fixed: false,
@@ -1112,7 +1403,8 @@ export async function render(container, { user } = {}) {
             try {
                 const res = await api.post('/sales', {
                     // A sale group (id = -group id) is sold as one item; the server takes the pieces from its members in turn.
-                    items: saleItems(),
+                    items: saleItems().map((it, i) => (cart[i]?.hold ? { ...it, points_hold_id: cart[i].hold.id } : it)),
+                    member_id: member?.member_id || null,
                     // Bundle promotions: the server works them out again and refuses if they no longer match.
                     promos: true,
                     promo_discount: promoNow().total,
@@ -1125,6 +1417,16 @@ export async function render(container, { user } = {}) {
                 refreshDrawer();
             } catch (e) {
                 error = e.message;
+                if (e.status === 409 && e.data?.code === 'points_hold') {
+                    // A points hold ran out (or was given back on another till): drop them all, the cashier presses again.
+                    busy = false;
+                    cart.forEach((c) => { delete c.hold; });
+                    close();
+                    message(e.message, 'warn');
+                    if (member) api.get(`/sales/member-card/${member.member_id}`).then((r) => { member = r.data; saveMember(); drawCart(); }).catch(() => {});
+                    drawCart();
+                    return;
+                }
                 if (e.status === 409) {
                     // The bundle discount changed (a promotion or price was changed meanwhile): new figures, pay again.
                     busy = false;
@@ -1272,6 +1574,7 @@ export async function render(container, { user } = {}) {
         // Most of this line the stock allows, after the product's other lines (pieces / packs).
         const size = lineSize(line);
         const max = Math.floor((line.qty_stock - (inCart(line.id) - line.qty * size)) / size);
+        if (n !== line.qty) releaseHolds([line]);
         if (!(n > 0)) cart.splice(Number(i), 1);
         else {
             if (n > max) {
@@ -1318,10 +1621,22 @@ export async function render(container, { user } = {}) {
                 if (k) add(line, k);
             } else if (t.dataset.dec) {
                 const i = Number(t.dataset.dec);
+                releaseHolds([cart[i]]);
                 if (cart[i].qty > 1) cart[i].qty -= 1;
                 else cart.splice(i, 1);
                 redraw();
+            } else if (t.dataset.points) {
+                togglePoints(Number(t.dataset.points));
+            } else if (t.dataset.act === 'member') {
+                openMemberSearch();
+                return;
+            } else if (t.dataset.act === 'member-off') {
+                setMember(null);
+            } else if (t.dataset.act === 'survey') {
+                openSurvey();
+                return;
             } else if (t.dataset.remove) {
+                releaseHolds([cart[Number(t.dataset.remove)]]);
                 cart.splice(Number(t.dataset.remove), 1);
                 play('remove');
                 redraw();
@@ -1350,7 +1665,7 @@ export async function render(container, { user } = {}) {
                 });
             } else if (t.dataset.act === 'clear-cart') {
                 if (cart.length) confirmDialog(`สินค้า ${cart.length} รายการในตะกร้าจะถูกนำออกทั้งหมด`, { title: 'ล้างตะกร้าสินค้า?', okText: 'ล้างตะกร้า', danger: true }).then((yes) => {
-                    if (yes) { cart = []; redraw(); }
+                    if (yes) { releaseHolds(cart); cart = []; member = null; saveMember(); redraw(); }
                 });
             } else if (t.dataset.act === 'promo-filter') {
                 group = group === 'promo' ? 'all' : 'promo';
@@ -1404,6 +1719,11 @@ export async function render(container, { user } = {}) {
     }).catch(() => {});
     firstLoad = loadOptions().then(loadProducts);
     await firstLoad;
+    // The buyer kept from before a reload: their points may have moved since.
+    if (member) {
+        api.get(`/sales/member-card/${member.member_id}`).then((r) => { member = r.data; saveMember(); drawCart(); })
+            .catch(() => { member = null; saveMember(); cart.forEach((c) => { delete c.hold; }); drawCart(); });
+    }
     focusSearch();
     checkDrawer();
     // Asks again when a skip runs out, and keeps its countdown moving.

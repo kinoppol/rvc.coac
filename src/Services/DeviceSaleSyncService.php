@@ -111,6 +111,12 @@ class DeviceSaleSyncService
                     $warnings[] = "{$p['name']} ขายราคา ฿" . number_format($item['unit_price'], 2) . ' (ราคาปัจจุบัน ฿' . number_format((float) $p['sale_price'], 2) . ')';
                 }
             }
+            // Points the buyer spent on this line (held on the server when the cashier pressed "ใช้แต้ม").
+            if ((int) ($line['points_hold_id'] ?? 0) > 0) {
+                $item['points_hold_id'] = (int) $line['points_hold_id'];
+                $item['points_discount'] = is_numeric($line['points_discount'] ?? null) ? (float) $line['points_discount'] : 0.0;
+                $item['points_used'] = (int) ($line['points_used'] ?? 0);
+            }
             $items[] = $item;
             $sent[] = $line;
         }
@@ -192,9 +198,14 @@ class DeviceSaleSyncService
                 ],
                 'allow_short_stock' => $allowShort,
                 'note' => $offline ? 'ขายออฟไลน์จากอุปกรณ์ ' . $device['name'] : null,
+                'member_id' => (int) ($sale['member_id'] ?? 0),
+                'offline' => $offline,
             ]);
             if (!empty($result['payment_warning'])) {
                 $warnings[] = $result['payment_warning'];
+            }
+            if (!empty($result['member']['warnings'])) {
+                $warnings = array_merge($warnings, $result['member']['warnings']);
             }
             // The cashier changed the payment method on the device before it was sent.
             $fixed = $sale['payment_fixed'] ?? null;
@@ -251,7 +262,7 @@ class DeviceSaleSyncService
         $this->db->prepare('UPDATE pos_devices SET last_sync_at = NOW() WHERE id = ?')->execute([$deviceId]);
         return [
             'client_uuid' => $uuid, 'status' => 'synced', 'warnings' => $warnings,
-            'sale' => array_intersect_key($result, array_flip(['id', 'doc_no', 'total_qty', 'total_value', 'change', 'business_date', 'after_hours']))
+            'sale' => array_intersect_key($result, array_flip(['id', 'doc_no', 'total_qty', 'total_value', 'change', 'business_date', 'after_hours', 'member']))
                 + ['payment_fix_until' => CashDrawerService::paymentFixUntil(['created_at' => date('Y-m-d H:i:s'), 'sale_datetime' => $soldAt->format('Y-m-d H:i:s')])],
         ];
     }

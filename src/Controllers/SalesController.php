@@ -161,6 +161,8 @@ class SalesController
             'business_day' => $settings->businessDay(new \DateTimeImmutable()),
             'today' => date('Y-m-d'),
             'drawer' => $drawer,
+            // Store members (migration 0088): the POS offers "ระบุสมาชิก" once the database is ready.
+            'members' => \App\Services\MemberService::ready($db) ? (new \App\Services\MemberService($db))->settings() : null,
         ]);
     }
 
@@ -212,7 +214,11 @@ class SalesController
                 'allow_short_stock' => $settings->sellShortStock($user['role'] ?? null, !empty($body['allow_short'])),
                 // Bundle promotions (migration 0086): the web POS asks for them, with the discount it showed.
                 'promos' => !empty($body['promos']),
+                // The buyer named at the POS (none = ลูกค้าทั่วไป); lines may carry points_hold_id.
+                'member_id' => (int) ($body['member_id'] ?? 0),
             ] + (isset($body['promo_discount']) && is_numeric($body['promo_discount']) ? ['expect_discount' => (float) $body['promo_discount']] : []));
+        } catch (\App\Services\PointsHoldException $e) {
+            return $this->json($response, ['error' => $e->getMessage(), 'code' => 'points_hold'], 409);
         } catch (\App\Services\PromoChangedException $e) {
             return $this->error($response, $e->getMessage(), 409);
         } catch (\RuntimeException $e) {
