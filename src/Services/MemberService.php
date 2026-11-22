@@ -125,9 +125,12 @@ class MemberService
                 "SELECT o.*, 'national_id' AS matched_by FROM oa_users o WHERE o.national_id = ? AND o.status = 'active'
                  UNION SELECT o.*, 'phone' FROM oa_users o JOIN oa_user_phones ph ON ph.oa_user_id = o.oa_user_id WHERE ph.phone = ? AND o.status = 'active'
                  UNION SELECT o.*, 'student_code' FROM oa_users o WHERE o.student_code = ? AND o.status = 'active'
+                 UNION SELECT o.*, 'username' FROM oa_users o WHERE o.username = ? AND o.status = 'active'
                  LIMIT " . max(1, $limit)
             );
-            $stmt->execute([$digits, $digits, $q]);
+            // username: RVC-ONE student logins are the national ID or the student code, so this still
+            // finds people while the shop app has not been granted national_id / student_code.
+            $stmt->execute([$digits, $digits, $q, $digits]);
             $rows = $stmt->fetchAll();
         } elseif (mb_strlen($q) >= 2) {
             $stmt = $this->db->prepare(
@@ -148,6 +151,24 @@ class MemberService
             $out[] = self::personOut($r) + ['matched_by' => $r['matched_by']];
         }
         return $out;
+    }
+
+    /** Why a number may find no one: the fields RVC-ONE has not sent this shop yet (null when all have arrived). */
+    public function missingDataHint(): ?string
+    {
+        $c = $this->db->query(
+            "SELECT SUM(national_id IS NOT NULL) AS nid, SUM(student_code IS NOT NULL) AS sc,
+                    (SELECT COUNT(*) FROM oa_user_phones) AS ph
+             FROM oa_users WHERE status = 'active'"
+        )->fetch();
+        $missing = [];
+        if (!(int) $c['nid']) $missing[] = 'เลขบัตรประชาชน';
+        if (!(int) $c['sc']) $missing[] = 'รหัสนักศึกษา';
+        if (!(int) $c['ph']) $missing[] = 'เบอร์โทร';
+        if (!$missing) {
+            return null;
+        }
+        return 'ร้านยังไม่ได้รับ' . implode(' / ', $missing) . 'จาก RVC-ONE — ผู้ดูแล RVC-ONE ต้องอนุญาตข้อมูลนี้ให้แอปร้านค้า แล้วซิงค์ผู้ใช้ใหม่ (ระหว่างนี้ค้นด้วยชื่อได้)';
     }
 
     public static function personOut(array $o): array

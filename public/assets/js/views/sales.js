@@ -656,7 +656,7 @@ export async function render(container, { user } = {}) {
                 busy = false;
                 if (r.card) { setMember(r.card); close(); return; }
                 people = r.people;
-                note = people.length ? '' : `ไม่พบสมาชิก "${term}"`;
+                note = people.length ? '' : `ไม่พบสมาชิก "${term}"` + (r.hint ? ` · ${r.hint}` : '');
                 if (people.length === 1 && people[0].matched_by !== 'name') return pick(people[0].oa_user_id);
             } catch (e) {
                 busy = false;
@@ -1171,6 +1171,17 @@ export async function render(container, { user } = {}) {
             if (found > 1) {
                 message(`พบสินค้า ${found} รายการ แตะเลือกสินค้าที่ต้องการ`, 'warn');
                 return;
+            }
+            // No product has this number: it may be a student code (or an ID/phone the check above skipped).
+            if (options.members && /^\d{5,15}$/.test(code) && !memberRef(code)) {
+                const r = await api.get(`/sales/members?q=${code}`).then((x) => x.data).catch(() => null);
+                if (r?.card) {
+                    q.value = '';
+                    searched = '';
+                    drawProducts();
+                    setMember(r.card);
+                    return;
+                }
             }
             play('error');
             const isCode = /^\d{4,}$/.test(code);

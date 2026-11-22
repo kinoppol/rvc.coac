@@ -66,7 +66,7 @@ class MemberController
             $members = new MemberService($db);
             $found = $members->search((string) ($request->getQueryParams()['q'] ?? ''));
             $card = count($found) === 1 && $found[0]['matched_by'] !== 'name' ? $members->cardFor($found[0]['oa_user_id']) : null;
-            return ['people' => $found, 'card' => $card];
+            return ['people' => $found, 'card' => $card, 'hint' => $found ? null : $members->missingDataHint()];
         });
     }
 

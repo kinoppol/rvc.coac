@@ -110,6 +110,11 @@ class OaUserRepo
         if ($sets) {
             $this->db->prepare('UPDATE oa_users SET ' . implode(', ', $sets) . ' WHERE oa_user_id = ?')->execute([...$args, $id]);
         }
+        // No national ID sent, but the login is one (RVC-ONE's default student login) → use it.
+        $user = preg_replace('/\D/', '', (string) ($u['username'] ?? ''));
+        if (\App\Services\MemberService::isNationalId($user) && $user === trim((string) ($u['username'] ?? ''))) {
+            $this->db->prepare('UPDATE oa_users SET national_id = ? WHERE oa_user_id = ? AND national_id IS NULL')->execute([$user, $id]);
+        }
         if (!array_key_exists('phone', $u) && !array_key_exists('phones', $u)) {
             return;
         }

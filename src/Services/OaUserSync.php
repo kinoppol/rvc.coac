@@ -39,7 +39,10 @@ class OaUserSync
 
         try {
             $type = (string) OaConfig::get('sync_type');
-            $since = $full ? null : $this->lastServerTime($type);
+            // Set by migration 0089 (and to be set again whenever new RVC-ONE fields start to be
+            // stored): pull everyone once so existing users get them too.
+            $resync = $this->resyncPending();
+            $since = ($full || $resync) ? null : $this->lastServerTime($type);
             $mode = $since === null ? 'full' : 'incremental';
 
             $this->db->prepare(
@@ -58,6 +61,7 @@ class OaUserSync
             }
 
             $this->finish($runId, 'ok', $serverTime, $stats, null);
+            $this->trackIdentityFields($since === null);
             error_log(sprintf(
                 '[oa-sync] run %d %s ok: fetched=%d added=%d updated=%d suspended=%d',
                 $runId, $mode, $stats['fetched'], $stats['added'], $stats['updated'], $stats['suspended']
@@ -84,6 +88,51 @@ class OaUserSync
         $stmt->execute([$type !== '' ? $type : null]);
         $v = $stmt->fetchColumn();
         return $v === false ? null : (string) $v;
+    }
+
+    /** Member fields (migration 0088) RVC-ONE sends only once the admin grants them to this app. */
+    private const IDENTITY_FIELDS = ['national_id', 'student_code', 'phone', 'phones'];
+
+    /** @var array<string,true> identity fields seen in this run's payload */
+    private array $seenFields = [];
+
+    private function resyncPending(): bool
+    {
+        return $this->setting('oa_identity_resync') === '1';
+    }
+
+    /**
+     * After a full pull: remember which identity fields RVC-ONE sends and clear the resync flag.
+     * After an incremental pull that brought a field not sent before (the admin has just granted
+     * it at RVC-ONE): ask the next run to pull everyone, so unchanged users get it too.
+     */
+    private function trackIdentityFields(bool $wasFull): void
+    {
+        $seen = array_keys($this->seenFields);
+        sort($seen);
+        if ($wasFull) {
+            $this->saveSetting('oa_identity_fields', implode(',', $seen));
+            $this->saveSetting('oa_identity_resync', '0');
+            return;
+        }
+        $known = array_filter(explode(',', (string) $this->setting('oa_identity_fields')));
+        if (array_diff($seen, $known)) {
+            $this->saveSetting('oa_identity_resync', '1');
+        }
+    }
+
+    private function setting(string $key): ?string
+    {
+        $stmt = $this->db->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
+        $stmt->execute([$key]);
+        $v = $stmt->fetchColumn();
+        return $v === false ? null : (string) $v;
+    }
+
+    private function saveSetting(string $key, string $value): void
+    {
+        $this->db->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)')
+            ->execute([$key, $value]);
     }
 
     public function recentRuns(int $limit = 10): array
@@ -130,6 +179,11 @@ class OaUserSync
                         continue;
                     }
                     $stats['fetched']++;
+                    foreach (self::IDENTITY_FIELDS as $f) {
+                        if (array_key_exists($f, $u)) {
+                            $this->seenFields[$f] = true;
+                        }
+                    }
                     $result = $repo->upsert($u);
                     if ($result === 'added' || $result === 'updated') {
                         $stats[$result]++;
