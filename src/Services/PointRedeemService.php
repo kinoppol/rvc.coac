@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Db;
 use PDO;
 
 /**
@@ -71,14 +72,24 @@ class PointRedeemService
             $used[(int) $u['redeem_id']] = $u;
         }
         $now = date('Y-m-d H:i:s');
-        return array_map(function ($r) use ($byRule, $used, $now) {
+        $nowTime = date('H:i:s');
+        return array_map(function ($r) use ($byRule, $used, $now, $nowTime) {
             $id = (int) $r['id'];
+            $from = $r['daily_from'] ?? null;
+            $to = $r['daily_to'] ?? null;
+            $status = !$r['active'] ? 'off'
+                : ($r['starts_on'] && $r['starts_on'] > $now ? 'upcoming'
+                : ($r['ends_on'] && $r['ends_on'] < $now ? 'ended'
+                : (!self::inDailyWindow($from, $to, $nowTime) ? 'paused' : 'on')));
             return [
                 'id' => $id, 'name' => $r['name'], 'points' => (int) $r['points'], 'baht' => (float) $r['baht'],
                 'max_discount' => $r['max_discount'] !== null ? (float) $r['max_discount'] : null,
-                'starts_on' => $r['starts_on'], 'ends_on' => $r['ends_on'], 'active' => (bool) $r['active'], 'note' => $r['note'],
+                'starts_on' => $r['starts_on'], 'ends_on' => $r['ends_on'],
+                'daily_from' => $from !== null ? substr((string) $from, 0, 5) : null,
+                'daily_to' => $to !== null ? substr((string) $to, 0, 5) : null,
+                'active' => (bool) $r['active'], 'note' => $r['note'],
                 'creator' => $r['creator'], 'items' => $byRule[$id] ?? [],
-                'status' => !$r['active'] ? 'off' : ($r['starts_on'] && $r['starts_on'] > $now ? 'upcoming' : ($r['ends_on'] && $r['ends_on'] < $now ? 'ended' : 'on')),
+                'status' => $status,
                 'used_bills' => (int) ($used[$id]['bills'] ?? 0), 'used_points' => (int) ($used[$id]['points'] ?? 0),
                 'used_discount' => round((float) ($used[$id]['discount'] ?? 0), 2),
             ];
@@ -129,6 +140,30 @@ class PointRedeemService
         if ($starts && $ends && $ends < $starts) {
             throw new \RuntimeException('วันเวลาสิ้นสุดต้องไม่ก่อนวันเวลาเริ่ม');
         }
+        // A daily time-of-day window (e.g. 09:00–15:00): points may be spent only within these hours each
+        // day. Both sides are given together, or neither (no daily limit). A value crossing midnight is
+        // allowed (from > to, e.g. 22:00–02:00) and read as "until the next day".
+        $time = function ($v, string $label): ?string {
+            $v = trim((string) ($v ?? ''));
+            if ($v === '') {
+                return null;
+            }
+            foreach (['!H:i:s', '!H:i'] as $f) {
+                $d = \DateTimeImmutable::createFromFormat($f, $v);
+                if ($d && $d->format(substr($f, 1)) === $v) {
+                    return $d->format('H:i:s');
+                }
+            }
+            throw new \RuntimeException("{$label}ไม่ถูกต้อง");
+        };
+        $dailyFrom = $time($in['daily_from'] ?? null, 'เวลาเริ่มต่อวัน');
+        $dailyTo = $time($in['daily_to'] ?? null, 'เวลาสิ้นสุดต่อวัน');
+        if (($dailyFrom === null) !== ($dailyTo === null)) {
+            throw new \RuntimeException('ช่วงเวลาต่อวันต้องกำหนดทั้งเวลาเริ่มและเวลาสิ้นสุด (หรือเว้นว่างทั้งคู่)');
+        }
+        if ($dailyFrom !== null && $dailyFrom === $dailyTo) {
+            throw new \RuntimeException('เวลาเริ่มและเวลาสิ้นสุดต่อวันต้องไม่เท่ากัน');
+        }
         $active = !array_key_exists('active', $in) || !empty($in['active']);
         $note = mb_substr(trim((string) ($in['note'] ?? '')), 0, 500) ?: null;
         $items = $this->cleanItems((array) ($in['items'] ?? []));
@@ -138,9 +173,9 @@ class PointRedeemService
             $before = null;
             if ($id === null) {
                 $this->db->prepare(
-                    'INSERT INTO point_redeems (name, points, baht, max_discount, starts_on, ends_on, active, note, created_by, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
-                )->execute([$name, $points, $baht, $max, $starts, $ends, (int) $active, $note, $userId]);
+                    'INSERT INTO point_redeems (name, points, baht, max_discount, starts_on, ends_on, daily_from, daily_to, active, note, created_by, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                )->execute([$name, $points, $baht, $max, $starts, $ends, $dailyFrom, $dailyTo, (int) $active, $note, $userId]);
                 $id = (int) $this->db->lastInsertId();
             } else {
                 $stmt = $this->db->prepare('SELECT * FROM point_redeems WHERE id = ? FOR UPDATE');
@@ -149,8 +184,8 @@ class PointRedeemService
                 if (!$before) {
                     throw new \RuntimeException('ไม่พบรายการใช้แต้มนี้');
                 }
-                $this->db->prepare('UPDATE point_redeems SET name = ?, points = ?, baht = ?, max_discount = ?, starts_on = ?, ends_on = ?, active = ?, note = ?, updated_at = NOW() WHERE id = ?')
-                    ->execute([$name, $points, $baht, $max, $starts, $ends, (int) $active, $note, $id]);
+                $this->db->prepare('UPDATE point_redeems SET name = ?, points = ?, baht = ?, max_discount = ?, starts_on = ?, ends_on = ?, daily_from = ?, daily_to = ?, active = ?, note = ?, updated_at = NOW() WHERE id = ?')
+                    ->execute([$name, $points, $baht, $max, $starts, $ends, $dailyFrom, $dailyTo, (int) $active, $note, $id]);
                 $this->db->prepare('DELETE FROM point_redeem_items WHERE redeem_id = ?')->execute([$id]);
             }
             $ins = $this->db->prepare('INSERT INTO point_redeem_items (redeem_id, product_id, sale_group_id) VALUES (?, ?, ?)');
@@ -159,7 +194,7 @@ class PointRedeemService
             }
             $this->audit?->log('point_redeems', $id, $before ? 'update' : 'create', $before, [
                 'name' => $name, 'points' => $points, 'baht' => $baht, 'max_discount' => $max, 'starts_on' => $starts, 'ends_on' => $ends,
-                'active' => $active, 'note' => $note, 'items' => $items,
+                'daily_from' => $dailyFrom, 'daily_to' => $dailyTo, 'active' => $active, 'note' => $note, 'items' => $items,
             ], $userId, $ip);
             $this->db->commit();
         } catch (\Throwable $e) {
@@ -322,10 +357,31 @@ class PointRedeemService
         if (!MemberService::ready($this->db)) {
             return [];
         }
-        $stmt = $this->db->prepare(
-            'SELECT * FROM point_redeems WHERE active = 1' . ($upcoming ? '' : ' AND (starts_on IS NULL OR starts_on <= ?)') . ' AND (ends_on IS NULL OR ends_on >= ?) ORDER BY id'
-        );
-        $stmt->execute($upcoming ? [$at] : [$at, $at]);
+        // The daily time-of-day window is always enforced here (even in $upcoming mode): the Android POS
+        // checks starts_on/ends_on itself but does not know the daily window, so a rule outside its hours
+        // must simply not reach the POS, and a hold made outside them is refused (ruleFor returns null).
+        $hasDaily = Db::hasColumn($this->db, 'point_redeems', 'daily_from');
+        $sql = 'SELECT * FROM point_redeems WHERE active = 1';
+        $args = [];
+        if (!$upcoming) {
+            $sql .= ' AND (starts_on IS NULL OR starts_on <= ?)';
+            $args[] = $at;
+        }
+        $sql .= ' AND (ends_on IS NULL OR ends_on >= ?)';
+        $args[] = $at;
+        if ($hasDaily) {
+            // In-window when either side is unset, or now (the time of $at) falls within [from, to];
+            // a window that crosses midnight (from > to) is read as "from..24:00 or 00:00..to".
+            $sql .= ' AND (daily_from IS NULL OR daily_to IS NULL
+                      OR (daily_from <= daily_to AND TIME(?) BETWEEN daily_from AND daily_to)
+                      OR (daily_from > daily_to AND (TIME(?) >= daily_from OR TIME(?) <= daily_to)))';
+            $args[] = $at;
+            $args[] = $at;
+            $args[] = $at;
+        }
+        $sql .= ' ORDER BY id';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($args);
         $rules = $stmt->fetchAll();
         if (!$rules) {
             return [];
@@ -342,6 +398,21 @@ class PointRedeemService
             'max_discount' => $r['max_discount'] !== null ? (float) $r['max_discount'] : null,
             'starts_on' => $r['starts_on'], 'ends_on' => $r['ends_on'], 'keys' => $keys[(int) $r['id']] ?? [],
         ], $rules);
+    }
+
+    /**
+     * Whether a daily window [$from, $to] (TIME strings, or null = no limit) holds at $nowTime ('H:i:s').
+     * A window that crosses midnight (from > to) is read as "from..24:00 or 00:00..to".
+     */
+    public static function inDailyWindow(?string $from, ?string $to, string $nowTime): bool
+    {
+        if ($from === null || $to === null || $from === '' || $to === '') {
+            return true;
+        }
+        $now = substr($nowTime, 0, 8);
+        $from = substr($from, 0, 8);
+        $to = substr($to, 0, 8);
+        return $from <= $to ? ($now >= $from && $now <= $to) : ($now >= $from || $now <= $to);
     }
 
     /**

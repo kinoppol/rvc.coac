@@ -2,7 +2,7 @@ import { api } from '../api.js';
 import { money, count, escapeHtml, fmtDateTime } from '../util.js';
 import { alertDialog, confirmDialog } from '../dialog.js';
 
-const STATUS = { on: ['ok', 'ใช้งานอยู่'], upcoming: ['warn', 'ยังไม่ถึงวันเริ่ม'], ended: ['', 'หมดเขตแล้ว'], off: ['', 'ปิดอยู่'] };
+const STATUS = { on: ['ok', 'ใช้งานอยู่'], upcoming: ['warn', 'ยังไม่ถึงวันเริ่ม'], paused: ['warn', 'นอกช่วงเวลาต่อวัน'], ended: ['', 'หมดเขตแล้ว'], off: ['', 'ปิดอยู่'] };
 
 function inputValue(v) {
     return v ? v.slice(0, 16).replace(' ', 'T') : '';
@@ -73,7 +73,7 @@ export async function render(container) {
                       title="ราคา ฿${money(it.sale_price ?? 0)} · ต้นทุน ${it.cost === null ? '-' : `฿${money(it.cost)}`} · ต่ำสุดหลังใช้แต้ม ฿${money(lowest(it, r.max_discount))}">${escapeHtml(itemLabel(it))} ฿${money(it.sale_price ?? 0)}</span>`).join('') || '<span class="muted">ยังไม่มีสินค้า</span>'}
                     ${losing.length ? `<div style="font-size:12px;color:var(--bad);margin-top:3px">⚠ ${losing.length} รายการ ราคาหลังใช้แต้มอาจต่ำกว่าต้นทุน</div>` : ''}</td>
                   <td class="num" style="white-space:nowrap"><b>${ruleText(r)}</b><div class="muted" style="font-size:12px">${r.max_discount === null ? 'ลดได้ถึงเต็มราคา' : `สูงสุด ฿${money(r.max_discount)}/ชิ้น`}</div></td>
-                  <td style="white-space:nowrap;font-size:13px">${r.starts_on ? escapeHtml(fmtDateTime(r.starts_on.slice(0, 16))) : 'ทันที'}<br>ถึง ${r.ends_on ? escapeHtml(fmtDateTime(r.ends_on.slice(0, 16))) : 'ไม่กำหนด'}</td>
+                  <td style="white-space:nowrap;font-size:13px">${r.starts_on ? escapeHtml(fmtDateTime(r.starts_on.slice(0, 16))) : 'ทันที'}<br>ถึง ${r.ends_on ? escapeHtml(fmtDateTime(r.ends_on.slice(0, 16))) : 'ไม่กำหนด'}${r.daily_from && r.daily_to ? `<br><span class="muted">⏰ ${escapeHtml(r.daily_from)}–${escapeHtml(r.daily_to)} น. ทุกวัน</span>` : ''}</td>
                   <td class="num" style="white-space:nowrap;font-size:13px">${count(r.used_bills)} บิล · ${count(r.used_points)} แต้ม<br><span class="muted">ลดไป ฿${money(r.used_discount)}</span></td>
                   ${canManage ? `<td style="white-space:nowrap"><button type="button" class="btn secondary sm" data-edit="${r.id}">แก้ไข</button>
                     <button type="button" class="btn secondary sm" data-toggle="${r.id}">${r.active ? 'ปิด' : 'เปิด'}</button>
@@ -104,8 +104,9 @@ export async function render(container) {
     function editor(src) {
         const f = src ? {
             name: src.name, points: src.points, baht: src.baht, max_discount: src.max_discount ?? '', starts_on: inputValue(src.starts_on), ends_on: inputValue(src.ends_on),
+            daily_from: src.daily_from || '', daily_to: src.daily_to || '',
             active: src.active, note: src.note || '', items: src.items.map((it) => ({ ...it })),
-        } : { name: '', points: 1, baht: 1, max_discount: '', starts_on: '', ends_on: '', active: true, note: '', items: [] };
+        } : { name: '', points: 1, baht: 1, max_discount: '', starts_on: '', ends_on: '', daily_from: '', daily_to: '', active: true, note: '', items: [] };
         let error = null;
         let busy = false;
         let search = { q: '', items: [], loading: false };
@@ -186,6 +187,11 @@ export async function render(container) {
                   <label class="field"><span>เริ่ม (เว้นว่าง = ทันที)</span><input type="datetime-local" data-f="starts_on" value="${escapeHtml(f.starts_on)}"></label>
                   <label class="field"><span>สิ้นสุด (เว้นว่าง = ไม่กำหนด)</span><input type="datetime-local" data-f="ends_on" value="${escapeHtml(f.ends_on)}"></label>
                 </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:8px">
+                  <label class="field"><span>ใช้แต้มได้ตั้งแต่เวลา (ต่อวัน, เว้นว่าง = ทั้งวัน)</span><input type="time" data-f="daily_from" value="${escapeHtml(f.daily_from)}"></label>
+                  <label class="field"><span>ถึงเวลา (ต่อวัน)</span><input type="time" data-f="daily_to" value="${escapeHtml(f.daily_to)}"></label>
+                </div>
+                <div class="muted" style="font-size:12px;margin-top:2px">กำหนดช่วงเวลาต่อวันเพื่อให้ใช้แต้มได้เฉพาะช่วงนั้น (เช่น 09:00–15:00) เลี่ยงช่วงลูกค้าหนาแน่น · เว้นว่างทั้งคู่ = ใช้ได้ทั้งวัน</div>
                 <h3 style="margin:16px 0 4px;font-size:14.5px">สินค้าที่ร่วมรายการ</h3>
                 <div class="muted" style="font-size:12.5px;margin-bottom:6px">ต้นทุน: สินค้าของร้าน = ราคาทุน · ฝากขาย = ส่วนแบ่งที่ต้องจ่ายผู้ฝาก · กลุ่มขาย (▦) = ต้นทุนสูงสุดในกลุ่ม</div>
                 <div data-items>${itemsHtml()}</div>
@@ -256,7 +262,7 @@ export async function render(container) {
             draw();
             const body = {
                 name: f.name, points: Number(f.points), baht: Number(f.baht), max_discount: f.max_discount === '' ? null : Number(f.max_discount),
-                starts_on: f.starts_on, ends_on: f.ends_on, active: f.active, note: f.note,
+                starts_on: f.starts_on, ends_on: f.ends_on, daily_from: f.daily_from, daily_to: f.daily_to, active: f.active, note: f.note,
                 items: f.items.map((it) => (it.sale_group_id ? { sale_group_id: it.sale_group_id } : { product_id: it.product_id })),
             };
             try {
