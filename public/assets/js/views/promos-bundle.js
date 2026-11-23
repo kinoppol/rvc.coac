@@ -11,6 +11,7 @@ const STATUS = {
 
 /** "ชุดละ ฿20", "ลด ฿5 ต่อชุด", "ลด 10% ต่อชุด" */
 function dealText(p) {
+    if (p.kind === 'item') return 'ลดตามรายการ';
     if (p.kind === 'price') return `ชุดละ ฿${money(p.value)}`;
     if (p.kind === 'amount') return `ลด ฿${money(p.value)} ต่อชุด`;
     return `ลด ${Number(p.value)}% ต่อชุด`;
@@ -21,6 +22,19 @@ function saving(p, regular) {
     if (p.kind === 'price') return regular - p.value;
     if (p.kind === 'amount') return Math.min(p.value, regular);
     return Math.round(regular * p.value) / 100;
+}
+
+/** Kind 'item': what one set saves at its least / most, from the discounts on its items. */
+function itemSaving(slots) {
+    let lo = 0;
+    let hi = 0;
+    for (const s of slots) {
+        const offs = s.items.map((it) => Math.min(Number(it.discount) || 0, Number(it.sale_price) || 0));
+        if (!offs.length) continue;
+        lo += Math.min(...offs) * (Number(s.qty) || 0);
+        hi += Math.max(...offs) * (Number(s.qty) || 0);
+    }
+    return [lo, hi];
 }
 
 function rangeText(lo, hi) {
@@ -66,7 +80,7 @@ export async function render(container) {
         return p.slots.map((s, i) => `
           <div style="margin-top:4px;font-size:13px">
             <b>${escapeHtml(s.label || `ช่อง ${i + 1}`)}</b> <span class="muted">${count(s.qty)} ชิ้น จาก</span>
-            ${s.items.map((it) => `<span class="pill" style="margin:2px 2px 0 0" title="${it.sale_group_id ? `กลุ่มขาย ${count(it.members)} รายการ · ` : ''}ราคา ฿${money(it.sale_price ?? 0)} · คงเหลือ ${count(it.qty_stock)}">${escapeHtml(itemLabel(it))} ฿${money(it.sale_price ?? 0)}</span>`).join('')}
+            ${s.items.map((it) => `<span class="pill" style="margin:2px 2px 0 0" title="${it.sale_group_id ? `กลุ่มขาย ${count(it.members)} รายการ · ` : ''}ราคา ฿${money(it.sale_price ?? 0)} · คงเหลือ ${count(it.qty_stock)}">${escapeHtml(itemLabel(it))} ฿${money(it.sale_price ?? 0)}${p.kind === 'item' ? (Number(it.discount) > 0 ? ` <b style="color:var(--ok)">ลด ฿${money(it.discount)} เหลือ ฿${money(Math.max(0, (it.sale_price ?? 0) - it.discount))}</b>` : ' <small class="muted">ไม่ลด</small>') : ''}</span>`).join('')}
           </div>`).join('');
     }
 
@@ -83,7 +97,7 @@ export async function render(container) {
                 <div class="muted" style="font-size:13px">ซื้อสินค้าคู่กันแล้วได้ราคาพิเศษ เช่น "น้ำดื่มใดก็ได้ + ขนมใดก็ได้ ชุดละ ฿20" หรือ "ขนม 3 ชิ้น ฿10"
                   · แต่ละช่องเลือกได้หลายสินค้าหรือกลุ่มขายหน้า POS (ลูกค้าหยิบรายการใดในช่องก็ได้)
                   · หน้า POS คิดส่วนลดให้เองเมื่อสินค้าในตะกร้าครบชุด (ครบหลายชุดก็ลดหลายชุด เลือกชิ้นราคาสูงก่อนให้ลูกค้าได้ส่วนลดมากที่สุด)
-                  · มีหลายโปรที่ใช้สินค้าเดียวกัน ระบบใช้โปรที่สร้างก่อน · สินค้าฝากขาย ร้านรับภาระส่วนลด ผู้ฝากได้ส่วนแบ่งเต็มตามราคาปกติ
+                  · มีหลายโปรที่ใช้สินค้าเดียวกัน ระบบใช้โปรที่สร้างก่อน · แบบ "ระบุส่วนลดรายสินค้า" กำหนดได้ว่าลดสินค้าใดชิ้นละเท่าไร และผู้ฝากรับภาระส่วนลดของสินค้าตัวเอง · แบบอื่น ร้านรับภาระส่วนลด ผู้ฝากได้ส่วนแบ่งเต็มตามราคาปกติ
                   · ยกแพ็คไม่ร่วมโปร</div>
               </div>
               ${canManage ? '<button type="button" class="btn" data-new>+ สร้างโปรโมชั่น</button>' : ''}
@@ -94,8 +108,7 @@ export async function render(container) {
               <thead><tr><th>โปรโมชั่น</th><th>สินค้าที่จับคู่</th><th class="num">ราคา/ส่วนลด</th><th>ช่วงเวลา</th><th class="num">ใช้ไปแล้ว</th>${canManage ? '<th></th>' : ''}</tr></thead>
               <tbody>${promos.map((p) => {
                   const [tone, label] = STATUS[p.status] || STATUS.off;
-                  const lo = saving(p, p.regular_min);
-                  const hi = saving(p, p.regular_max);
+                  const [lo, hi] = p.kind === 'item' ? itemSaving(p.slots) : [saving(p, p.regular_min), saving(p, p.regular_max)];
                   return `<tr>
                     <td style="min-width:160px"><b>${escapeHtml(p.name)}</b><div><span class="pill ${tone}">${label}</span></div>
                       ${p.note ? `<div class="muted" style="font-size:12px">${escapeHtml(p.note)}</div>` : ''}</td>
@@ -172,6 +185,10 @@ export async function render(container) {
                 lo += Math.min(...prices) * (Number(s.qty) || 0);
                 hi += Math.max(...prices) * (Number(s.qty) || 0);
             }
+            if (f.kind === 'item') {
+                const [offLo, offHi] = itemSaving(f.slots);
+                return `ราคาปกติต่อชุด ${rangeText(lo, hi)} · ลดรวม ${rangeText(offLo, offHi)} · ขายชุดละ ${rangeText(Math.max(0, lo - offLo), Math.max(0, hi - offHi))}${offHi < 0.005 ? ' · <b style="color:var(--bad)">ยังไม่ได้ระบุส่วนลด</b>' : ''}<div class="muted" style="font-size:12px">สินค้าฝากขาย: ผู้ฝากรับภาระส่วนลดของสินค้าตัวเอง</div>`;
+            }
             const v = Number(f.value);
             if (!(v > 0)) return `ราคาปกติต่อชุด ${rangeText(lo, hi)}`;
             const p = { kind: f.kind, value: v };
@@ -208,8 +225,9 @@ export async function render(container) {
                   <label class="field"><span>รูปแบบ</span><select data-f="kind">
                     <option value="price" ${f.kind === 'price' ? 'selected' : ''}>ราคาชุด (ทั้งชุดขายราคา)</option>
                     <option value="amount" ${f.kind === 'amount' ? 'selected' : ''}>ลดเป็นบาทต่อชุด</option>
-                    <option value="percent" ${f.kind === 'percent' ? 'selected' : ''}>ลดเป็น % ต่อชุด</option></select></label>
-                  <label class="field"><span>${f.kind === 'price' ? 'ราคาชุด (บาท)' : f.kind === 'amount' ? 'ลด (บาท/ชุด)' : 'ลด (%)'}</span><input type="number" step="0.01" min="0" data-f="value" value="${escapeHtml(String(f.value))}"></label>
+                    <option value="percent" ${f.kind === 'percent' ? 'selected' : ''}>ลดเป็น % ต่อชุด</option>
+                    <option value="item" ${f.kind === 'item' ? 'selected' : ''}>ระบุส่วนลดรายสินค้า</option></select></label>
+                  ${f.kind === 'item' ? '<div class="muted" style="font-size:12.5px;align-self:center">ใส่ "ลดชิ้นละ" ที่สินค้าแต่ละรายการด้านล่าง รายการที่ไม่ลดใส่ 0</div>' : `<label class="field"><span>${f.kind === 'price' ? 'ราคาชุด (บาท)' : f.kind === 'amount' ? 'ลด (บาท/ชุด)' : 'ลด (%)'}</span><input type="number" step="0.01" min="0" data-f="value" value="${escapeHtml(String(f.value))}"></label>`}
                 </div>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:8px">
                   <label class="field"><span>เริ่ม วันและเวลา (เว้นว่าง = ทันที)</span><input type="datetime-local" data-f="starts_on" value="${escapeHtml(f.starts_on)}"></label>
@@ -226,6 +244,7 @@ export async function render(container) {
                       ${f.slots.length > 1 ? `<button type="button" class="btn secondary sm" data-slot-del="${i}" style="color:var(--bad)">ลบช่อง</button>` : ''}
                     </div>
                     <div style="margin-top:6px">${s.items.map((it, j) => `<span class="pill" style="margin:2px 4px 2px 0">${escapeHtml(itemLabel(it))} ฿${money(it.sale_price ?? 0)}${it.consigned ? ' <small>(ฝากขาย)</small>' : ''}
+                        ${f.kind === 'item' ? `<label style="display:inline-flex;align-items:center;gap:4px;margin-left:6px;font-size:12.5px">ลดชิ้นละ <input type="number" step="0.01" min="0" max="${Number(it.sale_price) || 0}" data-item-off="${i}" data-j="${j}" value="${escapeHtml(String(it.discount ?? ''))}" placeholder="0" aria-label="ส่วนลดต่อชิ้นของ ${escapeHtml(it.name)}" style="width:76px;padding:2px 6px"></label>` : ''}
                         <button type="button" class="link-btn" data-item-del="${i}" data-j="${j}" aria-label="เอาออก" style="margin-left:4px">✕</button></span>`).join('') || '<span class="muted" style="font-size:12.5px">ยังไม่มีสินค้าในช่องนี้</span>'}</div>
                     <div class="field" style="margin-top:6px"><input type="search" data-search="${i}" placeholder="ค้นหาชื่อสินค้า บาร์โค้ด หรือกลุ่มขาย เพื่อเพิ่มเข้าช่องนี้" autocomplete="off" value="${search.slot === i ? escapeHtml(search.q) : ''}"></div>
                     ${resultsHtml(i)}
@@ -269,6 +288,7 @@ export async function render(container) {
             if (t.dataset.f && t.type !== 'checkbox' && t.tagName !== 'SELECT') f[t.dataset.f] = t.value;
             if (t.dataset.slotLabel !== undefined) f.slots[Number(t.dataset.slotLabel)].label = t.value;
             if (t.dataset.slotQty !== undefined) f.slots[Number(t.dataset.slotQty)].qty = t.value;
+            if (t.dataset.itemOff !== undefined) f.slots[Number(t.dataset.itemOff)].items[Number(t.dataset.j)].discount = t.value;
             const pv = box.querySelector('[data-preview]');
             if (pv) pv.innerHTML = preview() || 'เพิ่มสินค้าให้ครบทุกช่องเพื่อดูราคาปกติต่อชุด';
         });
@@ -309,7 +329,10 @@ export async function render(container) {
                     name: f.name, kind: f.kind, value: f.value, starts_on: f.starts_on, ends_on: f.ends_on, active: f.active, note: f.note,
                     slots: f.slots.map((s) => ({
                         label: s.label, qty: Number(s.qty) || 0,
-                        items: s.items.map((it) => (it.sale_group_id ? { sale_group_id: it.sale_group_id } : { product_id: it.product_id })),
+                        items: s.items.map((it) => ({
+                            ...(it.sale_group_id ? { sale_group_id: it.sale_group_id } : { product_id: it.product_id }),
+                            ...(f.kind === 'item' ? { discount: it.discount ?? 0 } : {}),
+                        })),
                     })),
                 };
                 try {

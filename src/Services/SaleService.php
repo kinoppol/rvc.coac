@@ -121,7 +121,7 @@ class SaleService
 
                 $promoOff = round((float) ($line['promo_discount'] ?? 0), 2);
                 $pointsOff = round((float) ($line['points_discount'] ?? 0), 2);
-                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1), $promoOff + $pointsOff);
+                $fig = $this->lineFigures($product, $qty, isset($line['unit_price']) ? (float) $line['unit_price'] : null, (int) ($line['pack_size'] ?? 1), $promoOff + $pointsOff, min($promoOff, round((float) ($line['promo_item_off'] ?? 0), 2)));
                 // The line's price caps both discounts: the promotion first, points take what is left.
                 $promoPart = min($promoOff, $fig['discount']);
                 $pointsPart = round($fig['discount'] - $promoPart, 2);
@@ -273,9 +273,11 @@ class SaleService
      * product's sale price; $packSize > 1 sells whole packs at that pack's sale price.
      * For a consignor's goods fee_per_unit is what the store keeps per piece; for the
      * store's own goods it is the gross margin per piece.
+     * $consignorOff: the part of $discount the consignor bears (a promotion with per-item discounts),
+     * never more than their share; the store bears the rest.
      * @return array{unit_price:float, pack_size:int, fee_per_unit:float, fee_amount:float, cost_amount:float}
      */
-    public function lineFigures(array $product, int $qty, ?float $unitPrice, int $packSize = 1, float $discount = 0.0): array
+    public function lineFigures(array $product, int $qty, ?float $unitPrice, int $packSize = 1, float $discount = 0.0, float $consignorOff = 0.0): array
     {
         $unitPrice = $unitPrice !== null ? round($unitPrice, 2) : (float) $product['sale_price'];
         $regular = $unitPrice;
@@ -306,9 +308,11 @@ class SaleService
         } else {
             $beneficiary = $product['rounding_beneficiary'];
             $feeOutPerUnit = (float) $product['fee_per_unit'] + ($beneficiary === 'store' ? (float) $product['round_per_unit'] : 0);
-            // The consignor's share stays that of the regular price: a promotion comes out of the store's fee.
-            $costAmount = round(($regular - $feeOutPerUnit) * $qty, 2);
-            $feeOutPerUnit -= $perUnitOff;
+            // The consignor's share stays that of the regular price, less only what they bear;
+            // the rest of a discount comes out of the store's fee.
+            $theirs = $qty > 0 ? min(max(0.0, $consignorOff), $discount, max(0.0, ($regular - $feeOutPerUnit) * $qty)) / $qty : 0.0;
+            $costAmount = round(($regular - $theirs - $feeOutPerUnit) * $qty, 2);
+            $feeOutPerUnit -= $perUnitOff - $theirs;
         }
         return [
             'unit_price' => $unitPrice, 'pack_size' => max(1, $packSize), 'fee_per_unit' => $feeOutPerUnit,

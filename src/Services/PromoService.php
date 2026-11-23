@@ -14,7 +14,8 @@ use PDO;
  * items each; "2 pieces of the same snack for ฿15" is one slot of 2 pieces.
  *
  * kind: price = each full set sells for `value`; amount = `value` baht off each set;
- * percent = `value` % off each set.
+ * percent = `value` % off each set; item = each item names its own baht off a piece (migration 0091),
+ * and on consigned goods that discount comes out of the consignor's share.
  *
  * The web POS asks for a quote while the cart changes and the sale is recorded with the same
  * figures. The Android POS keeps the promotions (devicePromos) and works them out itself, offline
@@ -22,7 +23,7 @@ use PDO;
  */
 class PromoService
 {
-    public const KINDS = ['price' => 'ราคาชุด', 'amount' => 'ลดบาทต่อชุด', 'percent' => 'ลด % ต่อชุด'];
+    public const KINDS = ['price' => 'ราคาชุด', 'amount' => 'ลดบาทต่อชุด', 'percent' => 'ลด % ต่อชุด', 'item' => 'ระบุส่วนลดรายสินค้า'];
 
     public function __construct(private PDO $db, private ?AuditLogger $audit = null)
     {
@@ -42,6 +43,12 @@ class PromoService
             $timed = strtolower((string) $stmt->fetchColumn()) === 'datetime';
         }
         return $timed;
+    }
+
+    /** Whether items can carry their own discount (migration 0091). */
+    private function itemOffs(): bool
+    {
+        return Db::hasColumn($this->db, 'promo_bundle_items', 'discount');
     }
 
     private function assertReady(): void
@@ -66,8 +73,9 @@ class PromoService
             return [];
         }
         $slots = $this->db->query('SELECT * FROM promo_bundle_slots ORDER BY promo_id, position, id')->fetchAll();
+        $offCol = $this->itemOffs() ? 'i.discount' : 'NULL AS discount';
         $items = $this->db->query(
-            'SELECT i.slot_id, i.product_id, i.sale_group_id,
+            "SELECT i.slot_id, i.product_id, i.sale_group_id, {$offCol},
                     COALESCE(p.name, g.name) AS name, COALESCE(p.sale_price, g.sale_price) AS sale_price,
                     p.barcode, p.consignor_id, p.qty_stock,
                     (SELECT COUNT(*) FROM products m WHERE g.id IS NOT NULL AND m.sale_group_id = g.id) AS members,
@@ -75,7 +83,7 @@ class PromoService
              FROM promo_bundle_items i
              LEFT JOIN products p ON p.id = i.product_id
              LEFT JOIN sale_groups g ON g.id = i.sale_group_id
-             ORDER BY i.id'
+             ORDER BY i.id"
         )->fetchAll();
         $bySlot = [];
         foreach ($items as $it) {
@@ -89,6 +97,7 @@ class PromoService
                 'consigned' => !$isGroup && $it['consignor_id'] !== null,
                 'qty_stock' => $isGroup ? (int) $it['group_stock'] : (int) $it['qty_stock'],
                 'members' => $isGroup ? (int) $it['members'] : null,
+                'discount' => $it['discount'] !== null ? (float) $it['discount'] : null,
             ];
         }
         $byPromo = [];
@@ -152,11 +161,15 @@ class PromoService
         if (!isset(self::KINDS[$kind])) {
             throw new \RuntimeException('รูปแบบส่วนลดไม่ถูกต้อง');
         }
-        $value = $in['value'] ?? null;
+        if ($kind === 'item' && !$this->itemOffs()) {
+            throw new \RuntimeException('ยังระบุส่วนลดรายสินค้าไม่ได้: ให้ผู้ดูแลระบบรันการปรับฐานข้อมูล (migration 0091) ก่อน');
+        }
+        // Kind 'item' has no figure of its own: the discounts are on its items.
+        $value = $kind === 'item' ? 1 : ($in['value'] ?? null);
         if (!is_numeric($value) || (float) $value <= 0) {
             throw new \RuntimeException($kind === 'price' ? 'ราคาชุดต้องมากกว่า 0' : 'ส่วนลดต้องมากกว่า 0');
         }
-        $value = round((float) $value, 2);
+        $value = $kind === 'item' ? 0.0 : round((float) $value, 2);
         if ($kind === 'percent' && $value >= 100) {
             throw new \RuntimeException('ส่วนลดเป็นเปอร์เซ็นต์ต้องน้อยกว่า 100');
         }
@@ -190,7 +203,7 @@ class PromoService
         }
         $active = !array_key_exists('active', $in) || !empty($in['active']);
         $note = mb_substr(trim((string) ($in['note'] ?? '')), 0, 500) ?: null;
-        $slots = $this->cleanSlots((array) ($in['slots'] ?? []));
+        $slots = $this->cleanSlots((array) ($in['slots'] ?? []), $kind);
 
         $this->db->beginTransaction();
         try {
@@ -216,12 +229,16 @@ class PromoService
                 $this->db->prepare('DELETE FROM promo_bundle_slots WHERE promo_id = ?')->execute([$id]);
             }
             $insSlot = $this->db->prepare('INSERT INTO promo_bundle_slots (promo_id, position, label, qty) VALUES (?, ?, ?, ?)');
-            $insItem = $this->db->prepare('INSERT INTO promo_bundle_items (slot_id, product_id, sale_group_id) VALUES (?, ?, ?)');
+            $withOff = $this->itemOffs();
+            $insItem = $this->db->prepare($withOff
+                ? 'INSERT INTO promo_bundle_items (slot_id, product_id, sale_group_id, discount) VALUES (?, ?, ?, ?)'
+                : 'INSERT INTO promo_bundle_items (slot_id, product_id, sale_group_id) VALUES (?, ?, ?)');
             foreach ($slots as $pos => $s) {
                 $insSlot->execute([$id, $pos, $s['label'], $s['qty']]);
                 $slotId = (int) $this->db->lastInsertId();
                 foreach ($s['items'] as $it) {
-                    $insItem->execute([$slotId, $it['product_id'], $it['sale_group_id']]);
+                    $row = [$slotId, $it['product_id'], $it['sale_group_id']];
+                    $insItem->execute($withOff ? [...$row, $it['discount'] ?? null] : $row);
                 }
             }
             $after = ['name' => $name, 'kind' => $kind, 'value' => $value, 'starts_on' => $starts, 'ends_on' => $ends, 'active' => $active, 'note' => $note, 'slots' => $slots];
@@ -235,7 +252,7 @@ class PromoService
     }
 
     /** Slots as saved: label, qty, items each a product or a sale group (a group's members go by the group). */
-    private function cleanSlots(array $slots): array
+    private function cleanSlots(array $slots, string $kind = 'price'): array
     {
         $out = [];
         foreach ($slots as $s) {
@@ -249,10 +266,21 @@ class PromoService
                 $it = (array) $it;
                 $gid = (int) ($it['sale_group_id'] ?? 0);
                 $pid = (int) ($it['product_id'] ?? 0);
+                $off = null;
+                if ($kind === 'item') {
+                    $raw = $it['discount'] ?? 0;
+                    if ($raw === '' || $raw === null) {
+                        $raw = 0;
+                    }
+                    if (!is_numeric($raw) || (float) $raw < 0) {
+                        throw new \RuntimeException('ส่วนลดต่อชิ้นต้องเป็นตัวเลขไม่ติดลบ');
+                    }
+                    $off = round((float) $raw, 2);
+                }
                 if ($gid > 0) {
-                    $items['g' . $gid] = ['product_id' => null, 'sale_group_id' => $gid];
+                    $items['g' . $gid] = ['product_id' => null, 'sale_group_id' => $gid, 'discount' => $off];
                 } elseif ($pid > 0) {
-                    $items['p' . $pid] = ['product_id' => $pid, 'sale_group_id' => null];
+                    $items['p' . $pid] = ['product_id' => $pid, 'sale_group_id' => null, 'discount' => $off];
                 }
             }
             if (!$items) {
@@ -294,7 +322,58 @@ class PromoService
             $gids = array_values(array_unique($gids));
             $this->assertGroupsExist($gids);
         }
+        if ($kind === 'item') {
+            $this->assertItemOffs($out);
+        }
         return $out;
+    }
+
+    /**
+     * Kind 'item': some item must give a discount, none more than its price, and on consigned goods
+     * none more than the consignor's share of a piece (they bear it).
+     */
+    private function assertItemOffs(array $slots): void
+    {
+        $any = false;
+        $product = $this->db->prepare('SELECT name, sale_price, consignor_id, fee_per_unit, round_per_unit, rounding_beneficiary FROM products WHERE id = ?');
+        $group = $this->db->prepare('SELECT name, sale_price FROM sale_groups WHERE id = ?');
+        $members = $this->db->prepare('SELECT name, consignor_id, fee_per_unit, round_per_unit, rounding_beneficiary FROM products WHERE sale_group_id = ? AND consignor_id IS NOT NULL');
+        $share = fn (float $price, array $p) => round($price - (float) $p['fee_per_unit'] - ($p['rounding_beneficiary'] === 'store' ? (float) $p['round_per_unit'] : 0), 2);
+        foreach ($slots as $s) {
+            foreach ($s['items'] as $it) {
+                $off = (float) $it['discount'];
+                $any = $any || $off > 0;
+                if ($off <= 0) {
+                    continue;
+                }
+                if ($it['product_id']) {
+                    $product->execute([$it['product_id']]);
+                    $p = $product->fetch();
+                    $price = (float) $p['sale_price'];
+                    $name = $p['name'];
+                    $consigned = $p['consignor_id'] !== null ? [$p] : [];
+                } else {
+                    $group->execute([$it['sale_group_id']]);
+                    $g = $group->fetch();
+                    $price = (float) $g['sale_price'];
+                    $name = $g['name'];
+                    $members->execute([$it['sale_group_id']]);
+                    $consigned = $members->fetchAll();
+                }
+                if ($off > $price) {
+                    throw new \RuntimeException("ส่วนลดของ \"{$name}\" เกินราคาขาย ฿" . number_format($price, 2));
+                }
+                foreach ($consigned as $c) {
+                    $most = $share($price, $c);
+                    if ($off > $most) {
+                        throw new \RuntimeException("ส่วนลดของ \"{$name}\" เกินส่วนแบ่งของผู้ฝาก (ลดได้ไม่เกิน ฿" . number_format(max(0, $most), 2) . ' ต่อชิ้น เพราะผู้ฝากรับภาระส่วนลด)');
+                    }
+                }
+            }
+        }
+        if (!$any) {
+            throw new \RuntimeException('ระบุส่วนลดต่อชิ้นอย่างน้อย 1 รายการ');
+        }
     }
 
     private function assertGroupsExist(array $gids): void
@@ -430,13 +509,14 @@ class PromoService
             return [];
         }
         $ids = array_map(fn ($p) => (int) $p['id'], $promos);
+        $offCol = $this->itemOffs() ? 'i.discount' : 'NULL AS discount';
         $stmt = $this->db->prepare(
-            'SELECT s.promo_id, s.id, s.qty, s.label, i.product_id, i.sale_group_id, COALESCE(p.name, g.name) AS item_name
+            "SELECT s.promo_id, s.id, s.qty, s.label, i.product_id, i.sale_group_id, {$offCol}, COALESCE(p.name, g.name) AS item_name
              FROM promo_bundle_slots s
              JOIN promo_bundle_items i ON i.slot_id = s.id
              LEFT JOIN products p ON p.id = i.product_id
              LEFT JOIN sale_groups g ON g.id = i.sale_group_id
-             WHERE s.promo_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY s.position, s.id'
+             WHERE s.promo_id IN (" . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY s.position, s.id'
         );
         $stmt->execute($ids);
         $slots = [];
@@ -445,7 +525,12 @@ class PromoService
             $slot['qty'] = (int) $r['qty'];
             $slot['label'] = $r['label'];
             $slot['names'][] = (string) $r['item_name'];
-            $slot['keys'][] = $r['sale_group_id'] !== null ? 'g' . $r['sale_group_id'] : 'p' . $r['product_id'];
+            $key = $r['sale_group_id'] !== null ? 'g' . $r['sale_group_id'] : 'p' . $r['product_id'];
+            $slot['keys'][] = $key;
+            // Kind 'item': baht off a piece, by item key (absent otherwise, so it never encodes as []).
+            if ($r['discount'] !== null) {
+                $slot['offs'][$key] = (float) $r['discount'];
+            }
             unset($slot);
         }
         $out = [];
@@ -497,12 +582,14 @@ class PromoService
         usort($order, fn ($a, $b) => ((float) $lines[$b]['price'] <=> (float) $lines[$a]['price']) ?: (array_search($a, array_keys($lines), true) <=> array_search($b, array_keys($lines), true)));
 
         $raw = []; // line => [promo id => discount (unrounded)]
+        $itemOff = []; // line => the part from kind 'item' promotions (the consignor bears it)
         foreach ($promos as $promo) {
             $sets = 0;
             $promoDiscount = 0.0;
             while (true) {
                 $try = $left;
                 $taken = [];
+                $named = []; // kind 'item': line => baht its pieces in this set take off
                 foreach ($promo['slots'] as $slot) {
                     $need = $slot['qty'];
                     foreach ($order as $i) {
@@ -514,6 +601,9 @@ class PromoService
                             $try[$i] -= $n;
                             $need -= $n;
                             $taken[$i] = ($taken[$i] ?? 0) + $n;
+                            if ($promo['kind'] === 'item') {
+                                $named[$i] = ($named[$i] ?? 0) + $n * min((float) ($slot['offs'][$lines[$i]['key']] ?? 0), (float) $lines[$i]['price']);
+                            }
                         }
                     }
                     if ($need > 0) {
@@ -528,6 +618,7 @@ class PromoService
                     'price' => $regular - $promo['value'],
                     'amount' => min($promo['value'], $regular),
                     'percent' => $regular * $promo['value'] / 100,
+                    'item' => array_sum($named),
                     default => 0,
                 }, 2);
                 if ($off < 0.01) {
@@ -537,6 +628,13 @@ class PromoService
                 $sets++;
                 $promoDiscount += $off;
                 foreach ($taken as $i => $n) {
+                    if ($promo['kind'] === 'item') {
+                        if (($named[$i] ?? 0) > 0) {
+                            $raw[$i][$promo['id']] = ($raw[$i][$promo['id']] ?? 0) + $named[$i];
+                            $itemOff[$i] = ($itemOff[$i] ?? 0) + $named[$i];
+                        }
+                        continue;
+                    }
                     $raw[$i][$promo['id']] = ($raw[$i][$promo['id']] ?? 0) + $off * ((float) $lines[$i]['price'] * $n) / $regular;
                 }
             }
@@ -559,6 +657,9 @@ class PromoService
             uasort($rounded, fn ($a, $b) => $b['discount'] <=> $a['discount']);
             $big = array_key_first($rounded);
             $rounded[$big]['discount'] = round($rounded[$big]['discount'] + $diff, 2);
+        }
+        foreach ($rounded as $i => $r) {
+            $rounded[$i]['item_off'] = min(round($itemOff[$i] ?? 0, 2), $r['discount']);
         }
         $result['total'] = $total;
         $result['lines'] = $rounded;
@@ -647,6 +748,7 @@ class PromoService
             if ($d['discount'] > 0) {
                 $items[$i]['promo_discount'] = $d['discount'];
                 $items[$i]['promo_id'] = $d['promo_id'];
+                $items[$i]['promo_item_off'] = $d['item_off'] ?? 0.0;
             }
         }
         return [$items, $res['total'], $res['applied']];
@@ -710,13 +812,16 @@ class PromoService
             }
             $items[$i]['promo_discount'] = $d;
             $items[$i]['promo_id'] = (int) ($line['promo_id'] ?? 0) ?: null;
+            // The part from a promotion with per-item discounts: the consignor bears it.
+            $items[$i]['promo_item_off'] = isset($line['promo_item_off']) && is_numeric($line['promo_item_off'])
+                ? max(0.0, min(round((float) $line['promo_item_off'], 2), $d)) : 0.0;
             $given += $d;
         }
         $given = round($given, 2);
         if (!self::ready($this->db)) {
             if ($given > 0) {
                 foreach ($items as &$it) {
-                    unset($it['promo_discount'], $it['promo_id']);
+                    unset($it['promo_discount'], $it['promo_id'], $it['promo_item_off']);
                 }
                 unset($it);
                 return [$items, ['อุปกรณ์ให้ส่วนลดโปรโมชั่น ฿' . number_format($given, 2) . ' แต่เซิร์ฟเวอร์ยังไม่ได้รัน migration 0086 จึงบันทึกเป็นราคาปกติ']];

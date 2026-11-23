@@ -321,7 +321,9 @@ class SaleGroupService
             // So are points taken off it (migration 0088).
             $off = round((float) ($line['promo_discount'] ?? 0), 2);
             $pts = round((float) ($line['points_discount'] ?? 0), 2);
+            $itemOff = round((float) ($line['promo_item_off'] ?? 0), 2);
             $given = 0.0;
+            $givenItem = 0.0;
             $givenPts = 0.0;
             $k = 0;
             foreach ($take as $pid => $n) {
@@ -331,6 +333,11 @@ class SaleGroupService
                     $share = $last ? round($off - $given, 2) : round($off * $n / $qty, 2);
                     $given += $share;
                     $row += ['promo_discount' => $share, 'promo_id' => $line['promo_id'] ?? null];
+                    if ($itemOff > 0) {
+                        $part = $last ? round($itemOff - $givenItem, 2) : round($itemOff * $n / $qty, 2);
+                        $givenItem += $part;
+                        $row['promo_item_off'] = $part;
+                    }
                 }
                 if ($pts > 0) {
                     $share = $last ? round($pts - $givenPts, 2) : round($pts * $n / $qty, 2);
