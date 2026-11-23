@@ -65,7 +65,13 @@ class SaleService
             $holds = [];
             $pointWarnings = [];
             if ($members) {
-                [$items, $holds, $pointWarnings] = $members->applyToSale($items, $memberId, !empty($opts['offline']));
+                [$items, $holds, $pointWarnings] = $members->applyToSale(
+                    $items,
+                    $memberId,
+                    !empty($opts['offline']),
+                    isset($opts['member_verify']) ? (string) $opts['member_verify'] : null,
+                    !array_key_exists('can_verify', $opts) || !empty($opts['can_verify'])
+                );
             } else {
                 foreach ($items as $i => $l) {
                     unset($items[$i]['points_discount']);

@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { money, escapeHtml, fmtDate } from '../util.js';
-import { alertDialog, choiceDialog, confirmDialog, isDialogOpen } from '../dialog.js';
+import { alertDialog, choiceDialog, confirmDialog, isDialogOpen, promptDialog } from '../dialog.js';
 import { thumbDataUrl, THUMB_SIZE } from '../images.js';
 import { play, soundButtonLabel, openSoundPanel } from '../sound.js';
 import { openKeyboard, closeKeyboard, isKeyboardOpen, keyboardEnabled } from '../osk.js';
@@ -10,6 +10,9 @@ import { loadThaiQr, thaiQrCard, thaiQrWarning } from '../thai-qr.js';
 const NEXT_SALE_MS = 2000;
 // How long the cashier may change a sale's payment method alone (the server allows the same, plus a little).
 const PAYMENT_FIX_MS = 5 * 60 * 1000;
+// From this many points spent on one bill, the buyer confirms with the last 4 digits of their national ID
+// (same threshold as the server's MemberService::VERIFY_POINTS).
+const VERIFY_POINTS = 10;
 
 const SORTS = [
     ['popular', 'ขายดี'],
@@ -540,6 +543,21 @@ export async function render(container, { user } = {}) {
 
     function pointsOff() {
         return Math.round(cart.reduce((s, c) => s + (c.hold ? c.hold.discount : 0), 0) * 100) / 100;
+    }
+
+    /** Points this bill will spend across all its lines. From VERIFY_POINTS up, the buyer confirms with ID. */
+    function heldPoints() {
+        return cart.reduce((s, c) => s + (c.hold ? c.hold.points : 0), 0);
+    }
+
+    /** Asks the member for the last 4 digits of their national ID. Returns the 4 digits, or null if cancelled. */
+    async function askMemberVerify(points) {
+        const v = await promptDialog(`บิลนี้ใช้แต้มสะสม ${points} แต้ม — ให้สมาชิกยืนยันด้วยเลขบัตรประชาชน 4 หลักสุดท้าย`, {
+            title: '🔒 ยืนยันการใช้แต้ม', okText: 'ยืนยัน', placeholder: '____', value: '', required: 'กรุณากรอกเลข 4 หลักสุดท้าย',
+        });
+        if (v === null) return null;
+        const digits = String(v).replace(/\D/g, '');
+        return digits;
     }
 
     function cartTotal() {
@@ -1408,6 +1426,12 @@ export async function render(container, { user } = {}) {
 
         async function confirm() {
             if (busy || !figures().ok) return;
+            // A bill that spends many points is confirmed with the buyer's ID before it is booked.
+            let memberVerify = null;
+            if (member && heldPoints() >= VERIFY_POINTS) {
+                memberVerify = await askMemberVerify(heldPoints());
+                if (memberVerify === null) return; // cashier cancelled
+            }
             busy = true;
             error = null;
             draw();
@@ -1416,6 +1440,7 @@ export async function render(container, { user } = {}) {
                     // A sale group (id = -group id) is sold as one item; the server takes the pieces from its members in turn.
                     items: saleItems().map((it, i) => (cart[i]?.hold ? { ...it, points_hold_id: cart[i].hold.id } : it)),
                     member_id: member?.member_id || null,
+                    member_verify: memberVerify,
                     // Bundle promotions: the server works them out again and refuses if they no longer match.
                     promos: true,
                     promo_discount: promoNow().total,
@@ -1428,6 +1453,13 @@ export async function render(container, { user } = {}) {
                 refreshDrawer();
             } catch (e) {
                 error = e.message;
+                if (e.status === 409 && e.data?.code === 'points_verify') {
+                    // Wrong or missing last-4 digits: let the cashier press ยืนยัน again to re-enter them.
+                    busy = false;
+                    draw();
+                    message(e.message, 'warn');
+                    return;
+                }
                 if (e.status === 409 && e.data?.code === 'points_hold') {
                     // A points hold ran out (or was given back on another till): drop them all, the cashier presses again.
                     busy = false;

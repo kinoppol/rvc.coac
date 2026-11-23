@@ -21,6 +21,9 @@ use PDO;
  */
 class MemberService
 {
+    /** From this many points spent on one bill, the buyer confirms with the last 4 digits of their national ID. */
+    public const VERIFY_POINTS = 10;
+
     public const KINDS = [
         'welcome' => 'แต้มสมาชิกซื้อครั้งแรก', 'earn' => 'ได้แต้มจากการซื้อ', 'redeem' => 'ใช้แต้มเป็นส่วนลด',
         'survey' => 'ตอบแบบสอบถาม', 'adjust' => 'ปรับแต้มโดยผู้ดูแล', 'refund' => 'คืนแต้ม',
@@ -452,10 +455,11 @@ class MemberService
      * Offline (the Android POS) the customer has paid: the discount stands as the device gave it.
      * @return array{0:array, 1:array, 2:string[]} [items, holds by line index, warnings]
      */
-    public function applyToSale(array $items, int $memberId, bool $offline): array
+    public function applyToSale(array $items, int $memberId, bool $offline, ?string $verify = null, bool $canVerify = true): array
     {
         $holds = [];
         $warnings = [];
+        $totalPoints = 0;
         foreach ($items as $i => $line) {
             $hid = (int) ($line['points_hold_id'] ?? 0);
             if ($hid <= 0) {
@@ -481,6 +485,27 @@ class MemberService
             }
             $items[$i]['points_discount'] = $discount;
             $holds[$i] = ['id' => $valid ? $hid : null, 'points' => $points, 'discount' => $discount];
+            $totalPoints += $points;
+        }
+        // Spending many points on one bill is confirmed with the last 4 digits of the buyer's national ID,
+        // so a lost or borrowed account cannot be drained at the counter. The POS (web, or Android 1.7.0+)
+        // asks for them and sends them here. An older device cannot ask ($canVerify = false): the sale is
+        // let through with a warning rather than blocked, as the customer has already paid.
+        if ($totalPoints >= self::VERIFY_POINTS) {
+            $nid = (string) ($this->db->query('SELECT national_id FROM members WHERE id = ' . (int) $memberId)->fetchColumn() ?: '');
+            $last4 = strlen($nid) >= 4 ? substr($nid, -4) : '';
+            $given = preg_replace('/\D/', '', (string) $verify);
+            if ($last4 === '') {
+                $warnings[] = 'ใช้แต้ม ' . $totalPoints . ' แต้ม แต่ยังไม่มีเลขบัตรประชาชนของสมาชิกในระบบ จึงข้ามการยืนยัน';
+            } elseif ($given === $last4) {
+                // confirmed
+            } elseif ($offline || !$canVerify) {
+                $warnings[] = 'ใช้แต้ม ' . $totalPoints . ' แต้ม โดยอุปกรณ์ไม่ได้ยืนยันเลขบัตร 4 หลักท้าย (เวอร์ชันเก่าหรือขายออฟไลน์)';
+            } elseif ($given === '') {
+                throw new PointsVerifyException('ใช้แต้มตั้งแต่ ' . self::VERIFY_POINTS . ' แต้มขึ้นไป ต้องให้สมาชิกยืนยันด้วยเลขบัตรประชาชน 4 หลักสุดท้าย');
+            } else {
+                throw new PointsVerifyException('เลขบัตรประชาชน 4 หลักสุดท้ายไม่ถูกต้อง ลองใหม่อีกครั้ง');
+            }
         }
         return [$items, $holds, $warnings];
     }

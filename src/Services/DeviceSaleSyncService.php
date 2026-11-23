@@ -199,6 +199,10 @@ class DeviceSaleSyncService
                 'allow_short_stock' => $allowShort,
                 'note' => $offline ? 'ขายออฟไลน์จากอุปกรณ์ ' . $device['name'] : null,
                 'member_id' => (int) ($sale['member_id'] ?? 0),
+                // Last 4 digits of the buyer's national ID (Android POS 1.7.0+). An older build cannot
+                // ask, so can_verify is false and a big-points sale goes through with a warning instead.
+                'member_verify' => isset($sale['member_verify']) ? (string) $sale['member_verify'] : null,
+                'can_verify' => version_compare((string) ($device['app_version'] ?? '0'), '1.7.0', '>='),
                 'offline' => $offline,
             ]);
             if (!empty($result['payment_warning'])) {

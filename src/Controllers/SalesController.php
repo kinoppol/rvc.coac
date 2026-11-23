@@ -216,7 +216,11 @@ class SalesController
                 'promos' => !empty($body['promos']),
                 // The buyer named at the POS (none = ลูกค้าทั่วไป); lines may carry points_hold_id.
                 'member_id' => (int) ($body['member_id'] ?? 0),
+                // Last 4 digits of the buyer's national ID, when the bill spends enough points to need it.
+                'member_verify' => isset($body['member_verify']) ? (string) $body['member_verify'] : null,
             ] + (isset($body['promo_discount']) && is_numeric($body['promo_discount']) ? ['expect_discount' => (float) $body['promo_discount']] : []));
+        } catch (\App\Services\PointsVerifyException $e) {
+            return $this->json($response, ['error' => $e->getMessage(), 'code' => 'points_verify'], 409);
         } catch (\App\Services\PointsHoldException $e) {
             return $this->json($response, ['error' => $e->getMessage(), 'code' => 'points_hold'], 409);
         } catch (\App\Services\PromoChangedException $e) {
