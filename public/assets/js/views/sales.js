@@ -921,6 +921,20 @@ export async function render(container, { user } = {}) {
         const d = options.business_day;
         const h = options.store_hours || {};
         const hours = h.open && h.close ? ` (เวลาทำการ ${h.open}–${h.close} น.)` : '';
+        if (d?.past_close) {
+            el('hours').innerHTML = `
+              <div class="pos-hours">🕘 <span><b>เลยเวลาปิดร้านแล้ว${escapeHtml(hours)}</b>
+                ยังไม่ได้ปิดยอด (นับเงินในลิ้นชัก) รายการที่ขายตอนนี้ยังนับเป็นยอดขายของวันนี้
+                · เมื่อปิดยอดแล้ว การขายหลังจากนั้นจะถูกยกยอดไปวันทำการถัดไป</span></div>`;
+            return;
+        }
+        if (d?.day_closed) {
+            el('hours').innerHTML = `
+              <div class="pos-hours">🌙 <span><b>ปิดร้านแล้ว การขายหลังจากนี้จะถูกยกยอดไปวันทำการถัดไป</b>
+                (ลงบัญชีเป็นยอดขายวันที่ <b>${escapeHtml(fmtDate(d.date))}</b> ไม่กระทบยอดที่ปิดไปแล้ว)
+                · บันทึกเวลาขายจริงไว้ตรวจสอบกับการนับสต๊อก</span></div>`;
+            return;
+        }
         el('hours').innerHTML = d?.after_hours ? `
           <div class="pos-hours">🌙 <span><b>${d.holiday ? `วันนี้ร้านปิด (${escapeHtml(d.holiday)})` : `นอกเวลาทำการ${escapeHtml(hours)}`}</b>
             ${d.date !== options.today
@@ -1325,7 +1339,7 @@ export async function render(container, { user } = {}) {
                       <div class="pos-done-icon">✓</div>
                       <h2>บันทึกการขายแล้ว</h2>
                       <div class="muted">เลขที่ ${escapeHtml(done.doc_no)} · ยอดขาย ฿${money(done.total_value)}</div>
-                      ${done.after_hours ? `<div class="pos-hours-note">ขายนอกเวลาทำการ · ลงบัญชีวันที่ ${escapeHtml(fmtDate(done.business_date))}</div>` : ''}
+                      ${done.after_hours ? `<div class="pos-hours-note">${done.business_date > options.today ? 'ปิดร้านแล้ว ยกยอดไปวันทำการถัดไป' : 'ขายนอกเวลาทำการ'} · ลงบัญชีวันที่ ${escapeHtml(fmtDate(done.business_date))}</div>` : ''}
                       ${done.change > 0 ? `<div class="pos-change">เงินทอน <b>฿${money(done.change)}</b></div>` : ''}
                       ${done.member ? `<div class="pos-done-points">⭐ ${escapeHtml(member?.name || 'สมาชิก')}: ได้ <b>${done.member.earned + done.member.welcome}</b> แต้ม${done.member.welcome ? ` (รวมซื้อครั้งแรก ${done.member.welcome})` : ''}${done.member.used ? ` · ใช้ ${done.member.used} แต้ม ลด ฿${money(done.member.discount)}` : ''} · คงเหลือ <b>${done.member.balance}</b> แต้ม</div>` : ''}
                       <button type="button" class="btn pos-big pos-next" data-pay="next">

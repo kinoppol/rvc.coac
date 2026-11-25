@@ -48,6 +48,18 @@ class SaleService
             $this->db->beginTransaction();
         }
         try {
+            // A sale after closing time while the drawer is still uncounted belongs to the day; the count may
+            // have been made while this request ran: hold the drawer row so the count waits for this sale or
+            // this sale sees the count and carries over to the next opening day.
+            if (!empty($opts['next_date'])) {
+                $lock = $this->db->prepare('SELECT closed_at FROM cash_drawers WHERE business_date = ? FOR UPDATE');
+                $lock->execute([$businessDate]);
+                $closedAt = $lock->fetchColumn();
+                if (is_string($closedAt) && $closedAt <= $saleAt) {
+                    $businessDate = (string) $opts['next_date'];
+                    $afterHours = true;
+                }
+            }
             // Bundle promotions (migration 0086), web POS only: worked out on the cart as the cashier saw it
             // (a sale group as one line), then carried onto the member lines below.
             $promoTotal = 0.0;

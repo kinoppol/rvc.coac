@@ -94,7 +94,10 @@ export async function render(container, { params = {} } = {}) {
               : `<label class="field">เงินสดที่นับได้ในลิ้นชัก (บาท) <input id="dr-count" inputmode="decimal" placeholder="0.00"></label>
                  <div id="dr-diff" class="muted" style="margin:8px 0;font-size:13.5px">เงินที่ควรมี ฿${money(d.expected_cash)}</div>
                  <label class="field">หมายเหตุ (ถ้ามี) <input id="dr-note" maxlength="200" placeholder="เช่น นำเงินฝากธนาคาร / เงินขาดเพราะ..."></label>
+                 ${!closed ? `<div class="muted" style="font-size:12.5px;margin-top:10px">ยอดขายที่เกิดขึ้นก่อนกดปิดยอดนับเป็นยอดขายของวันนี้ แม้จะเลยเวลาปิดร้านแล้ว
+                   (นับเงินทั้งหมดในลิ้นชักรวมเงินจากบิลเหล่านั้น) · หลังปิดยอด การขายจะถูกยกยอดไปวันทำการถัดไป</div>` : ''}
                  <button type="button" class="btn" id="dr-close" style="width:100%;margin-top:12px">${closed ? 'บันทึกการนับใหม่' : 'ปิดยอด'}</button>`}
+            ${closed && d.date === d.today ? '<div style="margin-top:10px"><span class="pill warn">ปิดร้านแล้ว การขายหลังจากนี้จะถูกยกยอดไปวันทำการถัดไป</span></div>' : ''}
           </section>
         </div>
 
@@ -230,8 +233,10 @@ export async function render(container, { params = {} } = {}) {
             );
             if (!ok) return;
             try {
+                const wasClosed = !!data.drawer?.closed_at;
                 await api.post('/drawer/close', { amount: v, note: container.querySelector('#dr-note').value, date: data.date });
                 await load();
+                if (!wasClosed) alertDialog('ปิดร้านแล้ว การขายหลังจากนี้จะถูกยกยอดไปวันทำการถัดไป', { title: 'ปิดยอดเรียบร้อย' });
             } catch (e) { alertDialog(e.message, { tone: 'error' }); }
         });
         container.querySelector('#dr-adjust')?.addEventListener('click', async () => {

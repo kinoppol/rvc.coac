@@ -164,6 +164,20 @@ class CashDrawerService
     /** The closing count; a day already closed can be counted again only by admin / manager ($recount). */
     public function close(string $date, float $counted, int $userId, ?string $note, bool $recount, ?string $ip): void
     {
+        // Selling goes on until the count: a sale being recorded right now finishes first (SaleService locks this row too).
+        $this->db->beginTransaction();
+        try {
+            $this->db->prepare('SELECT id FROM cash_drawers WHERE business_date = ? FOR UPDATE')->execute([$date]);
+            $this->doClose($date, $counted, $userId, $note, $recount, $ip);
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    private function doClose(string $date, float $counted, int $userId, ?string $note, bool $recount, ?string $ip): void
+    {
         $drawer = $this->find($date);
         if (!$drawer) {
             throw new \RuntimeException('ยังไม่มีการระบุเงินในลิ้นชักตอนเปิดร้านของวันนี้');

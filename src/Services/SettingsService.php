@@ -119,7 +119,9 @@ class SettingsService
      * opening time on a closed day, or any time on a closed day, a sale counts
      * toward the next day the store opens; before opening on an open day it
      * counts toward that same day. Holidays (store_holidays) are closed days too.
-     * @return array{date:string, after_hours:bool, holiday?:string}
+     * After closing time, sales stay on the day until its drawer is counted (past_close);
+     * once counted (day_closed) they carry over to the next opening day.
+     * @return array{date:string, after_hours:bool, holiday?:string, past_close?:bool, next_date?:string, day_closed?:bool}
      */
     public function businessDay(\DateTimeImmutable $at): array
     {
@@ -147,9 +149,34 @@ class SettingsService
         }
         $time = $at->format('H:i');
         if ($time >= $close) {
-            return ['date' => $nextOpenDay($day)->format('Y-m-d'), 'after_hours' => true];
+            $next = $nextOpenDay($day)->format('Y-m-d');
+            // Selling goes on past closing time until the drawer is counted: those sales are still the
+            // day's (the cash is in the drawer being counted). Only sales after the count carry over.
+            if ($this->drawerStillOpen($day->format('Y-m-d'), $at)) {
+                return ['date' => $day->format('Y-m-d'), 'after_hours' => false, 'past_close' => true, 'next_date' => $next];
+            }
+            return ['date' => $next, 'after_hours' => true, 'day_closed' => true];
         }
         return ['date' => $day->format('Y-m-d'), 'after_hours' => $time < $open];
+    }
+
+    /**
+     * Whether the drawer of $date was opened and not yet counted at closing as of $at
+     * (closed_at after $at counts as still open, for sales an offline device sends late).
+     */
+    public function drawerStillOpen(string $date, \DateTimeImmutable $at): bool
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT closed_at FROM cash_drawers WHERE business_date = ?');
+            $stmt->execute([$date]);
+            $closedAt = $stmt->fetchColumn();
+        } catch (\PDOException $e) {
+            return false; // migration 0033 not run yet
+        }
+        if ($closedAt === false) {
+            return false; // never opened: nobody counts it at closing, the old rule stands
+        }
+        return $closedAt === null || (string) $closedAt > $at->format('Y-m-d H:i:s');
     }
 
     /**
@@ -192,8 +219,9 @@ class SettingsService
         if ((string) $this->get('store_close_time') === '') {
             return true; // no store hours set: nothing to wait for
         }
-        // Sales are booked on another day once closing time has passed or on a day off.
-        return $this->businessDay($at)['date'] !== $today;
+        // Closing time has passed or the store does not open today (selling may still go on until the count).
+        $day = $this->businessDay($at);
+        return $day['date'] !== $today || !empty($day['past_close']);
     }
 
     /** The message for counting before closing time. */

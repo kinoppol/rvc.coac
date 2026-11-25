@@ -191,6 +191,7 @@ class DeviceSaleSyncService
                 'sale_datetime' => $soldAt->format('Y-m-d H:i:s'),
                 'business_date' => $day['date'],
                 'after_hours' => $day['after_hours'],
+                'next_date' => $day['next_date'] ?? null, // past closing time, until the drawer is counted
                 'payments' => [
                     'methods' => $offline ? array_keys(SettingsService::PAYMENT_METHODS) : $methods,
                     'mixed' => $offline || $settings->posRoleAllows('pos_mixed_roles', $role),

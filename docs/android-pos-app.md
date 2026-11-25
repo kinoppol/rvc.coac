@@ -139,7 +139,10 @@ businessDay(at):
   day = วันที่ของ at
   if isClosed(day): return {date: nextOpen(day), after_hours: true, holiday: ชื่อวันหยุด(ถ้ามี)}
   if open == "" or close == "": return {date: day, after_hours: false}
-  if HH:mm(at) >= close: return {date: nextOpen(day), after_hours: true}
+  if HH:mm(at) >= close:
+      # ขายต่อเนื่องหลังเวลาปิดร้านได้จนกว่าจะปิดยอด (นับเงินในลิ้นชัก): ยังเป็นยอดขายของวันนี้
+      if ลิ้นชักของ day เปิดแล้วและยังไม่ปิดยอด ณ เวลา at: return {date: day, after_hours: false, past_close: true, next_date: nextOpen(day)}
+      return {date: nextOpen(day), after_hours: true, day_closed: true}   # ปิดยอดแล้ว → ยกยอดไปวันทำการถัดไป
   return {date: day, after_hours: HH:mm(at) < open}
 ```
 - นอกเวลาทำการ: แถบ "🌙 นอกเวลาทำการ (เวลาทำการ 08:00–16:30 น.) รายการที่ขายตอนนี้จะลงบัญชีเป็นยอดขายวันที่ …"

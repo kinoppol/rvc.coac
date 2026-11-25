@@ -209,6 +209,7 @@ class SalesController
                 'sale_datetime' => $now->format('Y-m-d H:i:s'),
                 'business_date' => $day['date'],
                 'after_hours' => $day['after_hours'],
+                'next_date' => $day['next_date'] ?? null, // past closing time, until the drawer is counted
                 'payments' => $payments,
                 // The cashier's own switch, honoured only for roles the admin allows.
                 'allow_short_stock' => $settings->sellShortStock($user['role'] ?? null, !empty($body['allow_short'])),
