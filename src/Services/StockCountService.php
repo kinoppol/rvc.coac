@@ -15,6 +15,9 @@ class StockCountService
     /** How the note of a line closed by a return to the consignor begins. */
     public const RETURNED_NOTE = 'คืนสินค้าให้ผู้ฝาก';
 
+    /** How the note of a line set by a payout to the consignor begins. */
+    public const PAYOUT_NOTE = 'ปรับยอดตอนจ่ายเงินผู้ฝาก';
+
     private static function isReturnedLine(?string $note): bool
     {
         return $note !== null && str_starts_with($note, self::RETURNED_NOTE);
@@ -374,6 +377,107 @@ class StockCountService
             $this->db->commit();
             return ['doc_no' => $sc['doc_no'], 'name' => $p['name'], 'counted_before' => $shown, 'counted_after' => $counted,
                 'stock_before' => $before, 'stock_after' => $after, 'latest' => $latest];
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Admin / manager: a count that was wrong is cancelled, with a reason. Its stock change is taken
+     * back (stock now minus what the count added) unless the product was counted again after it —
+     * that later count set the stock by itself. An item count becomes cancelled; a line of an old
+     * round becomes "not counted" (the round's other products stay). Both are logged on the line, so
+     * the stock ledger still shows what happened. $preview: only check and work out the effect.
+     *
+     * @return array{doc_no:string, name:string, round:bool, system:int, counted:int, stock_before:int, stock_after:int, later:bool}
+     */
+    public function cancelCount(int $lineId, string $reason, int $userId, string $role, ?string $ip, bool $preview = false): array
+    {
+        if (!in_array($role, ['admin', 'manager'], true)) {
+            throw new \RuntimeException('เฉพาะผู้ดูแลระบบหรือผู้จัดการร้านเท่านั้น');
+        }
+        $reason = self::clip($reason, 255);
+        if ($reason === null && !$preview) {
+            throw new \RuntimeException('กรุณาระบุเหตุผลที่ยกเลิกการตรวจนับ');
+        }
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM stock_count_items WHERE id = ? FOR UPDATE');
+            $stmt->execute([$lineId]);
+            $line = $stmt->fetch();
+            $sc = $line ? $this->get((int) $line['stock_count_id']) : null;
+            if (!$line || !$sc || $line['counted_qty'] === null) {
+                throw new \RuntimeException('ไม่พบรายการตรวจนับนี้ (อาจถูกยกเลิกไปแล้ว)');
+            }
+            if ($sc['status'] !== 'approved') {
+                throw new \RuntimeException("การนับ {$sc['doc_no']} ไม่ได้อยู่ในสถานะที่มีผลแล้ว (รอรับรอง ให้ถอนหรือไม่รับรองแทน)");
+            }
+            // Made by a payout to the consignor: part of that payment, not a count to take back.
+            if (self::isReturnedLine($line['note']) || str_starts_with((string) $line['note'], self::PAYOUT_NOTE)) {
+                throw new \RuntimeException("{$sc['doc_no']} เป็นการปรับยอดตอนจ่ายเงินผู้ฝาก / คืนสินค้าให้ผู้ฝาก ยกเลิกจากที่นี่ไม่ได้");
+            }
+            $productId = (int) $line['product_id'];
+            $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$productId]);
+            $p = $stmt->fetch();
+            if (!$p) {
+                throw new \RuntimeException('ไม่พบสินค้า');
+            }
+            // A waiting count was compared with a stock that still holds this count's change.
+            $stmt = $this->db->prepare(
+                "SELECT sc.doc_no FROM stock_counts sc JOIN stock_count_items sci ON sci.stock_count_id = sc.id
+                 WHERE sci.product_id = ? AND sc.status = 'submitted' AND sci.counted_qty IS NOT NULL LIMIT 1"
+            );
+            $stmt->execute([$productId]);
+            if ($waiting = $stmt->fetchColumn()) {
+                throw new \RuntimeException("\"{$p['name']}\" มีการนับ {$waiting} รอผู้จัดการรับรองอยู่ ให้รับรอง ไม่รับรอง หรือถอนการนับนั้นก่อน แล้วจึงยกเลิก {$sc['doc_no']}");
+            }
+            if (StockAdjustmentService::available($this->db)) {
+                $stmt = $this->db->prepare('SELECT doc_no FROM stock_adjustments WHERE product_id = ? AND stock_count_id = ? AND cancelled_at IS NULL LIMIT 1');
+                $stmt->execute([$productId, (int) $sc['id']]);
+                if ($fix = $stmt->fetchColumn()) {
+                    throw new \RuntimeException("การนับ {$sc['doc_no']} มีเอกสารแก้การปรับยอด {$fix} อ้างถึง ให้ยกเลิก {$fix} ในบัตรสินค้าก่อน");
+                }
+            }
+            $at = (string) ($sc['approved_at'] ?? $sc['created_at']);
+            $stmt = $this->db->prepare(
+                "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                 WHERE sci.product_id = ? AND sci.id <> ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
+                   AND (sc.approved_at > ? OR (sc.approved_at = ? AND sci.id > ?)) LIMIT 1"
+            );
+            $stmt->execute([$productId, $lineId, $at, $at, $lineId]);
+            $later = (bool) $stmt->fetchColumn();
+            $system = (int) $line['system_qty'];
+            $counted = (int) $line['counted_qty'];
+            $before = (int) $p['qty_stock'];
+            $after = $later ? $before : $before - ($counted - $system);
+            $round = ($sc['kind'] ?? 'round') !== 'item';
+            $result = ['doc_no' => $sc['doc_no'], 'name' => $p['name'], 'round' => $round, 'system' => $system, 'counted' => $counted,
+                'stock_before' => $before, 'stock_after' => $after, 'later' => $later];
+            if ($preview) {
+                $this->db->rollBack();
+                return $result;
+            }
+            if ($round) {
+                $this->db->prepare('UPDATE stock_count_items SET counted_qty = NULL, diff_qty = NULL, note = ? WHERE id = ?')
+                    ->execute([mb_substr("ยกเลิกการนับ (เดิมนับได้ {$counted}): {$reason}", 0, 255), $lineId]);
+            } else {
+                $this->db->prepare("UPDATE stock_counts SET status = 'cancelled', cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ? WHERE id = ?")
+                    ->execute([$userId, $reason, (int) $sc['id']]);
+                $this->audit->log('stock_counts', (int) $sc['id'], 'cancel', ['status' => 'approved'], ['status' => 'cancelled', 'reason' => $reason], $userId, $ip);
+            }
+            if ($after !== $before) {
+                $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$after, $productId]);
+                $this->audit->log('products', $productId, 'update', $p, ['qty_stock' => $after, 'stock_count' => $sc['doc_no'], 'note' => "ยกเลิกการตรวจนับ: {$reason}"], $userId, $ip);
+            }
+            // The stock ledger reads this to show the cancelled count and when it was taken back.
+            $this->audit->log('stock_count_items', $lineId, 'cancel',
+                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'system_qty' => $system, 'counted_qty' => $counted, 'approved_at' => $at],
+                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'reason' => $reason, 'stock_before' => $before, 'stock_after' => $after],
+                $userId, $ip);
+            $this->db->commit();
+            return $result;
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;

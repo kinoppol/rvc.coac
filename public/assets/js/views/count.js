@@ -47,6 +47,7 @@ const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' 
 const LEDGER_KIND = {
     purchase: 'ซื้อเข้า', receive: 'รับฝาก', sale: 'ขาย', pos: 'ขาย (นำเข้า POS)', return: 'คืนผู้ฝาก', count: 'ตรวจนับ', adjfix: 'แก้การปรับยอด',
     split: 'แยกสินค้า', damage: 'สินค้าเสียหาย', gap: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง', opening: 'ยอดก่อนรายการแรก (ไม่มีเอกสารอ้างอิง)',
+    countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ',
 };
 
 // What a count's difference is worth, at cost and at the sale price. Cost only comes to those who may see it.
@@ -139,7 +140,8 @@ export async function render(container, { permissions, user, navigate }) {
           <div style="margin-top:3px">${cost}${line('ขาย', Number(r.sale_price || 0), 'ราคาขายปัจจุบัน')}</div>`;
     }
 
-    function openLedger(productId, lineId) {
+    /** onChange: a count was cancelled (or something else changed) from the ledger. */
+    function openLedger(productId, lineId, onChange) {
         openDetailModal(async () => {
             const d = (await api.get(`/inventory/${productId}/ledger${lineId ? `?line=${lineId}` : ''}`)).data;
             return {
@@ -156,17 +158,18 @@ export async function render(container, { permissions, user, navigate }) {
                         what: [LEDGER_KIND[r.kind] || r.kind, r.note].filter(Boolean).join(' · '),
                         who: [r.party, r.user_name].filter(Boolean).join(' · '),
                         in: r.qty > 0 ? r.qty : null, out: r.qty < 0 ? -r.qty : null, balance: r.balance,
-                        _source: r.doc_no && r.kind !== 'adjfix' ? `/inventory/document?kind=${encodeURIComponent(r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
+                        _source: r.doc_no && r.kind !== 'adjfix' ? `/inventory/document?kind=${encodeURIComponent(r.kind.startsWith('count') ? 'count' : r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
+                        _cancel: d.can_cancel && r.kind === 'count' ? r.line_id : null,
                     })),
                 }],
             };
-        }, navigate);
+        }, navigate, { onChange });
     }
 
     function bindDrill(redraw) {
         const reload = async () => { await loadItems(); await loadReport(); redraw(); };
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate, { onChange: reload })));
-        container.querySelectorAll('[data-ledger]').forEach((b) => b.addEventListener('click', () => openLedger(b.dataset.ledger, b.dataset.line)));
+        container.querySelectorAll('[data-ledger]').forEach((b) => b.addEventListener('click', () => openLedger(b.dataset.ledger, b.dataset.line, reload)));
     }
 
     async function loadList() {

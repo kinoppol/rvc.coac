@@ -534,6 +534,7 @@ $app->group('/api', function ($group) {
         ->add(new RoleGuard('stockcount.approve'));
     // Admin / manager correct what was counted on an approved count, with a reason (migration 0082).
     $group->post('/stockcounts/lines/{id:[0-9]+}/edit', [StockCountController::class, 'editCount']);
+    $group->post('/stockcounts/lines/{id:[0-9]+}/cancel', [StockCountController::class, 'cancelCount']);
     $group->get('/stockcounts/{id:[0-9]+}/lookup', [StockCountController::class, 'lookup'])
         ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/{id:[0-9]+}/search', [StockCountController::class, 'search'])

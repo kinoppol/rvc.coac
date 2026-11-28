@@ -21,25 +21,33 @@ function cell(type, v) {
     return escapeHtml(String(v));
 }
 
-/** A count line's edit button (admin / manager on an approved count), else nothing. */
-function editCell(r, canEdit) {
-    if (!canEdit) return '';
-    return `<td style="white-space:nowrap">${r._line ? `<button type="button" class="btn secondary sm" data-count-line="${r._line}" title="แก้จำนวนที่นับได้ ต้องระบุเหตุผล">✎ แก้ไข</button>` : ''}</td>`;
+const cancelButton = (line) => `<button type="button" class="btn secondary sm" data-count-cancel="${line}" title="ยกเลิกการนับที่ผิดพลาด ต้องระบุเหตุผล" style="color:var(--bad)">✕ ยกเลิกการนับ</button>`;
+
+/**
+ * A row's buttons: edit and cancel a count line (admin / manager on an approved count: r._line),
+ * or cancel only (a count in the stock ledger: r._cancel). No column when no row has any.
+ */
+function actionCell(r, canEdit, column) {
+    if (!column) return '';
+    const edit = canEdit && r._line ? `<button type="button" class="btn secondary sm" data-count-line="${r._line}" title="แก้จำนวนที่นับได้ ต้องระบุเหตุผล">✎ แก้ไข</button> ` : '';
+    const cancel = r._cancel || (canEdit && r._line);
+    return `<td style="white-space:nowrap">${edit}${cancel ? cancelButton(cancel) : ''}</td>`;
 }
 
 function sectionHtml(sec, canEdit = false) {
     canEdit = canEdit && sec.rows.some((r) => r._line);
+    const acts = canEdit || sec.rows.some((r) => r._cancel);
     const num = (c) => c[2] === 'money' || c[2] === 'qty';
     const totals = sec.columns.map((c) => (sec.total !== false && num(c) && c[0] !== 'cost_price' ? sec.rows.reduce((s, r) => s + (Number(r[c[0]]) || 0), 0) : null));
     return `
       <h3 style="margin:16px 0 8px;font-size:14.5px">${escapeHtml(sec.title)} <span class="muted" style="font-weight:400">(${count(sec.rows.length)})</span></h3>
       ${sec.rows.length ? `<div class="table-wrap" style="max-height:340px;border:1px solid var(--border);border-radius:10px"><table>
-        <thead><tr>${sec.columns.map((c) => `<th class="${num(c) ? 'num' : ''}">${escapeHtml(c[1])}</th>`).join('')}${canEdit ? '<th></th>' : ''}</tr></thead>
+        <thead><tr>${sec.columns.map((c) => `<th class="${num(c) ? 'num' : ''}">${escapeHtml(c[1])}</th>`).join('')}${acts ? '<th></th>' : ''}</tr></thead>
         <tbody>${sec.rows.map((r) => (r._source
             // A row with its own records: click opens them in another dialog on top.
-            ? `<tr class="drill-row" data-source="${escapeHtml(r._source)}" tabindex="0" title="กดเพื่อดูรายละเอียด">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? `<span class="drill-link">${cell(c[2], r[c[0]])}</span> <span class="drill-arrow">›</span>` : cell(c[2], r[c[0]])}</td>`).join('')}</tr>`
-            : `<tr>${sec.columns.map((c) => `<td class="${num(c) ? 'num' : ''}">${cell(c[2], r[c[0]])}</td>`).join('')}${editCell(r, canEdit)}</tr>`)).join('')}</tbody>
-        ${sec.rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? '' : cell(c[2], totals[i])}</td>`).join('')}${canEdit ? '<td></td>' : ''}</tr></tfoot>` : ''}
+            ? `<tr class="drill-row" data-source="${escapeHtml(r._source)}" tabindex="0" title="กดเพื่อดูรายละเอียด">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? `<span class="drill-link">${cell(c[2], r[c[0]])}</span> <span class="drill-arrow">›</span>` : cell(c[2], r[c[0]])}</td>`).join('')}${actionCell(r, canEdit, acts)}</tr>`
+            : `<tr>${sec.columns.map((c) => `<td class="${num(c) ? 'num' : ''}">${cell(c[2], r[c[0]])}</td>`).join('')}${actionCell(r, canEdit, acts)}</tr>`)).join('')}</tbody>
+        ${sec.rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? '' : cell(c[2], totals[i])}</td>`).join('')}${acts ? '<td></td>' : ''}</tr></tfoot>` : ''}
       </table></div>` : '<div class="empty" style="padding:14px">ไม่มีรายการ</div>'}`;
 }
 
@@ -65,6 +73,10 @@ export async function openDetailModal(load, navigate, opts = {}) {
         alertDialog(e.message, { tone: 'error' });
         return;
     }
+    /** Reads the records again after a change, keeping what is shown if that fails. */
+    const reload = async () => {
+        try { d = await load(); draw(); } catch (e) { /* keep what is shown */ }
+    };
     const draw = () => {
     const y = box.querySelector('.modal-body')?.scrollTop || 0;
     box.querySelector('.modal').innerHTML = `
@@ -75,7 +87,7 @@ export async function openDetailModal(load, navigate, opts = {}) {
       </div>
       <div class="modal-foot">
         <button type="button" class="btn secondary" data-x>ปิด</button>
-        ${d.count_edit && d.count_line ? '<button type="button" class="btn" data-count-one title="แก้จำนวนที่นับได้ ต้องระบุเหตุผล">✎ แก้ไขการนับ</button>' : ''}
+        ${d.count_edit && d.count_line ? `${cancelButton(d.count_line.id)}<button type="button" class="btn" data-count-one title="แก้จำนวนที่นับได้ ต้องระบุเหตุผล">✎ แก้ไขการนับ</button>` : ''}
         ${d.sale_edit ? '<button type="button" class="btn" data-sale-edit title="แก้รายการขายนี้ทันที โดยระบุสาเหตุ (เช่น พนักงานขายผิดสินค้า)">แก้ไขรายการขาย</button>' : ''}
         ${d.purchase_edit && navigate ? `<button type="button" class="btn" data-purchase-edit title="เปิดใบนี้ในฟอร์มแก้ไขที่หน้าซื้อสินค้าเข้าร้าน">✎ ${escapeHtml(d.purchase_edit.label)}</button>`
             : d.link && navigate ? `<button type="button" class="btn" data-link>${escapeHtml(LINK_LABEL[d.link] || 'ไปที่หน้าที่เกี่ยวข้อง')}</button>` : ''}
@@ -84,10 +96,35 @@ export async function openDetailModal(load, navigate, opts = {}) {
     box.querySelector('[data-link]')?.addEventListener('click', () => { close(); navigate(d.link); });
     box.querySelector('[data-purchase-edit]')?.addEventListener('click', () => { close(); navigate('purchase', { edit: d.purchase_edit.id }); });
     box.querySelectorAll('[data-source]').forEach((tr) => {
-        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page, params) => { close(); navigate(page, params); }), opts);
-        tr.addEventListener('click', open);
-        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+        // Something changed from the dialog on top: this one and the page below read again.
+        const onChange = async () => { await reload(); opts.onChange?.(); };
+        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page, params) => { close(); navigate(page, params); }), { ...opts, onChange });
+        // A button inside the row does its own job, not the row's.
+        const own = (e) => e.target.closest('button');
+        tr.addEventListener('click', (e) => { if (!own(e)) open(); });
+        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !own(e)) open(); });
     });
+    // Cancel a wrong count: what it would do to the stock is shown first, a reason is required.
+    const cancelCount = async (line) => {
+        try {
+            const p = (await api.post(`/stockcounts/lines/${line}/cancel`, { preview: true })).data;
+            const diff = p.counted - p.system;
+            const effect = p.later ? `สต๊อกตอนนี้ไม่เปลี่ยน (${p.stock_before} ชิ้น) เพราะมีการนับสินค้านี้ครั้งหลังกว่านี้แล้ว`
+                : p.stock_after === p.stock_before ? `สต๊อกตอนนี้ไม่เปลี่ยน (${p.stock_before} ชิ้น)`
+                    : `สต๊อกตอนนี้จะเปลี่ยนจาก ${p.stock_before} เป็น ${p.stock_after} ชิ้น${p.stock_after < 0 ? ' (ติดลบ ควรตรวจนับใหม่)' : ''}`;
+            const reason = await promptDialog(
+                `${p.name}: นับได้ ${p.counted} ในระบบตอนปรับ ${p.system} (${diff > 0 ? '+' : ''}${diff})\n${effect}${p.round ? '\nรอบตรวจนับทั้งร้าน: ยกเลิกเฉพาะสินค้านี้ สินค้าอื่นในรอบไม่เปลี่ยน' : ''}\nยกเลิกแล้วกู้คืนไม่ได้\n\nระบุเหตุผลที่ยกเลิก`,
+                { title: `ยกเลิกการนับ ${p.doc_no}?`, okText: 'ยกเลิกการนับ', cancelText: 'ไม่ยกเลิก', placeholder: 'เหตุผล (ต้องระบุ) เช่น นับผิดสินค้า กรอกจำนวนผิด', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true });
+            if (reason === null) return;
+            const res = (await api.post(`/stockcounts/lines/${line}/cancel`, { reason: reason.trim() })).data;
+            alertDialog(`${res.name}: ${res.stock_after !== res.stock_before ? `สต๊อกเปลี่ยนจาก ${res.stock_before} เป็น ${res.stock_after} ชิ้น` : 'สต๊อกตอนนี้ไม่เปลี่ยน'}`, { title: `ยกเลิกการนับ ${res.doc_no} แล้ว` });
+            await reload();
+            opts.onChange?.();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+    };
+    box.querySelectorAll('[data-count-cancel]').forEach((b) => b.addEventListener('click', () => cancelCount(b.dataset.countCancel)));
     // Correct what was counted on a line of an approved count, with a reason.
     const editLine = async (line) => {
         const typed = await promptDialog(`${line.product} — ในระบบ ${line.system} นับได้ ${line.counted}\n\nจำนวนที่นับได้ที่ถูกต้อง`,

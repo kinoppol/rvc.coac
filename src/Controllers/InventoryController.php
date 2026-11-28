@@ -64,6 +64,8 @@ class InventoryController
         if ($data === null) {
             return $this->error($response, 'ไม่พบสินค้าหรือรายการนับ', 404);
         }
+        // Admin / manager cancel a wrong count right from the ledger.
+        $data['can_cancel'] = in_array($request->getAttribute('user')['role'] ?? '', ['admin', 'manager'], true);
         return $this->json($response, ['data' => $data]);
     }
 

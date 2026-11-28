@@ -400,6 +400,7 @@ class InventoryService
         $move = fn (array $e, string $at, int $qty, ?int $after = null, ?string $note = null) => [
             'at' => $at, 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'] ?? null, 'user_name' => $e['user_name'],
             'qty' => $qty, 'after' => $after, 'note' => $note, 'ord' => (int) ($e['ord'] ?? 2), 'rid' => (int) ($e['rid'] ?? 0),
+            'line_id' => $e['kind'] === 'count' ? (int) $e['rid'] : null,
         ];
         foreach ($this->stockEvents($productId) as $e) {
             // The count being looked at took effect after the figure it was compared with.
@@ -428,6 +429,17 @@ class InventoryService
                     'ยกเลิกเอกสาร' . ($e['cancel_reason'] ? ": {$e['cancel_reason']}" : ''));
             }
         }
+        // Cancelled counts: what each did when it took effect, and the stock taken back at the cancel.
+        foreach ($this->cancelledCounts($productId) as $e) {
+            if ($until($e['at'])) {
+                $moves[] = $move($e, $e['at'], $e['counted'] - $e['system'], $e['counted'],
+                    "นับได้ {$e['counted']} · ในระบบตอนปรับ {$e['system']} · ยกเลิกภายหลัง");
+            }
+            if ($until($e['cancelled_at'])) {
+                $moves[] = $move(['kind' => 'countvoid', 'user_name' => $e['cancelled_by'], 'ord' => 4] + $e, $e['cancelled_at'], $e['change'], null,
+                    "เหตุผล: {$e['reason']}" . ($e['change'] === 0 ? ' · สต๊อกไม่เปลี่ยน' : ''));
+            }
+        }
         usort($moves, fn ($a, $b) => [$b['at'], $b['ord'], $b['rid']] <=> [$a['at'], $a['ord'], $a['rid']]);
 
         $rows = [];
@@ -453,6 +465,32 @@ class InventoryService
             'balance' => $anchor, 'as_of' => $asOf, 'count_doc_no' => $countDoc,
             'rows' => array_slice($rows, 0, $limit), 'more' => max(0, count($rows) - $limit),
         ];
+    }
+
+    /** Counts of a product cancelled after they had taken effect, from the log StockCountService::cancelCount keeps. */
+    private function cancelledCounts(int $productId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT a.old_data, a.new_data, a.created_at, sci.id AS line_id, au.full_name AS approver, cu.full_name AS canceller
+             FROM audit_logs a
+             JOIN stock_count_items sci ON sci.id = a.record_id
+             JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             LEFT JOIN users au ON au.id = sc.approved_by LEFT JOIN users cu ON cu.id = a.user_id
+             WHERE a.table_name = 'stock_count_items' AND a.action = 'cancel' AND sci.product_id = ?"
+        );
+        $stmt->execute([$productId]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $old = (array) json_decode((string) $r['old_data'], true);
+            $new = (array) json_decode((string) $r['new_data'], true);
+            $out[] = [
+                'kind' => 'countcancelled', 'doc_no' => (string) ($old['doc_no'] ?? ''), 'user_name' => $r['approver'], 'rid' => (int) $r['line_id'], 'ord' => 3,
+                'at' => (string) ($old['approved_at'] ?? $r['created_at']), 'cancelled_at' => (string) $r['created_at'], 'cancelled_by' => $r['canceller'],
+                'system' => (int) ($old['system_qty'] ?? 0), 'counted' => (int) ($old['counted_qty'] ?? 0), 'reason' => (string) ($new['reason'] ?? ''),
+                'change' => (int) ($new['stock_after'] ?? 0) - (int) ($new['stock_before'] ?? 0),
+            ];
+        }
+        return $out;
     }
 
     /**

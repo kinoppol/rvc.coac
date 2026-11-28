@@ -182,6 +182,23 @@ class StockCountController
         return $this->json($response, ['data' => $data]);
     }
 
+    /**
+     * POST /stockcounts/lines/{id}/cancel {reason} — admin / manager cancels a wrong approved count.
+     * {preview: true} only checks it and says what the stock would become.
+     */
+    public function cancelCount(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        $body = (array) $request->getParsedBody();
+        try {
+            $data = $this->service()->cancelCount((int) $args['id'], (string) ($body['reason'] ?? ''), (int) $user['id'], (string) ($user['role'] ?? ''),
+                $request->getServerParams()['REMOTE_ADDR'] ?? null, !empty($body['preview']));
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), str_starts_with($e->getMessage(), 'เฉพาะ') ? 403 : 422);
+        }
+        return $this->json($response, ['data' => $data]);
+    }
+
     /** POST /stockcounts/lines/{id}/edit {counted, reason} — admin / manager corrects what was counted on an approved count. */
     public function editCount(Request $request, Response $response, array $args): Response
     {
