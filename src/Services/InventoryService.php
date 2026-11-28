@@ -1001,6 +1001,8 @@ class InventoryService
                 return [
                     'title' => 'ใบซื้อสินค้าเข้าร้าน ' . $d['doc_no'],
                     'link' => 'purchase',
+                    'purchase_id' => (int) $d['id'],
+                    'purchase_status' => (string) ($d['status'] ?? 'active'),
                     'note' => sprintf(
                         'ผู้ขาย %s · ใบเสร็จเลขที่ %s ลงวันที่ %s · ยอดรวม ฿%s (ส่วนลด ฿%s, VAT ฿%s) · บันทึกโดย %s เมื่อ %s%s%s',
                         $d['supplier_name'], $d['receipt_no'] ?: '-', $date($d['receipt_date']), number_format((float) $d['total'], 2),

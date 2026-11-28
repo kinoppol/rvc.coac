@@ -137,7 +137,7 @@ export async function openTrendCompare(productIds, navigate, { canAi = false } =
         box.querySelector('[data-bars]').addEventListener('click', () => { bars = !bars; draw(); });
         box.querySelectorAll('[data-metric]').forEach((b) => b.addEventListener('click', () => { metric = b.dataset.metric; draw(); }));
         box.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', () => { const it = items[Number(b.dataset.toggle)]; it.on = !it.on; draw(); }));
-        box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.open, navigate && ((page) => { close(); navigate(page); }))));
+        box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.open, navigate && ((page, params) => { close(); navigate(page, params); }))));
         chart(ks);
     }
 

@@ -77,12 +77,14 @@ export async function openDetailModal(load, navigate, opts = {}) {
         <button type="button" class="btn secondary" data-x>ปิด</button>
         ${d.count_edit && d.count_line ? '<button type="button" class="btn" data-count-one title="แก้จำนวนที่นับได้ ต้องระบุเหตุผล">✎ แก้ไขการนับ</button>' : ''}
         ${d.sale_edit ? '<button type="button" class="btn" data-sale-edit title="แก้รายการขายนี้ทันที โดยระบุสาเหตุ (เช่น พนักงานขายผิดสินค้า)">แก้ไขรายการขาย</button>' : ''}
-        ${d.link && navigate ? `<button type="button" class="btn" data-link>${escapeHtml(LINK_LABEL[d.link] || 'ไปที่หน้าที่เกี่ยวข้อง')}</button>` : ''}
+        ${d.purchase_edit && navigate ? `<button type="button" class="btn" data-purchase-edit title="เปิดใบนี้ในฟอร์มแก้ไขที่หน้าซื้อสินค้าเข้าร้าน">✎ ${escapeHtml(d.purchase_edit.label)}</button>`
+            : d.link && navigate ? `<button type="button" class="btn" data-link>${escapeHtml(LINK_LABEL[d.link] || 'ไปที่หน้าที่เกี่ยวข้อง')}</button>` : ''}
       </div>`;
     box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
     box.querySelector('[data-link]')?.addEventListener('click', () => { close(); navigate(d.link); });
+    box.querySelector('[data-purchase-edit]')?.addEventListener('click', () => { close(); navigate('purchase', { edit: d.purchase_edit.id }); });
     box.querySelectorAll('[data-source]').forEach((tr) => {
-        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page) => { close(); navigate(page); }), opts);
+        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page, params) => { close(); navigate(page, params); }), opts);
         tr.addEventListener('click', open);
         tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
     });

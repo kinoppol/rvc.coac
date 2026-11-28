@@ -755,7 +755,7 @@ export async function openProductModal(productId, navigate, opts = {}) {
             const [kind, docNo] = b.dataset.doc.split('|');
             openDetailModal(
                 async () => (await api.get(`/inventory/document?kind=${encodeURIComponent(kind)}&doc_no=${encodeURIComponent(docNo)}`)).data,
-                navigate && ((page) => { close(); navigate(page); }),
+                navigate && ((page, params) => { close(); navigate(page, params); }),
                 { onChange: refresh },
             );
         }));
@@ -838,7 +838,7 @@ export async function openOrderCheckModal(navigate) {
           <div class="modal-foot"><button type="button" class="btn secondary" data-x>ปิด</button></div>`;
         box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
         box.querySelectorAll('[data-only]').forEach((b) => b.addEventListener('click', () => { only = b.dataset.only; draw(); }));
-        box.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate && ((page) => { close(); navigate(page); }))));
+        box.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate && ((page, params) => { close(); navigate(page, params); }))));
     }
     draw();
 }

@@ -8,7 +8,7 @@ import { openDetailModal } from '../detail-modal.js';
  * invested, less money withdrawn from the profit, month by month next to the net profit.
  * This page records the withdrawals and other investments.
  */
-export async function render(container) {
+export async function render(container, { navigate } = {}) {
     let from = `${todayISO().slice(0, 4)}-01-01`;
     let to = todayISO();
     let data = null;
@@ -131,7 +131,7 @@ export async function render(container) {
         container.querySelectorAll('[data-close-form]').forEach((b) => b.addEventListener('click', () => { formOpen = false; error = null; draw(); }));
         container.querySelectorAll('[data-drill]').forEach((b) => b.addEventListener('click', () => {
             const m = data.months[Number(b.dataset.month)];
-            openDetailModal(async () => (await api.get(`/reports/capital/source?column=${b.dataset.drill}&from=${m._from}&to=${m._to}`)).data);
+            openDetailModal(async () => (await api.get(`/reports/capital/source?column=${b.dataset.drill}&from=${m._from}&to=${m._to}`)).data, navigate);
         }));
         $('#c-save')?.addEventListener('click', save);
         $('#f-from').addEventListener('change', (e) => { if (e.target.value) { from = e.target.value; load(); } });

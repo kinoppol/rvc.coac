@@ -160,7 +160,7 @@ export async function render(container, { permissions, user, navigate }) {
                     })),
                 }],
             };
-        });
+        }, navigate);
     }
 
     function bindDrill(redraw) {

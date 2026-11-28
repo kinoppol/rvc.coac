@@ -48,7 +48,7 @@ const RANGES = [
 ];
 const STATUSES = [['', 'ทั้งหมด'], ['draft', 'ร่างใบสั่งซื้อ'], ['ordered', 'รอส่งของ'], ['active', 'รับเข้าแล้ว'], ['cancelled', 'ยกเลิกแล้ว']];
 
-export async function render(container, { user } = {}) {
+export async function render(container, { user, params } = {}) {
     const isAdmin = user?.role === 'admin';
     let photos = []; // receipt evidence: [{ token, preview, mime?, name? }] — photos and .md files
     let header = emptyHeader();
@@ -119,6 +119,21 @@ export async function render(container, { user } = {}) {
     await loadDocs();
     draw();
     if (items.some((i) => i.name)) refreshPreview();
+    if (params?.edit) await openFromLink(params.edit);
+
+    /** #/purchase?edit=ID (a document's edit button elsewhere): that purchase opens in the form. */
+    async function openFromLink(id) {
+        // Opened once: reloading the page or coming back to it later shows the plain list.
+        history.replaceState(null, '', '#/purchase');
+        try {
+            const d = (await api.get(`/purchases/${encodeURIComponent(id)}`)).data;
+            if (d.status === 'cancelled') {
+                alertDialog(`ใบซื้อ ${d.doc_no} ถูกยกเลิกแล้ว แก้ไขไม่ได้`, { tone: 'error' });
+                return;
+            }
+            startEdit(d);
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+    }
 
     function loadDraftFromAssistant() {
         let draft = null;

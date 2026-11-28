@@ -372,6 +372,14 @@ class InventoryController
                 ? ['id' => $data['sale_id'], 'user' => ['id' => (int) $user['id'], 'role' => (string) $user['role']]]
                 : null;
         }
+        // A purchase not cancelled: whoever may record purchases opens it in the purchase form.
+        if (isset($data['purchase_id'])) {
+            $role = (string) ($request->getAttribute('user')['role'] ?? '');
+            $data['purchase_edit'] = $data['purchase_status'] !== 'cancelled' && $role !== \App\Middleware\ReadOnlyGuard::ROLE
+                && (new \App\Repositories\UserRepo($db))->hasPermission($role, 'purchase.create')
+                ? ['id' => $data['purchase_id'], 'label' => ['draft' => 'แก้ไขร่าง', 'ordered' => 'แก้ไขใบสั่งซื้อ'][$data['purchase_status']] ?? 'แก้ไขใบซื้อนี้']
+                : null;
+        }
         return $this->json($response, ['data' => $data]);
     }
 
