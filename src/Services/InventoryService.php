@@ -401,7 +401,7 @@ class InventoryService
         $move = fn (array $e, string $at, int $qty, ?int $after = null, ?string $note = null) => [
             'at' => $at, 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'] ?? null, 'user_name' => $e['user_name'],
             'qty' => $qty, 'after' => $after, 'note' => $note, 'ord' => (int) ($e['ord'] ?? 2), 'rid' => (int) ($e['rid'] ?? 0),
-            'line_id' => $e['kind'] === 'count' ? (int) $e['rid'] : null, 'date' => $e['date'] ?? null, 'correction' => false,
+            'line_id' => $e['kind'] === 'count' ? (int) $e['rid'] : null, 'date' => $e['date'] ?? null, 'correction' => false, 'logged_at' => $at,
         ];
         foreach ($this->stockEvents($productId) as $e) {
             // The count being looked at took effect after the figure it was compared with.
@@ -483,23 +483,55 @@ class InventoryService
         }
         usort($moves, fn ($a, $b) => [$b['at'], $b['ord'], $b['rid']] <=> [$a['at'], $a['ord'], $a['rid']]);
 
+        // Where unexplained figures come from: the logged stock changes no movement stands for.
+        $trace = new StockTraceService($this->db);
+        [$unpaired, $residual] = $trace->pair($trace->changes($productId), $moves);
+        // The count looked at took effect after the figure it was compared with: its own change is no source of it.
+        if ($lineId !== null) {
+            $unpaired = array_values(array_filter($unpaired, fn ($c) => ($c['new']['stock_count'] ?? null) !== $countDoc));
+        }
+        // Counted at a certified count's time, like the movements: what was put right while it waited.
+        foreach ($this->certifiedWindows($productId) as $countLine => $w) {
+            foreach ($unpaired as &$c) {
+                if ($countLine !== $lineId && $c['at'] > $w['from'] && $c['at'] <= $w['to']) {
+                    $c['logged_at'] = $c['at'];
+                    $c['at'] = date('Y-m-d H:i:s', strtotime($w['from']) - 1);
+                }
+            }
+            unset($c);
+        }
+
         $rows = [];
         $balance = $anchor;
         $extra = fn (string $kind, int $qty, int $after) => [
             'at' => null, 'kind' => $kind, 'doc_no' => null, 'party' => null, 'user_name' => null, 'qty' => $qty, 'balance' => $after, 'note' => null,
         ];
-        foreach ($moves as $m) {
-            if ($m['after'] !== null && $m['after'] !== $balance) {
-                $rows[] = $extra('gap', $balance - $m['after'], $balance);
-                $balance = $m['after'];
+        // An approved count settles the figure, so what is unexplained lies between it and the one above.
+        $upper = $asOf;
+        $span = [];
+        $explain = function (int $qty, ?string $from) use (&$upper, &$span, $unpaired, $trace) {
+            $inside = array_values(array_filter($unpaired, fn ($c) => ($from === null || $c['at'] > $from) && ($upper === null || $c['at'] <= $upper)));
+            $inside = array_map(fn ($c) => ['at' => $c['logged_at'] ?? $c['at']] + $c, $inside);
+            return $trace->explain($qty, $inside, $span) + ['from' => $from, 'to' => $upper];
+        };
+        foreach ($moves as $i => $m) {
+            if ($m['after'] !== null) {
+                if ($m['after'] !== $balance) {
+                    $gap = $balance - $m['after'];
+                    $rows[] = $extra('gap', $gap, $balance) + ['trace' => $explain($gap, $m['at'])];
+                    $balance = $m['after'];
+                }
+                $upper = $m['at'];
+                $span = [];
             }
+            $span[] = [$m, $residual[$i]];
             $qty = $m['qty'];
-            unset($m['after'], $m['ord'], $m['rid'], $m['date'], $m['correction'], $m['recorded']);
+            unset($m['after'], $m['ord'], $m['rid'], $m['date'], $m['correction'], $m['recorded'], $m['logged_at']);
             $rows[] = $m + ['balance' => $balance];
             $balance -= $qty;
         }
         if ($balance !== 0) {
-            $rows[] = $extra('opening', $balance, $balance);
+            $rows[] = $extra('opening', $balance, $balance) + ['trace' => $explain($balance, null)];
         }
         return [
             'product' => ['id' => (int) $p['id'], 'name' => $p['name'], 'qty_stock' => (int) $p['qty_stock']],

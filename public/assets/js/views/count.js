@@ -50,6 +50,40 @@ const LEDGER_KIND = {
     countwaiting: 'ตรวจนับ (รอรับรอง)', countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ', adjfixcancelled: 'แก้การปรับยอด (ยกเลิกแล้ว)', adjfixvoid: 'ยกเลิกการแก้การปรับยอด',
 };
 
+const signedQty = (n) => (n > 0 ? `+${n}` : String(n));
+const documentSource = (kind, docNo) => `/inventory/document?kind=${encodeURIComponent(kind)}&doc_no=${encodeURIComponent(docNo)}`;
+
+/** An unexplained figure of the ledger: a short account for its row, and the whole of it for a dialog. */
+function traceOf(r, product) {
+    const t = r.trace;
+    const lines = t.items.map((i) => `${i.what}${i.doc_no ? ` ${i.doc_no}` : ''} ${signedQty(i.change)}`);
+    if (t.unlogged) lines.push(`ไม่พบในประวัติ ${signedQty(t.unlogged)}`);
+    const brief = lines.slice(-3).join(' · ') + (lines.length > 3 ? ` · และอีก ${count(lines.length - 3 + t.more)} รายการ` : '');
+    const rows = t.items.map((i) => ({
+        at: i.at, doc: i.doc_no, what: i.what, who: i.user_name, change: signedQty(i.change),
+        stock: i.before === null ? null : `${i.before} → ${i.after}`,
+        _source: i.doc_no && i.doc_kind ? documentSource(i.doc_kind, i.doc_no) : null,
+    }));
+    if (t.unlogged) {
+        rows.push({ at: null, doc: null, who: null, stock: null, change: signedQty(t.unlogged),
+            what: 'ไม่พบในประวัติการเปลี่ยนสต๊อก (เช่น ยอดที่มีก่อนระบบเริ่มเก็บประวัติ หรือถูกแก้โดยไม่ผ่านรายการ) ตรวจหาจากเอกสารไม่ได้' });
+    }
+    return {
+        brief: brief ? `ที่มา: ${brief}` : 'ไม่พบที่มาในประวัติ',
+        detail: {
+            title: `ที่มาของยอด ${signedQty(r.qty)} ชิ้น: ${product}`,
+            note: `${LEDGER_KIND[r.kind]} · ช่วง${t.from ? `หลังการตรวจนับ ${fmtDateTime(t.from)}` : 'ตั้งแต่เริ่มมีสินค้า'} ถึง${t.to ? ` ${fmtDateTime(t.to)}` : 'ปัจจุบัน'} — รายการจากประวัติการเปลี่ยนสต๊อกที่ไม่มีแถวของตัวเองในบัญชี รวมกันเป็นยอดนี้ กดแถวที่มีเลขที่เพื่อเปิดเอกสาร`
+                + (t.more ? ` (แสดงเฉพาะรายการล่าสุด ยังมีเก่ากว่าอีก ${count(t.more)} รายการ)` : ''),
+            sections: [{
+                title: 'ที่มาของยอด', total: false,
+                columns: [['what', 'เกิดจาก', 'text'], ['doc', 'เลขที่เอกสาร', 'text'], ['at', 'บันทึกเมื่อ', 'datetime'], ['who', 'ผู้ทำ', 'text'],
+                    ['change', 'ยอดเปลี่ยน', 'text'], ['stock', 'สต๊อกก่อน → หลัง', 'text']],
+                rows,
+            }],
+        },
+    };
+}
+
 // What a count's difference is worth, at cost and at the sale price. Cost only comes to those who may see it.
 const worth = (v) => `${v < 0 ? 'หาย' : v > 0 ? 'เพิ่ม' : ''} ฿ ${money(Math.abs(v))}`.trim();
 const worthColor = (v) => (v < 0 ? 'color:var(--bad)' : v > 0 ? 'color:var(--ok)' : '');
@@ -161,12 +195,13 @@ export async function render(container, { permissions, user, navigate }) {
                     total: false,
                     columns: [['doc', 'เลขที่เอกสาร', 'text'], ['at', 'บันทึกเมื่อ', 'datetime'], ['what', 'รายการ', 'text'], ['who', 'คู่ค้า / ผู้ทำ', 'text'],
                         ['in', 'รับ', 'qty'], ['out', 'จ่าย', 'qty'], ['balance', 'ยอดหลังรายการ', 'qty']],
-                    rows: d.rows.map((r) => ({
-                        doc: r.doc_no, at: r.at,
-                        what: [LEDGER_KIND[r.kind] || r.kind, r.note].filter(Boolean).join(' · '),
+                    rows: d.rows.map((r) => ({ ...r, traced: r.trace ? traceOf(r, d.product.name) : null })).map((r) => ({
+                        // A row with no document opens where its figure came from.
+                        doc: r.doc_no || (r.traced ? 'ดูที่มา' : null), at: r.at, _detail: r.traced?.detail || null,
+                        what: [LEDGER_KIND[r.kind] || r.kind, r.note, r.traced?.brief].filter(Boolean).join(' · '),
                         who: [r.party, r.user_name].filter(Boolean).join(' · '),
                         in: r.qty > 0 ? r.qty : null, out: r.qty < 0 ? -r.qty : null, balance: r.balance,
-                        _source: r.doc_no && !r.kind.startsWith('adjfix') ? `/inventory/document?kind=${encodeURIComponent(r.kind.startsWith('count') ? 'count' : r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
+                        _source: r.doc_no && !r.kind.startsWith('adjfix') ? documentSource(r.kind.startsWith('count') ? 'count' : r.kind, r.doc_no) : null,
                         _cancel: d.can_cancel && r.kind === 'count' ? r.line_id : null,
                     })),
                 }],

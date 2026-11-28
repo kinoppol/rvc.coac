@@ -34,7 +34,7 @@ function actionCell(r, canEdit, column) {
     return `<td style="white-space:nowrap">${edit}${cancel ? cancelButton(cancel) : ''}</td>`;
 }
 
-function sectionHtml(sec, canEdit = false) {
+function sectionHtml(sec, canEdit = false, si = 0) {
     canEdit = canEdit && sec.rows.some((r) => r._line);
     const acts = canEdit || sec.rows.some((r) => r._cancel);
     const num = (c) => c[2] === 'money' || c[2] === 'qty';
@@ -43,9 +43,9 @@ function sectionHtml(sec, canEdit = false) {
       <h3 style="margin:16px 0 8px;font-size:14.5px">${escapeHtml(sec.title)} <span class="muted" style="font-weight:400">(${count(sec.rows.length)})</span></h3>
       ${sec.rows.length ? `<div class="table-wrap" style="max-height:340px;border:1px solid var(--border);border-radius:10px"><table>
         <thead><tr>${sec.columns.map((c) => `<th class="${num(c) ? 'num' : ''}">${escapeHtml(c[1])}</th>`).join('')}${acts ? '<th></th>' : ''}</tr></thead>
-        <tbody>${sec.rows.map((r) => (r._source
-            // A row with its own records: click opens them in another dialog on top.
-            ? `<tr class="drill-row" data-source="${escapeHtml(r._source)}" tabindex="0" title="กดเพื่อดูรายละเอียด">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? `<span class="drill-link">${cell(c[2], r[c[0]])}</span> <span class="drill-arrow">›</span>` : cell(c[2], r[c[0]])}</td>`).join('')}${actionCell(r, canEdit, acts)}</tr>`
+        <tbody>${sec.rows.map((r, ri) => (r._source || r._detail
+            // A row with its own records (fetched, or given with the row): click opens them in another dialog on top.
+            ? `<tr class="drill-row" ${r._source ? `data-source="${escapeHtml(r._source)}"` : `data-detail="${si}:${ri}"`} tabindex="0" title="กดเพื่อดูรายละเอียด">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? `<span class="drill-link">${cell(c[2], r[c[0]])}</span> <span class="drill-arrow">›</span>` : cell(c[2], r[c[0]])}</td>`).join('')}${actionCell(r, canEdit, acts)}</tr>`
             : `<tr>${sec.columns.map((c) => `<td class="${num(c) ? 'num' : ''}">${cell(c[2], r[c[0]])}</td>`).join('')}${actionCell(r, canEdit, acts)}</tr>`)).join('')}</tbody>
         ${sec.rows.length > 1 && totals.some((t) => t !== null) ? `<tfoot><tr style="font-weight:700">${sec.columns.map((c, i) => `<td class="${num(c) ? 'num' : ''}">${i === 0 ? 'รวม' : totals[i] === null ? '' : cell(c[2], totals[i])}</td>`).join('')}${acts ? '<td></td>' : ''}</tr></tfoot>` : ''}
       </table></div>` : '<div class="empty" style="padding:14px">ไม่มีรายการ</div>'}`;
@@ -83,7 +83,7 @@ export async function openDetailModal(load, navigate, opts = {}) {
       <div class="modal-head"><h2>${escapeHtml(d.title)}</h2><button type="button" class="modal-close" data-x aria-label="ปิด">✕</button></div>
       <div class="modal-body" style="padding-top:0">
         ${d.note ? `<div class="hint" style="margin-top:12px"><div class="dot">i</div><div>${escapeHtml(d.note)}</div></div>` : ''}
-        ${d.sections.map((s) => sectionHtml(s, !!d.count_edit)).join('')}
+        ${d.sections.map((s, si) => sectionHtml(s, !!d.count_edit, si)).join('')}
       </div>
       <div class="modal-foot">
         <button type="button" class="btn secondary" data-x>ปิด</button>
@@ -95,10 +95,12 @@ export async function openDetailModal(load, navigate, opts = {}) {
     box.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
     box.querySelector('[data-link]')?.addEventListener('click', () => { close(); navigate(d.link); });
     box.querySelector('[data-purchase-edit]')?.addEventListener('click', () => { close(); navigate('purchase', { edit: d.purchase_edit.id }); });
-    box.querySelectorAll('[data-source]').forEach((tr) => {
+    box.querySelectorAll('[data-source], [data-detail]').forEach((tr) => {
+        const [si, ri] = (tr.dataset.detail || '').split(':').map(Number);
+        const loadRow = tr.dataset.source ? async () => (await api.get(tr.dataset.source)).data : async () => d.sections[si].rows[ri]._detail;
         // Something changed from the dialog on top: this one and the page below read again.
         const onChange = async () => { await reload(); opts.onChange?.(); };
-        const open = () => openDetailModal(async () => (await api.get(tr.dataset.source)).data, navigate && ((page, params) => { close(); navigate(page, params); }), { ...opts, onChange });
+        const open = () => openDetailModal(loadRow, navigate && ((page, params) => { close(); navigate(page, params); }), { ...opts, onChange });
         // A button inside the row does its own job, not the row's.
         const own = (e) => e.target.closest('button');
         tr.addEventListener('click', (e) => { if (!own(e)) open(); });
