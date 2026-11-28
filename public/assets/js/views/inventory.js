@@ -11,6 +11,7 @@ import { openInventoryMobile } from '../inventory-mobile.js';
 import { openMobileCount } from './count-mobile.js';
 import { openTrendCompare, COMPARE_MAX } from '../trend-compare.js';
 import { fileToDataUrl, thumbDataUrl } from '../images.js';
+import { printCountSheet } from '../print-slip.js';
 
 const QR_LIB = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm';
 
@@ -251,6 +252,59 @@ export async function render(container, { navigate, permissions, user }) {
         if (wrap.classList.contains('boxed')) wrap.scrollTop += d; else window.scrollBy(0, d);
     }
 
+    /**
+     * Paper count sheet: the monthly count has no fixed day (a day the shop is closed, agreed by the
+     * manager and staff, before or after month end), so the count date and the month it is for are
+     * picked here. Lists what the table shows now, or every product loaded.
+     */
+    async function openCountSheet(shown) {
+        const today = todayISO();
+        const all = listedUnder('all');
+        // Counted in the first half of a month = most likely last month's count.
+        const monthOf = (iso) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            const back = d <= 15 ? new Date(Date.UTC(y, m - 2, 1)) : new Date(Date.UTC(y, m - 1, 1));
+            return back.toISOString().slice(0, 7);
+        };
+        const tabName = (FILTERS.find(([k]) => k === filter) || [])[1] || '';
+        const html = `
+          <div style="display:grid;gap:10px;margin-top:6px">
+            <label>วันที่ตรวจนับ<br><input type="date" data-cs-date value="${today}" style="width:100%"></label>
+            <label>ตรวจนับประจำเดือน<br><input type="month" data-cs-month value="${monthOf(today)}" style="width:100%"></label>
+            <div class="muted" style="font-size:12px">วันตรวจนับไม่ตายตัว (ตรงกับวันหยุดขายของร้าน ก่อนหรือหลังสิ้นเดือน) ตามที่ผู้จัดการและพนักงานตกลงกัน</div>
+            <label><input type="radio" name="cs-scope" value="shown" checked> รายการที่แสดงอยู่ (${escapeHtml(tabName)}${search ? ` · ค้นหา "${escapeHtml(search)}"` : ''}) ${count(shown.length)} รายการ</label>
+            <label><input type="radio" name="cs-scope" value="all"> สินค้าทั้งหมด${search ? ' ที่ค้นพบ' : ''} ${count(all.length)} รายการ</label>
+            <label><input type="checkbox" data-cs-store> เฉพาะสินค้าของร้าน (ไม่รวมสินค้าฝากขาย)</label>
+            <label><input type="checkbox" data-cs-name checked> เรียงตามชื่อสินค้า (ไม่ติ๊ก = เรียงตามตาราง)</label>
+          </div>`;
+        const ask = confirmDialog('', { title: '🖨️ พิมพ์ใบตรวจนับสินค้า', okText: 'พิมพ์', html, width: 460 });
+        // The dialog is on screen now; its fields keep their values after it closes.
+        const box = [...document.querySelectorAll('.app-dialog')].pop();
+        const date = box.querySelector('[data-cs-date]');
+        const month = box.querySelector('[data-cs-month]');
+        let monthTouched = false;
+        month.addEventListener('input', () => { monthTouched = true; });
+        date.addEventListener('input', () => { if (!monthTouched && date.value) month.value = monthOf(date.value); });
+        const scopeEls = [...box.querySelectorAll('input[name="cs-scope"]')];
+        const storeOnly = box.querySelector('[data-cs-store]');
+        const byName = box.querySelector('[data-cs-name]');
+        if (!(await ask)) return;
+        const useAll = scopeEls.find((r) => r.checked)?.value === 'all';
+        let list = useAll ? all : shown;
+        if (storeOnly.checked) list = list.filter((p) => p.consignor_id == null);
+        if (byName.checked) list = [...list].sort((a, b) => thCollator.compare(a.name || '', b.name || ''));
+        if (!list.length) {
+            await alertDialog('ไม่มีสินค้าที่จะพิมพ์');
+            return;
+        }
+        const scope = [useAll ? 'สินค้าทั้งหมด' : tabName, search ? `ค้นหา "${search}"` : '', storeOnly.checked ? 'เฉพาะสินค้าของร้าน' : '']
+            .filter(Boolean).join(' · ');
+        printCountSheet({
+            items: list.map((p) => ({ name: p.name, barcode: (p.barcode || '').trim() })),
+            countDate: date.value || '', month: month.value || '', scope,
+        });
+    }
+
     function draw() {
         const s = res.summary;
         let shown = sorted(listedUnder(filter));
@@ -267,6 +321,7 @@ export async function render(container, { navigate, permissions, user }) {
         <div class="actions-row" style="margin-bottom:12px">
           <button type="button" class="btn secondary" id="mobile-data" title="เปิดบนมือถือ: สแกนบาร์โค้ดด้วยกล้องเพื่อดูข้อมูล ผูกบาร์โค้ด และถ่ายรูปสินค้า">📱 เก็บข้อมูลด้วยมือถือ</button>
           ${canCount ? '<button type="button" class="btn secondary" id="quick-count" title="นับสินค้าทีละรายการโดยไม่ต้องเปิดรอบตรวจนับ: ถ่ายรูป ระบุที่นับ ยอดต่างจากระบบต้องระบุสาเหตุ ต่างเกิน 10 ชิ้นต้องให้ผู้จัดการรับรองก่อนจึงปรับสต๊อก (เมื่อไม่มีรอบตรวจนับเปิดอยู่)">🔢 นับรายการ</button>' : ''}
+          <button type="button" class="btn secondary" id="count-sheet" title="พิมพ์ใบตรวจนับสินค้าสำหรับนับด้วยกระดาษ: ลำดับ ชื่อสินค้า/บาร์โค้ด ช่องจำนวนที่นับได้ และหมายเหตุ กำหนดวันที่ตรวจนับและเดือนที่นับได้ก่อนพิมพ์">🖨️ พิมพ์ใบตรวจนับ</button>
         </div>
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">มูลค่าสต๊อก (ต้นทุน)</div><div class="val">฿ ${money(s.stock_cost_value)}</div>
@@ -338,6 +393,7 @@ export async function render(container, { navigate, permissions, user }) {
         container.querySelector('#mobile-data').addEventListener('click', () => openInventoryMobile({
             canLink: canEdit, canPhoto: permissions.includes('stockcount.create'), onClose: load,
         }));
+        container.querySelector('#count-sheet').addEventListener('click', () => openCountSheet(shown));
         container.querySelector('#quick-count')?.addEventListener('click', () => {
             openMobileCount({ quick: true, stockCount: null, items: [], onClose: load });
         });

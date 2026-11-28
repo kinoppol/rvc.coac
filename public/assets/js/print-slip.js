@@ -655,6 +655,74 @@ export function printClosingReport(r, { weekday, status, send }) {
     printHtml(html, { fitPage: true });
 }
 
+/**
+ * Prints a paper stock-count sheet (ใบตรวจนับสินค้า) on A4: order no., product name with its piece
+ * barcode below, a blank box for the counted quantity and one for notes. The monthly count has no
+ * fixed day (it falls on a day the shop is closed, before or after month end), so the count date
+ * and the month it is for are chosen when printing. items: [{ name, barcode }].
+ */
+export function printCountSheet({ items, countDate, month, scope = '' }) {
+    const thDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
+    const thMonth = (ym) => new Date(`${ym}-01T00:00:00`).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
+    const title = `ใบตรวจนับสินค้า${month ? ` ประจำเดือน${thMonth(month)}` : ''}`;
+    const html = `<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: 'THSarabun'; font-weight: 400; src: local('TH Sarabun New'), local('THSarabunNew'), local('TH SarabunPSK'), local('THSarabunPSK'); }
+  @font-face { font-family: 'THSarabun'; font-weight: 700; src: local('TH Sarabun New Bold'), local('THSarabunNew-Bold'), local('TH SarabunPSK Bold'), local('THSarabunPSK-Bold'); }
+  @page { size: A4; margin: 12mm 12mm 14mm; }
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #111; background: #fff; font-size: 16pt; line-height: 1.15; margin: 0; padding: 4mm; }
+  @media print { body { padding: 0; } }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 8px; }
+  h1 { font-size: 24pt; margin: 0; line-height: 1.1; }
+  .sub { color: #444; font-size: 15pt; }
+  .meta { text-align: right; font-size: 15pt; }
+  .meta b { font-size: 17pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 15pt; }
+  thead { display: table-header-group; }
+  th, td { border: 1px solid #777; padding: 3px 6px; vertical-align: middle; }
+  th { background: #eee; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  tr { page-break-inside: avoid; }
+  td { height: 11mm; }
+  .c { text-align: center; white-space: nowrap; }
+  .bc { font-family: ui-monospace, Consolas, monospace; font-size: 11pt; color: #444; }
+  .sign { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 40px; text-align: center; page-break-inside: avoid; font-size: 15pt; }
+  .sign .line { border-top: 1px dotted #111; margin: 0 10px 2px; padding-top: 2px; }
+  .foot { margin-top: 14px; font-size: 12pt; color: #666; display: flex; justify-content: space-between; }
+</style></head><body>
+  <div class="head">
+    <div><h1>${escapeHtml(title)}</h1><div class="sub">ร้านค้าสหการ${scope ? ` · ${escapeHtml(scope)}` : ''}</div></div>
+    <div class="meta">วันที่ตรวจนับ <b>${countDate ? escapeHtml(thDate(countDate)) : '........../........../..........'}</b><br>
+      รวม ${items.length.toLocaleString('th-TH')} รายการ</div>
+  </div>
+  <table>
+    <thead><tr>
+      <th class="c" style="width:13mm">ที่</th><th>ชื่อสินค้า / รหัสบาร์โค้ด</th>
+      <th class="c" style="width:32mm">จำนวนที่นับได้</th><th style="width:52mm">หมายเหตุ</th>
+    </tr></thead>
+    <tbody>${items.map((p, i) => `
+      <tr>
+        <td class="c">${i + 1}</td>
+        <td>${escapeHtml(p.name)}${p.barcode ? `<div class="bc">${escapeHtml(p.barcode)}</div>` : ''}</td>
+        <td></td><td></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  <div class="sign">
+    <div><div class="line">(.......................................)</div>ผู้ตรวจนับ</div>
+    <div><div class="line">(.......................................)</div>ผู้ตรวจนับ</div>
+    <div><div class="line">(.......................................)</div>ผู้จัดการร้าน</div>
+  </div>
+  <div class="foot"><span>นับแล้วบันทึกผลในระบบที่หน้าตรวจนับสต๊อก</span><span>พิมพ์เมื่อ ${escapeHtml(fmtNow())}</span></div>
+</body></html>`;
+    printHtml(html);
+}
+
 function printHtml(html, { fitPage = false } = {}) {
     // Inside the mobile app the page goes to Android's print service (print or save as PDF).
     if (window.CoacApp?.printHtml) {
