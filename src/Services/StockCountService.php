@@ -391,7 +391,7 @@ class StockCountService
      * the stock ledger still shows what happened. $preview: only check and work out the effect.
      *
      * A count of the product waiting for a manager does not hold it up, and is left as recorded:
-     * certifying it later sets the stock to the number counted.
+     * certifying it later sets the stock from the number counted (see certification()).
      * Stock card corrections (SA-...) of this count's adjustments are cancelled with it, taking
      * their pieces back too unless a count approved after the correction has set the stock since.
      *
@@ -814,12 +814,13 @@ class StockCountService
     }
 
     /**
-     * A manager certifies an item count that was too far off to take effect by itself. Goods may
-     * have been sold or received since it was counted, so the stock moves by the difference found
-     * then (not to the number counted): what is on the shelf now. The line keeps the count as it
-     * stands on the stock card from now on (dated today: the system before, the stock after); what
-     * was counted and what the system said then stay in count_qty / count_system_qty.
-     * Nobody certifies their own count, except an admin.
+     * A manager certifies an item count that was too far off to take effect by itself. It takes
+     * effect at the moment of counting, not of certifying: the stock was then the number counted,
+     * and goods sold or received since come on top of it (see certification()). The count is dated
+     * and timed as counted (count_date, approved_at), so the stock card and ledger run on from
+     * there; the line keeps the stock the system now holds for that moment (system_qty) next to the
+     * number counted, and count_qty / count_system_qty stay as recorded. When it was certified is
+     * in the audit log. Nobody certifies their own count, except an admin.
      */
     public function approveItem(int $stockCountId, int $userId, string $role, ?string $note, ?string $ip): array
     {
@@ -833,23 +834,33 @@ class StockCountService
             $stmt->execute([$line['product_id']]);
             $old = $stmt->fetch();
             $now = (int) $old['qty_stock'];
-            // Certified: the stock is the number counted, whatever the system holds by now.
-            $after = (int) ($line['count_qty'] ?? $line['counted_qty']);
+            $counted = (int) ($line['count_qty'] ?? $line['counted_qty']);
+            $countedAt = (string) ($line['counted_at'] ?? $sc['created_at']);
+            $c = $this->certification((int) $line['product_id'], $counted, $countedAt, $now);
+            $after = $c['stock'];
             $this->db->prepare('UPDATE stock_count_items SET system_qty = ?, counted_qty = ?, diff_qty = ? WHERE id = ?')
-                ->execute([$now, $after, $after - $now, $line['id']]);
+                ->execute([$c['system'], $counted, $counted - $c['system'], $line['id']]);
+            if ($c['superseded']) {
+                $held = $counted + $c['moved'];
+                $this->db->prepare('UPDATE stock_count_items SET diff_qty = counted_qty - ?, system_qty = ? WHERE id = ?')
+                    ->execute([$held, $held, $c['later_line']]);
+                $this->audit->log('stock_count_items', $c['later_line'], 'update', null,
+                    ['system_qty' => $held, 'note' => "รับรอง {$sc['doc_no']} ที่นับก่อนหน้า ยอดในระบบของการนับนี้จึงเริ่มจากยอดนั้น"], $userId, $ip);
+            }
             if ($after !== $now) {
                 $this->db->prepare('UPDATE products SET qty_stock = ? WHERE id = ?')->execute([$after, $line['product_id']]);
                 $this->audit->log('products', (int) $line['product_id'], 'update', $old, ['qty_stock' => $after, 'stock_count' => $sc['doc_no']], $userId, $ip);
             }
             $note = self::clip($note, 255);
             $this->db->prepare(
-                "UPDATE stock_counts SET status = 'approved', count_date = CURDATE(), approved_by = ?, approved_at = NOW(), review_note = ? WHERE id = ?"
-            )->execute([$userId, $note, $stockCountId]);
+                "UPDATE stock_counts SET status = 'approved', count_date = DATE(?), approved_by = ?, approved_at = ?, review_note = ? WHERE id = ?"
+            )->execute([$countedAt, $userId, $countedAt, $note, $stockCountId]);
             $this->audit->log('stock_counts', $stockCountId, 'approve', ['status' => 'submitted'], [
-                'status' => 'approved', 'stock_before' => $now, 'stock_after' => $after, 'review_note' => $note,
+                'status' => 'approved', 'effective_at' => $countedAt, 'counted_qty' => $counted, 'moved_after' => $c['moved'],
+                'stock_before' => $now, 'stock_after' => $after, 'review_note' => $note,
             ], $userId, $ip);
             $this->db->commit();
-            return ['doc_no' => $sc['doc_no'], 'stock_before' => $now, 'stock_after' => $after];
+            return ['doc_no' => $sc['doc_no'], 'stock_before' => $now, 'stock_after' => $after, 'counted' => $counted, 'moved' => $c['moved']];
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
@@ -887,6 +898,75 @@ class StockCountService
     }
 
     /**
+     * What certifying a waiting count does, taking effect when it was counted: the stock now becomes
+     * the number counted plus the goods moved since, and the system figure for that moment is what
+     * the stock now (corrections included) was before those moves. When the product was counted (or
+     * set by a payout) again afterwards, that later figure stands: the stock stays, and this count
+     * goes into the history before it (the later count's system figure then starts from this one).
+     *
+     * @return array{system:int, moved:int, stock:int, superseded:bool, later_line:?int}
+     */
+    private function certification(int $productId, int $counted, string $countedAt, int $now): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT sci.id, sci.system_qty, sc.approved_at FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sc.approved_at > ?
+             ORDER BY sc.approved_at, sci.id LIMIT 1"
+        );
+        $stmt->execute([$productId, $countedAt]);
+        $later = $stmt->fetch();
+        $moves = (new InventoryService($this->db))->goodsMovedAfter($productId, $countedAt, $later ? (string) $later['approved_at'] : null);
+        $moved = (int) array_sum(array_column($moves, 'qty'));
+        return [
+            'system' => ($later ? (int) $later['system_qty'] : $now) - $moved,
+            'moved' => $moved,
+            'stock' => $later ? $now : $counted + $moved,
+            'superseded' => (bool) $later,
+            'later_line' => $later ? (int) $later['id'] : null,
+        ];
+    }
+
+    /**
+     * The stock ledger a waiting count would leave when certified: the count at its own time, then
+     * every movement of goods since, newest first (the same shape as InventoryService::ledger).
+     */
+    public function certificationLedger(int $productId, int $lineId): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT sci.*, sc.doc_no, sc.created_at AS sc_created_at, p.name, p.qty_stock, u.full_name AS counter
+             FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
+             LEFT JOIN users u ON u.id = sci.counted_by
+             WHERE sci.id = ? AND sci.product_id = ? AND sc.status = 'submitted'"
+        );
+        $stmt->execute([$lineId, $productId]);
+        $l = $stmt->fetch();
+        if (!$l) {
+            return null;
+        }
+        $counted = (int) ($l['count_qty'] ?? $l['counted_qty']);
+        $at = (string) ($l['counted_at'] ?? $l['sc_created_at']);
+        $c = $this->certification($productId, $counted, $at, (int) $l['qty_stock']);
+        $row = fn (string $kind, ?string $when, ?string $doc, ?string $party, ?string $user, int $qty, int $balance, ?string $note = null) => [
+            'at' => $when, 'kind' => $kind, 'doc_no' => $doc, 'party' => $party, 'user_name' => $user, 'qty' => $qty, 'balance' => $balance, 'note' => $note, 'line_id' => null,
+        ];
+        $balance = $counted;
+        $rows = [$row('countwaiting', $at, $l['doc_no'], null, $l['counter'], $counted - $c['system'], $balance,
+            "นับได้ {$counted} · ยอดในระบบ ณ เวลานับ {$c['system']}")];
+        foreach ((new InventoryService($this->db))->goodsMovedAfter($productId, $at) as $e) {
+            if ($c['superseded']) {
+                break;
+            }
+            $balance += (int) $e['qty'];
+            array_unshift($rows, $row($e['kind'], (string) $e['at'], $e['doc_no'], $e['party'], $e['user_name'], (int) $e['qty'], $balance));
+        }
+        return [
+            'product' => ['id' => $productId, 'name' => $l['name'], 'qty_stock' => (int) $l['qty_stock']],
+            'balance' => $c['stock'], 'as_of' => $at, 'count_doc_no' => $l['doc_no'], 'counted' => $counted, 'moved' => $c['moved'],
+            'superseded' => $c['superseded'], 'rows' => $rows, 'more' => 0,
+        ];
+    }
+
+    /**
      * Item counts with everything recorded about them: those waiting for a manager first, then
      * the latest ones (optionally one product's only).
      */
@@ -917,7 +997,9 @@ class StockCountService
                     sci.id AS line_id, {$edit}, sci.product_id, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.counted_by, sci.counted_at,
                     sci.count_system_qty, sci.count_qty, sci.count_place, sci.count_method, sci.count_note, sci.diff_reason, sci.diff_detail,
                     p.name, p.barcode, p.image_token, p.qty_stock, p.sale_price, p.cost_price, p.consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name,
-                    cu.full_name AS counter_name, au.full_name AS approver_name, xu.full_name AS canceller_name
+                    cu.full_name AS counter_name, au.full_name AS approver_name, xu.full_name AS canceller_name,
+                    (SELECT a.created_at FROM audit_logs a WHERE a.table_name = 'stock_counts' AND a.record_id = sc.id AND a.new_data LIKE '%\"effective_at\"%'
+                     ORDER BY a.id DESC LIMIT 1) AS certified_at
              FROM stock_counts sc
              JOIN stock_count_items sci ON sci.stock_count_id = sc.id
              JOIN products p ON p.id = sci.product_id
@@ -939,8 +1021,13 @@ class StockCountService
             $r['reason_label'] = $r['diff_reason'] !== null ? (self::DIFF_REASONS[$r['diff_reason']] ?? $r['diff_reason']) : null;
             // Approved: whether correcting it moves the stock now (no later count of the product).
             $r['latest'] = $r['status'] === 'approved' && $this->isLatestCount(['id' => $r['line_id'], 'product_id' => $r['product_id']], $r);
-            // Waiting: what the stock becomes if certified (the number counted).
-            $r['stock_if_approved'] = $r['status'] === 'submitted' ? (int) ($r['count_qty'] ?? $r['counted_qty']) : null;
+            // Waiting: what the stock becomes if certified (the number counted, plus goods moved since).
+            $r['stock_if_approved'] = $r['moved_since'] = null;
+            $r['superseded'] = false;
+            if ($r['status'] === 'submitted') {
+                $c = $this->certification((int) $r['product_id'], (int) ($r['count_qty'] ?? $r['counted_qty']), (string) ($r['counted_at'] ?? $r['created_at']), (int) $r['qty_stock']);
+                [$r['stock_if_approved'], $r['moved_since'], $r['superseded']] = [$c['stock'], $c['moved'], $c['superseded']];
+            }
         }
         unset($r);
         return [

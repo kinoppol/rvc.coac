@@ -79,7 +79,7 @@ export function dailySeries(d) {
 }
 
 const ADJ_CAUSE = {
-    late: 'เอกสารบันทึกหลังอนุมัติตรวจนับ',
+    late: 'เอกสารบันทึกหลังการนับมีผล',
     early: 'เอกสารบันทึกก่อนอนุมัติตรวจนับ',
     cancelled: 'เอกสารยกเลิกหลังอนุมัติตรวจนับ',
     unknown: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง',
@@ -190,7 +190,7 @@ export async function openProductModal(productId, navigate, opts = {}) {
               }
               if (r.kind === 'adjfix') detail = fixDetail(r, i);
               const when = adjust
-                  ? (r.at ? `<div class="muted" style="font-size:11.5px">เกิดเมื่อ ${escapeHtml(fmtDateTime(r.at))}<br>(ตอนอนุมัติตรวจนับ)</div>`
+                  ? (r.at ? `<div class="muted" style="font-size:11.5px">เกิดเมื่อ ${escapeHtml(fmtDateTime(r.at))}<br>(เวลาที่การนับมีผล)</div>`
                       : '<div class="pm-late">ไม่ทราบเวลาที่เกิด</div>')
                   : r.late ? `<div class="pm-late" title="บันทึกเข้าระบบหลังวันที่ในเอกสาร">บันทึกล่าช้า ${escapeHtml(fmtDateTime(r.at))}</div>`
                   : r.at ? `<div class="muted" style="font-size:11.5px">บันทึก ${escapeHtml(fmtDateTime(r.at))}</div>` : '';

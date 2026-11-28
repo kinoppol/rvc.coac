@@ -47,7 +47,7 @@ const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' 
 const LEDGER_KIND = {
     purchase: 'ซื้อเข้า', receive: 'รับฝาก', sale: 'ขาย', pos: 'ขาย (นำเข้า POS)', return: 'คืนผู้ฝาก', count: 'ตรวจนับ', adjfix: 'แก้การปรับยอด',
     split: 'แยกสินค้า', damage: 'สินค้าเสียหาย', gap: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง', opening: 'ยอดก่อนรายการแรก (ไม่มีเอกสารอ้างอิง)',
-    countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ', adjfixcancelled: 'แก้การปรับยอด (ยกเลิกแล้ว)', adjfixvoid: 'ยกเลิกการแก้การปรับยอด',
+    countwaiting: 'ตรวจนับ (รอรับรอง)', countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ', adjfixcancelled: 'แก้การปรับยอด (ยกเลิกแล้ว)', adjfixvoid: 'ยกเลิกการแก้การปรับยอด',
 };
 
 // What a count's difference is worth, at cost and at the sale price. Cost only comes to those who may see it.
@@ -140,14 +140,22 @@ export async function render(container, { permissions, user, navigate }) {
           <div style="margin-top:3px">${cost}${line('ขาย', Number(r.sale_price || 0), 'ราคาขายปัจจุบัน')}</div>`;
     }
 
-    /** onChange: a count was cancelled (or something else changed) from the ledger. */
-    function openLedger(productId, lineId, onChange) {
+    /**
+     * onChange: a count was cancelled (or something else changed) from the ledger.
+     * preview: the ledger waiting count `lineId` would leave when certified.
+     */
+    function openLedger(productId, lineId, onChange, preview = false) {
         openDetailModal(async () => {
-            const d = (await api.get(`/inventory/${productId}/ledger${lineId ? `?line=${lineId}` : ''}`)).data;
+            const d = (await api.get(`/inventory/${productId}/ledger${lineId ? `?line=${lineId}${preview ? '&preview=1' : ''}` : ''}`)).data;
+            const title = preview ? `ยอดหลังรับรอง ${d.count_doc_no}` : lineId ? `ที่มาของยอดในระบบตอนนับ ${d.count_doc_no}` : 'ที่มาของยอดสต๊อกตอนนี้';
+            const note = !preview
+                ? `ยอด ${count(d.balance)} ชิ้น${d.as_of ? ` ณ ${fmtDateTime(d.as_of)}` : ''} — รายการล่าสุดอยู่บนสุด เรียงตามเวลาที่บันทึกเข้าระบบ “ยอดหลังรายการ” แถวบนสุดคือยอดนี้ กดแถวเพื่อเปิดเอกสาร`
+                    + (d.more ? ` (แสดงเฉพาะรายการล่าสุด ยังมีเก่ากว่าอีก ${count(d.more)} รายการ)` : '')
+                : d.superseded ? `มีการนับ/ปรับยอดสินค้านี้หลังการนับนี้แล้ว รับรองแล้วสต๊อกคงเป็น ${count(d.balance)} ชิ้น การนับนี้เข้าไปเป็นประวัติก่อนรายการนั้น`
+                    : `การนับมีผล ณ เวลาที่นับ ${fmtDateTime(d.as_of)}: นับได้ ${count(d.counted)} ${d.moved ? `บวก/ลบรายการหลังเวลานับ ${signed(d.moved)} ` : '(ไม่มีรายการหลังเวลานับ) '}= สต๊อกหลังรับรอง ${count(d.balance)} ชิ้น — ถ้ารายการใดเป็นของที่เข้า/ออกก่อนนับ ให้แก้วันที่ในเอกสารนั้นก่อนรับรอง กดแถวเพื่อเปิดเอกสาร`;
             return {
-                title: `${lineId ? `ที่มาของยอดในระบบตอนนับ ${d.count_doc_no}` : 'ที่มาของยอดสต๊อกตอนนี้'}: ${d.product.name}`,
-                note: `ยอด ${count(d.balance)} ชิ้น${d.as_of ? ` ณ ${fmtDateTime(d.as_of)}` : ''} — รายการล่าสุดอยู่บนสุด เรียงตามเวลาที่บันทึกเข้าระบบ “ยอดหลังรายการ” แถวบนสุดคือยอดนี้ กดแถวเพื่อเปิดเอกสาร`
-                    + (d.more ? ` (แสดงเฉพาะรายการล่าสุด ยังมีเก่ากว่าอีก ${count(d.more)} รายการ)` : ''),
+                title: `${title}: ${d.product.name}`,
+                note,
                 sections: [{
                     title: 'รายการเดินบัญชี',
                     total: false,
@@ -166,10 +174,20 @@ export async function render(container, { permissions, user, navigate }) {
         }, navigate, { onChange });
     }
 
+    /** What the stock becomes when a waiting count is certified, and what moved since it was counted. */
+    function afterCertify(r) {
+        const open = (inner, cls) => (canDrill
+            ? `<button type="button" class="${cls}" data-certify-ledger="${r.product_id}" data-line="${r.line_id}" title="ดูรายการเดินบัญชีตั้งแต่เวลาที่นับ">${inner}</button>`
+            : inner);
+        const why = r.superseded ? 'มีการนับครั้งหลังแล้ว' : r.moved_since ? `นับได้ ${r.count_qty} · หลังนับ ${signed(r.moved_since)}` : '';
+        return `${open(`<b>${r.stock_if_approved}</b>`, 'link-btn')}${why ? `<div class="muted" style="font-size:11.5px;white-space:nowrap">${why}</div>` : ''}`;
+    }
+
     function bindDrill(redraw) {
         const reload = async () => { await loadItems(); await loadReport(); redraw(); };
         container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate, { onChange: reload })));
         container.querySelectorAll('[data-ledger]').forEach((b) => b.addEventListener('click', () => openLedger(b.dataset.ledger, b.dataset.line, reload)));
+        container.querySelectorAll('[data-certify-ledger]').forEach((b) => b.addEventListener('click', () => openLedger(b.dataset.certifyLedger, b.dataset.line, reload, true)));
     }
 
     async function loadList() {
@@ -371,7 +389,7 @@ export async function render(container, { permissions, user, navigate }) {
             return `<span class="pill">ไม่รับรอง / ยกเลิก</span><div style="font-size:12px" class="muted">${escapeHtml(r.canceller_name || '-')} · ${escapeHtml(fmtDateTime(r.cancelled_at))}<br>เหตุผล: ${escapeHtml(r.cancel_reason || '-')}</div>`;
         }
         const certified = Math.abs(r.diff_at_count) > itemData.approval_over;
-        return `<span class="pill ok">${certified ? 'รับรองแล้ว' : 'ปรับสต๊อกแล้ว'}</span>${certified ? `<div style="font-size:12px" class="muted">โดย ${escapeHtml(r.approver_name || '-')} · ${escapeHtml(fmtDateTime(r.approved_at))}<br>สต๊อก ${r.system_qty} → ${r.counted_qty}${r.review_note ? `<br>ความเห็น: ${escapeHtml(r.review_note)}` : ''}</div>` : ''}`;
+        return `<span class="pill ok">${certified ? 'รับรองแล้ว' : 'ปรับสต๊อกแล้ว'}</span>${certified ? `<div style="font-size:12px" class="muted">โดย ${escapeHtml(r.approver_name || '-')} · ${escapeHtml(fmtDateTime(r.certified_at || r.approved_at))}<br>ณ เวลามีผล สต๊อก ${r.system_qty} → ${r.counted_qty}${r.review_note ? `<br>ความเห็น: ${escapeHtml(r.review_note)}` : ''}</div>` : ''}`;
     }
 
     /** The item-count card: start counting (no round open), counts waiting for a manager, and the latest ones. */
@@ -397,7 +415,7 @@ export async function render(container, { permissions, user, navigate }) {
           </div>
           ${pend.length ? `
             <div class="card-pad" style="padding-top:0"><b style="color:var(--bad)">รอผู้จัดการรับรอง (${pend.length})</b>
-              <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · รับรองแล้วสต๊อกจะเป็นยอดที่นับได้ · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
+              <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · การรับรองมีผล ณ เวลาที่นับ: สต๊อก = ยอดที่นับได้ บวก/ลบรายการรับเข้าและขายหลังเวลานั้น (กดยอดหลังรับรองเพื่อดูรายการ) · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
             <div class="table-wrap"><table>
               <thead><tr>${headHtml('pending', PENDING_COLUMNS)}</tr></thead>
               <tbody>${shown.map((r, i) => {
@@ -410,7 +428,7 @@ export async function render(container, { permissions, user, navigate }) {
                     <td>${diffCell(r)}</td>
                     <td>${itemDetail(r)}</td>
                     <td>${itemPhotos(r)}</td>
-                    <td class="num">${ledgerLink(r.qty_stock, r.product_id)} → <b>${r.stock_if_approved}</b></td>
+                    <td class="num">${ledgerLink(r.qty_stock, r.product_id)} → ${afterCertify(r)}</td>
                     <td style="white-space:nowrap">
                       ${canCertify ? `<button type="button" class="btn sm" data-item-ok="${i}">รับรอง</button>` : ''}
                       ${itemData.can_approve && !mine ? `<button type="button" class="btn secondary sm" data-item-no="${i}">ไม่รับรอง</button>` : ''}
@@ -534,7 +552,7 @@ export async function render(container, { permissions, user, navigate }) {
 
     async function certifyItem(r, redraw) {
         const note = await promptDialog(
-            `${r.name}: ${r.counter_name || '-'} นับได้ ${r.count_qty} ในระบบตอนนับ ${r.count_system_qty} (${signed(r.diff_at_count)}) สาเหตุ: ${r.reason_label || '-'} — ${r.diff_detail || ''}\n\nรับรองแล้วสต๊อกจะเปลี่ยนจาก ${r.qty_stock} เป็น ${r.stock_if_approved} ชิ้น`,
+            `${r.name}: ${r.counter_name || '-'} นับได้ ${r.count_qty} ในระบบตอนนับ ${r.count_system_qty} (${signed(r.diff_at_count)}) สาเหตุ: ${r.reason_label || '-'} — ${r.diff_detail || ''}\n\nมีผล ณ เวลาที่นับ ${fmtDateTime(r.counted_at || r.created_at)}${r.superseded ? ' · มีการนับ/ปรับยอดครั้งหลังแล้ว สต๊อกตอนนี้ไม่เปลี่ยน' : r.moved_since ? ` · นับได้ ${r.count_qty} และมีรายการหลังเวลานับ ${signed(r.moved_since)}` : ''}\nรับรองแล้วสต๊อกจะเปลี่ยนจาก ${r.qty_stock} เป็น ${r.stock_if_approved} ชิ้น`,
             { title: `รับรองการนับ ${r.doc_no}?`, okText: 'รับรองและปรับสต๊อก', placeholder: 'ความเห็นผู้รับรอง (ถ้ามี) เช่น ตรวจนับซ้ำแล้วตรงกัน', multiline: true }
         );
         if (note === null) return;

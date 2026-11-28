@@ -56,11 +56,16 @@ class InventoryController
         return $this->json($response, ['data' => $rows]);
     }
 
-    /** GET /inventory/{id}/ledger[?line=] — the movements behind the stock now, or behind a count line's system figure. */
+    /** GET /inventory/{id}/ledger[?line=[&preview=1]] — the movements behind the stock now, behind a count line's system figure, or after certifying a waiting line. */
     public function ledger(Request $request, Response $response, array $args): Response
     {
-        $line = (int) ($request->getQueryParams()['line'] ?? 0);
-        $data = (new InventoryService(Db::connection()))->ledger((int) $args['id'], $line > 0 ? $line : null);
+        $q = $request->getQueryParams();
+        $line = (int) ($q['line'] ?? 0);
+        $db = Db::connection();
+        // ?preview=1: the ledger a waiting count (line) would leave when certified.
+        $data = !empty($q['preview'])
+            ? (new StockCountService($db, new DocumentNumberService($db), new AuditLogger($db)))->certificationLedger((int) $args['id'], $line)
+            : (new InventoryService($db))->ledger((int) $args['id'], $line > 0 ? $line : null);
         if ($data === null) {
             return $this->error($response, 'ไม่พบสินค้าหรือรายการนับ', 404);
         }

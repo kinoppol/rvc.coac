@@ -273,6 +273,7 @@ class InventoryService
             ]);
         }
         $cancelled = $this->cancelledEvents($productId);
+        $windows = $this->certifiedWindows($productId);
         $fixes = (new StockAdjustmentService($this->db, new DocumentNumberService($this->db), new AuditLogger($this->db)))->forProduct($productId);
         // The correction made to an adjustment row (one per count and cause), if any.
         $fixOf = function (?string $countDoc, string $cause) use ($fixes): ?array {
@@ -301,7 +302,7 @@ class InventoryService
                 'sale_price' => $e['sale_price'], 'balance' => $balance, 'note' => $note,
             ] + ($e['kind'] === 'adjfix' ? ['fix' => $fixes[(int) $e['rid']] ?? null] : []));
             if ($e['kind'] === 'count') {
-                foreach ($this->countAdjustments($events, $i, $cancelled) as $a) {
+                foreach ($this->countAdjustments($events, $i, $cancelled, $windows[(int) $e['rid']] ?? null) as $a) {
                     $balance += $a['qty'];
                     $rows[] = $row($a + ['unit_cost' => $cost, 'value' => round($a['qty'] * $cost, 2), 'balance' => $balance,
                         'fix' => $fixOf($a['doc_no'], $a['reason'])]);
@@ -400,7 +401,7 @@ class InventoryService
         $move = fn (array $e, string $at, int $qty, ?int $after = null, ?string $note = null) => [
             'at' => $at, 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'] ?? null, 'user_name' => $e['user_name'],
             'qty' => $qty, 'after' => $after, 'note' => $note, 'ord' => (int) ($e['ord'] ?? 2), 'rid' => (int) ($e['rid'] ?? 0),
-            'line_id' => $e['kind'] === 'count' ? (int) $e['rid'] : null,
+            'line_id' => $e['kind'] === 'count' ? (int) $e['rid'] : null, 'date' => $e['date'] ?? null, 'correction' => false,
         ];
         foreach ($this->stockEvents($productId) as $e) {
             // The count being looked at took effect after the figure it was compared with.
@@ -425,8 +426,9 @@ class InventoryService
                 $moves[] = $move($e, (string) $e['at'], (int) $e['qty'], null, 'เอกสารนี้ถูกยกเลิกภายหลัง');
             }
             if ($until((string) $e['cancelled_at'])) {
-                $moves[] = $move(['user_name' => $e['cancelled_by']] + $e, (string) $e['cancelled_at'], -(int) $e['qty'], null,
+                $reversal = $move(['user_name' => $e['cancelled_by']] + $e, (string) $e['cancelled_at'], -(int) $e['qty'], null,
                     'ยกเลิกเอกสาร' . ($e['cancel_reason'] ? ": {$e['cancel_reason']}" : ''));
+                $moves[] = ['correction' => true, 'recorded' => (string) $e['at']] + $reversal;
             }
         }
         // Cancelled counts: what each did when it took effect, and the stock taken back at the cancel.
@@ -457,6 +459,28 @@ class InventoryService
                     "เหตุผล: {$e['reason']}" . ($e['change'] === 0 ? ' · สต๊อกไม่เปลี่ยน' : ''));
             }
         }
+        // A count certified later holds from the moment of counting: what was put right while it
+        // waited goes just before it (not on the view of what the system held at that count).
+        foreach ($this->certifiedWindows($productId) as $countLine => $w) {
+            if ($countLine === $lineId) {
+                continue;
+            }
+            foreach ($moves as &$m) {
+                // Its own cancel is never part of what its certification took into account.
+                if ($m['kind'] === 'countvoid' && $m['rid'] === $countLine) {
+                    continue;
+                }
+                // Cancelling a document keyed in after the count is part of what happened after it.
+                if (isset($m['recorded']) && $m['recorded'] > $w['from'] && $this->movedGoods(['correction' => false] + $m, $w['from'], $w['sold_before'])) {
+                    continue;
+                }
+                if ($this->absorbed($m, $w)) {
+                    $m['note'] = trim(($m['note'] ? $m['note'] . ' · ' : '') . 'บันทึกเมื่อ ' . date('d/m H:i', strtotime($m['at'])) . ' ระหว่างรอรับรอง');
+                    $m['at'] = date('Y-m-d H:i:s', strtotime($w['from']) - 1);
+                }
+            }
+            unset($m);
+        }
         usort($moves, fn ($a, $b) => [$b['at'], $b['ord'], $b['rid']] <=> [$a['at'], $a['ord'], $a['rid']]);
 
         $rows = [];
@@ -470,7 +494,7 @@ class InventoryService
                 $balance = $m['after'];
             }
             $qty = $m['qty'];
-            unset($m['after'], $m['ord'], $m['rid']);
+            unset($m['after'], $m['ord'], $m['rid'], $m['date'], $m['correction'], $m['recorded']);
             $rows[] = $m + ['balance' => $balance];
             $balance -= $qty;
         }
@@ -535,6 +559,78 @@ class InventoryService
     }
 
     /**
+     * Counts certified after they were made take effect at the moment of counting (see
+     * StockCountService::approveItem). For each: that moment, when it was certified, and the sales
+     * made before it that reached the system after it (an offline device). By count line id.
+     */
+    private function certifiedWindows(int $productId): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT sci.id AS line_id, a.new_data, a.created_at
+             FROM audit_logs a
+             JOIN stock_count_items sci ON sci.stock_count_id = a.record_id
+             WHERE a.table_name = 'stock_counts' AND sci.product_id = ? AND a.new_data LIKE '%\"effective_at\"%'"
+        );
+        $stmt->execute([$productId]);
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $from = (string) (((array) json_decode((string) $r['new_data'], true))['effective_at'] ?? '');
+            if ($from !== '') {
+                $out[(int) $r['line_id']] = ['from' => $from, 'to' => (string) $r['created_at'], 'sold_before' => $this->salesSoldBefore($productId, $from)];
+            }
+        }
+        return $out;
+    }
+
+    /** Sale lines of a product sold by $moment but recorded after it: sale item id => true. */
+    private function salesSoldBefore(int $productId, string $moment): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT si.id FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = ? AND s.sale_datetime <= ? AND s.created_at > ?'
+        );
+        $stmt->execute([$productId, $moment, $moment]);
+        return array_fill_keys(array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN)), true);
+    }
+
+    /**
+     * Whether a stock movement recorded after a count moved goods after it too: a sale made after
+     * the moment of counting, or a receipt, return or split recorded after it. Not: a sale made
+     * before it (uploaded late), a purchase or damage dated before that day (a late entry of what
+     * the count already saw), corrections and cancellations of earlier records.
+     */
+    private function movedGoods(array $e, string $moment, array $soldBefore): bool
+    {
+        return match (true) {
+            !empty($e['correction']) => false,
+            in_array($e['kind'], ['count', 'countcancelled', 'countvoid', 'adjfix', 'adjfixcancelled', 'adjfixvoid'], true) => false,
+            in_array($e['kind'], ['sale', 'pos'], true) => !isset($soldBefore[(int) ($e['rid'] ?? 0)]),
+            in_array($e['kind'], ['purchase', 'damage'], true) => (string) $e['date'] >= substr($moment, 0, 10),
+            default => true,
+        };
+    }
+
+    /** Recorded while a count waited for certification without moving goods after it: the certification took it into account. */
+    private function absorbed(array $e, array $window): bool
+    {
+        // Counts keep their own times: one taking effect meanwhile supersedes the certified one.
+        return !in_array($e['kind'], ['count', 'countcancelled'], true) && (string) $e['at'] > $window['from'] && (string) $e['at'] <= $window['to']
+            && !$this->movedGoods($e, $window['from'], $window['sold_before']);
+    }
+
+    /**
+     * Documents that moved a product's goods after a moment (and, with $until, before another),
+     * oldest first: what comes on top of a number counted at that moment.
+     */
+    public function goodsMovedAfter(int $productId, string $moment, ?string $until = null): array
+    {
+        $soldBefore = $this->salesSoldBefore($productId, $moment);
+        $out = array_values(array_filter($this->stockEvents($productId), fn ($e) => (string) $e['at'] > $moment
+            && ($until === null || (string) $e['at'] < $until) && $this->movedGoods($e, $moment, $soldBefore)));
+        usort($out, fn ($a, $b) => [(string) $a['at'], (int) $a['ord'], (int) $a['rid']] <=> [(string) $b['at'], (int) $b['ord'], (int) $b['rid']]);
+        return $out;
+    }
+
+    /**
      * Why the stock card needs adjusting right after the count at $events[$i]. The card puts a count
      * on its own document date, but the system set the stock to the counted figure when the count
      * was approved. So, against the moment of approval:
@@ -546,7 +642,7 @@ class InventoryService
      *  - cancelled: documents keyed in before approval and cancelled after it (the card shows neither).
      * Each comes back as an adjust row: when (approval), who approved, why, and the documents behind it.
      */
-    private function countAdjustments(array $events, int $i, array $cancelled): array
+    private function countAdjustments(array $events, int $i, array $cancelled, ?array $window = null): array
     {
         $c = $events[$i];
         if ($c['at'] === null) {
@@ -562,13 +658,17 @@ class InventoryService
             if ($e['kind'] === 'count' || $e['at'] === null) {
                 continue;
             }
-            if ($j < $i && (string) $e['at'] > $at && $e['kind'] !== 'purchase') {
+            // A count certified later: goods bought on the count day after counting still come on top,
+            // and what its certification already took into account is not added again.
+            $onTop = $e['kind'] !== 'purchase' || ($window !== null && $e['date'] === $c['date']);
+            if ($j < $i && (string) $e['at'] > $at && $onTop && !($window !== null && $this->absorbed($e, $window))) {
                 $late[] = $cause($e);
             } elseif ($j > $i && (string) $e['at'] < $at) {
                 $early[] = $cause($e);
             }
         }
-        $undone = array_values(array_filter($cancelled, fn ($e) => (string) $e['at'] < $at && (string) $e['cancelled_at'] > $at));
+        $undone = array_values(array_filter($cancelled, fn ($e) => (string) $e['at'] < $at && (string) $e['cancelled_at'] > $at
+            && !($window !== null && (string) $e['cancelled_at'] <= $window['to'])));
 
         $base = [
             'at' => $c['at'], 'date' => $c['date'], 'kind' => 'adjust', 'doc_no' => $c['doc_no'], 'doc_kind' => 'count',
@@ -578,7 +678,7 @@ class InventoryService
         $sum = fn (array $list) => array_sum(array_column($list, 'qty'));
         if ($late && ($q = $sum($late)) !== 0) {
             $out[] = $base + ['reason' => 'late', 'qty' => $q, 'causes' => $late,
-                'note' => 'มีเอกสารลงวันที่ก่อนหรือวันเดียวกับวันนับ แต่บันทึกเข้าระบบหลังอนุมัติตรวจนับ: ยอดที่นับได้ยังไม่รวมรายการเหล่านี้ ระบบจึงปรับคงเหลือต่อจากยอดที่นับ'];
+                'note' => 'มีเอกสารลงวันที่ก่อนหรือวันเดียวกับวันนับ แต่บันทึกเข้าระบบหลังเวลาที่การนับมีผล: ยอดที่นับได้ยังไม่รวมรายการเหล่านี้ ระบบจึงปรับคงเหลือต่อจากยอดที่นับ'];
         }
         if ($early && ($q = -$sum($early)) !== 0) {
             $out[] = $base + ['reason' => 'early', 'qty' => $q, 'causes' => $early,
@@ -1022,8 +1122,12 @@ class InventoryService
             $rows[] = ['k' => 'รายละเอียด', 'v' => $l['diff_detail'] ?? '-'];
         }
         if ($d['status'] === 'approved') {
-            $rows[] = ['k' => ($diffAt !== null && abs($diffAt) > StockCountService::ITEM_APPROVAL_OVER ? 'ผู้รับรอง' : 'ปรับสต๊อก') . ' / เวลา', 'v' => $who($d['approved_by']) . ' · ' . $dateTime($d['approved_at'])];
-            $rows[] = ['k' => 'สต๊อกก่อน → หลังปรับ', 'v' => (int) ($l['system_qty'] ?? 0) . ' → ' . (int) ($l['counted_qty'] ?? 0)];
+            // A count certified later takes effect when counted; the log has when it was certified.
+            $certified = $this->db->prepare("SELECT created_at FROM audit_logs WHERE table_name = 'stock_counts' AND record_id = ? AND new_data LIKE '%\"effective_at\"%' ORDER BY id DESC LIMIT 1");
+            $certified->execute([(int) $d['id']]);
+            $rows[] = ['k' => ($diffAt !== null && abs($diffAt) > StockCountService::ITEM_APPROVAL_OVER ? 'ผู้รับรอง' : 'ปรับสต๊อก') . ' / เวลา', 'v' => $who($d['approved_by']) . ' · ' . $dateTime($certified->fetchColumn() ?: $d['approved_at'])];
+            $rows[] = ['k' => 'มีผล ณ เวลา', 'v' => $dateTime($d['approved_at'])];
+            $rows[] = ['k' => 'สต๊อกในระบบ ณ เวลามีผล → ยอดที่นับ', 'v' => (int) ($l['system_qty'] ?? 0) . ' → ' . (int) ($l['counted_qty'] ?? 0)];
             if (!empty($d['review_note'])) {
                 $rows[] = ['k' => 'ความเห็นผู้รับรอง', 'v' => $d['review_note']];
             }
