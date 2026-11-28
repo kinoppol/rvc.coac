@@ -56,6 +56,17 @@ class InventoryController
         return $this->json($response, ['data' => $rows]);
     }
 
+    /** GET /inventory/{id}/ledger[?line=] — the movements behind the stock now, or behind a count line's system figure. */
+    public function ledger(Request $request, Response $response, array $args): Response
+    {
+        $line = (int) ($request->getQueryParams()['line'] ?? 0);
+        $data = (new InventoryService(Db::connection()))->ledger((int) $args['id'], $line > 0 ? $line : null);
+        if ($data === null) {
+            return $this->error($response, 'ไม่พบสินค้าหรือรายการนับ', 404);
+        }
+        return $this->json($response, ['data' => $data]);
+    }
+
     /** Marks a product as really having no barcode, or takes the mark back (body: no_barcode). Consigned goods: admin only. */
     public function setNoBarcode(Request $request, Response $response, array $args): Response
     {

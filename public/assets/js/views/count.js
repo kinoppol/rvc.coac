@@ -4,10 +4,55 @@ import { openMobileCount } from './count-mobile.js';
 import { attachmentUrl } from '../images.js';
 import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
 import { printCountSheet } from '../print-slip.js';
+import { openProductModal } from '../product-modal.js';
+import { openDetailModal } from '../detail-modal.js';
 
 const dayShift = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 // The count report's days.
 const REPORT_PERIODS = [['today', 'วันนี้'], ['yesterday', 'เมื่อวาน'], ['7', '7 วันล่าสุด'], ['range', 'ระบุวันที่']];
+
+// Table columns: [key, header, type, value to sort by]. A column with no value cannot be sorted.
+const countedAt = (r) => r.counted_at || r.created_at;
+const detailText = (r) => [r.reason_label, r.count_place, r.count_method, r.diff_detail, r.count_note].filter(Boolean).join(' ');
+const photoCount = (r) => (r.photos || []).filter((p) => p.token).length;
+const PENDING_COLUMNS = [
+    ['doc', 'เลขที่ / ผู้นับ', 'date', countedAt],
+    ['name', 'สินค้า', 'text', (r) => r.name],
+    ['system', 'ในระบบตอนนับ', 'num', (r) => r.count_system_qty],
+    ['counted', 'นับได้', 'num', (r) => r.count_qty],
+    ['diff', 'ผลต่าง', 'diff', (r) => r.diff_at_count],
+    ['detail', 'รายละเอียดการนับ', 'text', detailText],
+    ['photos', 'รูป', 'diff', photoCount],
+    ['stock', 'สต๊อกตอนนี้ → หลังรับรอง', 'num', (r) => r.qty_stock],
+    ['actions', ''],
+];
+const REPORT_COLUMNS = [
+    ['doc', 'เวลานับ / เลขที่ / ผู้นับ', 'date', countedAt],
+    ['name', 'สินค้า', 'text', (r) => r.name],
+    ['system', 'ในระบบตอนนับ', 'num', (r) => r.count_system_qty ?? r.system_qty],
+    ['counted', 'นับได้', 'num', (r) => r.count_qty ?? r.counted_qty],
+    ['diff', 'ผลต่าง', 'diff', (r) => r.diff_at_count],
+    ['detail', 'รายละเอียดการนับ', 'text', detailText],
+    ['photos', 'รูป', 'diff', photoCount],
+    ['status', 'ผล', 'text', (r) => ({ submitted: 'รอผู้จัดการรับรอง', approved: 'มีผลแล้ว', cancelled: 'ยกเลิก' }[r.status] || r.status)],
+];
+const HISTORY_COLUMNS = [
+    ['doc', 'เลขที่', 'text', (h) => h.doc_no],
+    ['date', 'วันที่', 'date', (h) => h.count_date],
+    ['status', 'สถานะ', 'text', (h) => h.status],
+];
+const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
+
+// The stock ledger's kinds of movement.
+const LEDGER_KIND = {
+    purchase: 'ซื้อเข้า', receive: 'รับฝาก', sale: 'ขาย', pos: 'ขาย (นำเข้า POS)', return: 'คืนผู้ฝาก', count: 'ตรวจนับ', adjfix: 'แก้การปรับยอด',
+    split: 'แยกสินค้า', damage: 'สินค้าเสียหาย', gap: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง', opening: 'ยอดก่อนรายการแรก (ไม่มีเอกสารอ้างอิง)',
+};
+
+// What a count's difference is worth, at cost and at the sale price. Cost only comes to those who may see it.
+const worth = (v) => `${v < 0 ? 'หาย' : v > 0 ? 'เพิ่ม' : ''} ฿ ${money(Math.abs(v))}`.trim();
+const worthColor = (v) => (v < 0 ? 'color:var(--bad)' : v > 0 ? 'color:var(--ok)' : '');
+const knownCost = (r) => Number(r.cost_price) > 0;
 
 /**
  * Stock counting is one product at a time (นับรายการ): each count is that product's own record.
@@ -15,11 +60,114 @@ const REPORT_PERIODS = [['today', 'วันนี้'], ['yesterday', 'เม�
  * removed — rounds approved half counted or counted wrong put many products wrong at once, and an
  * open round held up other work. Old rounds are listed read-only as history.
  */
-export async function render(container, { permissions, user }) {
+export async function render(container, { permissions, user, navigate }) {
     let error = null;
     let notice = null;
     const canCreate = permissions.includes('stockcount.create');
     const isAdmin = user?.role === 'admin';
+    // The product card and the stock ledger are the stock page's: same right to see them.
+    const canDrill = permissions.includes('reports.view');
+    // Chosen sort of each table (null = as the server lists them).
+    const sorts = { pending: null, report: null, history: null };
+    let historyOpen = false;
+
+    function headHtml(table, columns) {
+        const sort = sorts[table];
+        return columns.map(([key, label, type, value]) => {
+            const cls = type === 'num' ? ' class="num"' : '';
+            if (!value) return `<th${cls}>${escapeHtml(label)}</th>`;
+            const on = sort?.key === key;
+            return `<th${cls} aria-sort="${on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">
+              <button type="button" class="th-sort ${on ? 'on' : ''}" data-sort="${table}:${key}">${escapeHtml(label)}<span class="th-arrow" aria-hidden="true">${on ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span></button></th>`;
+        }).join('');
+    }
+
+    /** Sorted copy by the table's chosen column; empty values go last. */
+    function sorted(table, columns, list) {
+        const sort = sorts[table];
+        if (!sort) return list;
+        const [, , type, value] = columns.find(([k]) => k === sort.key);
+        const sign = sort.dir === 'asc' ? 1 : -1;
+        return [...list].sort((a, b) => {
+            const va = value(a);
+            const vb = value(b);
+            const ea = va === null || va === undefined || va === '';
+            const eb = vb === null || vb === undefined || vb === '';
+            if (ea || eb) return ea === eb ? 0 : (ea ? 1 : -1);
+            return sign * (type === 'num' || type === 'diff' ? Number(va) - Number(vb) : thCollator.compare(String(va), String(vb)));
+        });
+    }
+
+    function bindSort(redraw) {
+        container.querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+            const [table, key] = b.dataset.sort.split(':');
+            const columns = { pending: PENDING_COLUMNS, report: REPORT_COLUMNS, history: HISTORY_COLUMNS }[table];
+            const type = columns.find(([k]) => k === key)[2];
+            // Same column flips; a new column starts A→ก for text, smallest first for differences (most missing), else biggest/newest first.
+            const first = type === 'text' || key === 'diff' ? 'asc' : 'desc';
+            const now = sorts[table];
+            sorts[table] = { key, dir: now?.key === key ? (now.dir === 'asc' ? 'desc' : 'asc') : first };
+            redraw();
+            container.querySelector(`[data-sort="${table}:${key}"]`)?.focus({ preventScroll: true });
+        }));
+    }
+
+    function productName(r) {
+        return canDrill
+            ? `<button type="button" class="prod-link" data-product="${r.product_id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(r.name)}</button>`
+            : escapeHtml(r.name);
+    }
+
+    /** A stock figure that opens the movements behind it: the stock now, or what count line `lineId` compared with. */
+    function ledgerLink(value, productId, lineId = null) {
+        return canDrill
+            ? `<button type="button" class="link-btn" data-ledger="${productId}"${lineId ? ` data-line="${lineId}"` : ''} title="ดูรายการเดินบัญชีที่มาของยอดนี้">${value}</button>`
+            : value;
+    }
+
+    /** The difference in pieces, and under it what those pieces are worth at cost and at the sale price. */
+    function diffCell(r) {
+        if (!r.diff_at_count) return '<span class="pill ok">ตรง</span>';
+        const line = (label, price, title) => {
+            const v = r.diff_at_count * price;
+            return `<div style="font-size:12px;font-weight:600;white-space:nowrap;${worthColor(v)}" title="${title} ฿ ${money(price)}/ชิ้น"><span class="muted" style="font-weight:400">${label}</span> ${worth(v)}</div>`;
+        };
+        const cost = r.cost_price === undefined ? ''
+            : knownCost(r) ? line('ทุน', Number(r.cost_price), r.consignor_id != null ? 'ส่วนที่ผู้ฝากได้' : 'ต้นทุนเฉลี่ยปัจจุบัน')
+                : '<div class="muted" style="font-size:12px;white-space:nowrap">ทุน ไม่ทราบ</div>';
+        return `<span class="pill bad">${signed(r.diff_at_count)}</span>
+          <div style="margin-top:3px">${cost}${line('ขาย', Number(r.sale_price || 0), 'ราคาขายปัจจุบัน')}</div>`;
+    }
+
+    function openLedger(productId, lineId) {
+        openDetailModal(async () => {
+            const d = (await api.get(`/inventory/${productId}/ledger${lineId ? `?line=${lineId}` : ''}`)).data;
+            return {
+                title: `${lineId ? `ที่มาของยอดในระบบตอนนับ ${d.count_doc_no}` : 'ที่มาของยอดสต๊อกตอนนี้'}: ${d.product.name}`,
+                note: `ยอด ${count(d.balance)} ชิ้น${d.as_of ? ` ณ ${fmtDateTime(d.as_of)}` : ''} — รายการล่าสุดอยู่บนสุด เรียงตามเวลาที่บันทึกเข้าระบบ “ยอดหลังรายการ” แถวบนสุดคือยอดนี้ กดแถวเพื่อเปิดเอกสาร`
+                    + (d.more ? ` (แสดงเฉพาะรายการล่าสุด ยังมีเก่ากว่าอีก ${count(d.more)} รายการ)` : ''),
+                sections: [{
+                    title: 'รายการเดินบัญชี',
+                    total: false,
+                    columns: [['doc', 'เลขที่เอกสาร', 'text'], ['at', 'บันทึกเมื่อ', 'datetime'], ['what', 'รายการ', 'text'], ['who', 'คู่ค้า / ผู้ทำ', 'text'],
+                        ['in', 'รับ', 'qty'], ['out', 'จ่าย', 'qty'], ['balance', 'ยอดหลังรายการ', 'qty']],
+                    rows: d.rows.map((r) => ({
+                        doc: r.doc_no, at: r.at,
+                        what: [LEDGER_KIND[r.kind] || r.kind, r.note].filter(Boolean).join(' · '),
+                        who: [r.party, r.user_name].filter(Boolean).join(' · '),
+                        in: r.qty > 0 ? r.qty : null, out: r.qty < 0 ? -r.qty : null, balance: r.balance,
+                        _source: r.doc_no && r.kind !== 'adjfix' ? `/inventory/document?kind=${encodeURIComponent(r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
+                    })),
+                }],
+            };
+        });
+    }
+
+    function bindDrill(redraw) {
+        const reload = async () => { await loadItems(); await loadReport(); redraw(); };
+        container.querySelectorAll('[data-product]').forEach((b) => b.addEventListener('click', () => openProductModal(b.dataset.product, navigate, { onChange: reload })));
+        container.querySelectorAll('[data-ledger]').forEach((b) => b.addEventListener('click', () => openLedger(b.dataset.ledger, b.dataset.line)));
+    }
 
     async function loadList() {
         const list = (await api.get('/stockcounts')).data.filter((c) => (c.kind || 'round') !== 'item');
@@ -38,16 +186,19 @@ export async function render(container, { permissions, user }) {
         ${reportHtml()}
         ${history && history.length ? `
           <section class="card card-pad">
-            <details><summary style="cursor:pointer;font-weight:600">รอบตรวจนับทั้งร้าน (เลิกใช้แล้ว) — ${history.length} รอบล่าสุด</summary>
+            <details id="count-history"${historyOpen ? ' open' : ''}><summary style="cursor:pointer;font-weight:600">รอบตรวจนับทั้งร้าน (เลิกใช้แล้ว) — ${history.length} รอบล่าสุด</summary>
               <div class="muted" style="font-size:12.5px;margin-top:6px">การนับทั้งร้านเป็นรอบ (เปิด/ปิดรอบ ส่งรายงาน อนุมัติ) เลิกใช้แล้ว ตอนนี้นับทีละรายการ แต่ละครั้งเป็นการนับของสินค้านั้น ผู้ดูแลระบบและผู้จัดการดูได้ที่หน้าสต๊อกสินค้า (คอลัมน์นับล่าสุด) — รอบที่เปิดค้างไว้ถูกปิดโดยไม่ปรับสต๊อก</div>
               <div class="table-wrap" style="margin-top:10px"><table>
-                <thead><tr><th>เลขที่</th><th>วันที่</th><th>สถานะ</th></tr></thead>
-                <tbody>${history.map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td>${ROUND_STATUS[h.status] || '<span class="pill">ไม่ได้ใช้ (เลิกใช้แบบรอบ)</span>'}</td></tr>`).join('')}</tbody>
+                <thead><tr>${headHtml('history', HISTORY_COLUMNS)}</tr></thead>
+                <tbody>${sorted('history', HISTORY_COLUMNS, history).map((h) => `<tr><td>${escapeHtml(h.doc_no)}</td><td>${escapeHtml(h.count_date)}</td><td>${ROUND_STATUS[h.status] || '<span class="pill">ไม่ได้ใช้ (เลิกใช้แบบรอบ)</span>'}</td></tr>`).join('')}</tbody>
               </table></div>
             </details>
           </section>` : ''}`;
         bindItems(history);
         bindReport(() => draw(history));
+        bindSort(() => draw(history));
+        bindDrill(() => draw(history));
+        container.querySelector('#count-history')?.addEventListener('toggle', (e) => { historyOpen = e.target.open; });
     }
 
     // ---- นับรายการ: one product at a time with no round open (migration 0077) ----
@@ -78,7 +229,7 @@ export async function render(container, { permissions, user }) {
         if (!itemData || !itemData.ready) return '';
         const [f, t] = repSpan();
         const all = rep.rows || [];
-        const rows = rep.diffOnly ? all.filter((r) => r.diff_at_count) : all;
+        const rows = sorted('report', REPORT_COLUMNS, rep.diffOnly ? all.filter((r) => r.diff_at_count) : all);
         rep.shown = rows;
         const done = all.filter((r) => r.status !== 'cancelled');
         const products = new Set(done.map((r) => r.product_id)).size;
@@ -87,6 +238,9 @@ export async function render(container, { permissions, user }) {
         const waiting = all.filter((r) => r.status === 'submitted').length;
         const net = diffs.reduce((s, r) => s + r.diff_at_count, 0);
         const netValue = diffs.reduce((s, r) => s + r.diff_at_count * Number(r.sale_price || 0), 0);
+        const netCost = diffs.reduce((s, r) => s + r.diff_at_count * Number(r.cost_price || 0), 0);
+        const showCost = all.some((r) => r.cost_price !== undefined);
+        const noCost = diffs.filter((r) => !knownCost(r)).length;
         const chip = (l, v, style = '') => `<div class="kpi"><div class="lbl">${l}</div><div class="val" style="font-size:20px;${style}">${v}</div></div>`;
         return `
         <section class="card">
@@ -105,18 +259,19 @@ export async function render(container, { permissions, user }) {
               ${chip('ตรงกับระบบ', same, 'color:var(--ok)')}
               ${chip('มีผลต่าง', diffs.length, diffs.length ? 'color:var(--bad)' : '')}
               ${chip('ผลต่างสุทธิ', `${signed(net)} ชิ้น`, net ? 'color:var(--bad)' : '')}
-              ${chip('มูลค่าผลต่าง (ราคาขาย)', `฿ ${money(netValue)}`)}
+              ${showCost ? chip(`มูลค่าผลต่างสุทธิ (ราคาทุน)${noCost ? ` · ไม่ทราบทุน ${noCost} รายการ` : ''}`, worth(netCost), worthColor(netCost)) : ''}
+              ${chip('มูลค่าผลต่างสุทธิ (ราคาขาย)', worth(netValue), worthColor(netValue))}
               ${waiting ? chip('รอผู้จัดการรับรอง', waiting, 'color:var(--warn)') : ''}
             </div>
           </div>
           ${rep.rows === null ? '<div class="card-pad muted">กำลังโหลด...</div>' : rows.length ? `
           <div class="table-wrap" style="max-height:560px"><table>
-            <thead><tr><th>เวลานับ / เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th>ผล</th></tr></thead>
+            <thead><tr>${headHtml('report', REPORT_COLUMNS)}</tr></thead>
             <tbody>${rows.map((r, i) => `<tr${r.diff_at_count && r.status !== 'cancelled' ? ' style="box-shadow:inset 3px 0 0 var(--bad)"' : ''}>
               <td style="white-space:nowrap">${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}<div class="muted" style="font-size:12px">${escapeHtml(r.doc_no)} · ${escapeHtml(r.counter_name || '-')}</div></td>
-              <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}${r.barcode ? ` · ${escapeHtml(r.barcode)}` : ''}</div></td>
-              <td class="num">${r.count_system_qty ?? r.system_qty}</td><td class="num"><b>${r.count_qty ?? r.counted_qty}</b></td>
-              <td>${r.diff_at_count ? `<span class="pill bad">${signed(r.diff_at_count)}</span>` : '<span class="pill ok">ตรง</span>'}</td>
+              <td>${productName(r)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}${r.barcode ? ` · ${escapeHtml(r.barcode)}` : ''}</div></td>
+              <td class="num">${ledgerLink(r.count_system_qty ?? r.system_qty, r.product_id, r.line_id)}</td><td class="num"><b>${r.count_qty ?? r.counted_qty}</b></td>
+              <td>${diffCell(r)}</td>
               <td>${itemDetail(r)}</td>
               <td>${itemPhotos(r)}</td>
               <td>${r.status === 'submitted' ? '<span class="pill warn">รอผู้จัดการรับรอง</span>' : itemStatus(r)}${editedHtml(r)}
@@ -225,6 +380,8 @@ export async function render(container, { permissions, user }) {
         const pend = itemData.pending;
         if (!noRound && !pend.length) return '';
         const over = itemData.approval_over;
+        const shown = sorted('pending', PENDING_COLUMNS, pend);
+        itemData.shown = shown;
         return `
         <section class="card">
           <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -239,18 +396,18 @@ export async function render(container, { permissions, user }) {
             <div class="card-pad" style="padding-top:0"><b style="color:var(--bad)">รอผู้จัดการรับรอง (${pend.length})</b>
               <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · รับรองแล้วสต๊อกจะเปลี่ยนตามผลต่างที่นับได้ (ถ้ามีขาย/รับเข้าหลังนับ ยอดนั้นยังอยู่) · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
             <div class="table-wrap"><table>
-              <thead><tr><th>เลขที่ / ผู้นับ</th><th>สินค้า</th><th class="num">ในระบบตอนนับ</th><th class="num">นับได้</th><th>ผลต่าง</th><th>รายละเอียดการนับ</th><th>รูป</th><th class="num">สต๊อกตอนนี้ → หลังรับรอง</th><th></th></tr></thead>
-              <tbody>${pend.map((r, i) => {
+              <thead><tr>${headHtml('pending', PENDING_COLUMNS)}</tr></thead>
+              <tbody>${shown.map((r, i) => {
                   const mine = Number(r.counted_by) === Number(itemData.user_id);
                   const canCertify = itemData.can_approve && (!mine || isAdmin);
                   return `<tr style="background:var(--bad-bg)">
                     <td>${escapeHtml(r.doc_no)}<div class="muted" style="font-size:12px">${escapeHtml(r.counter_name || '-')}<br>${escapeHtml(fmtDateTime(r.counted_at || r.created_at))}</div></td>
-                    <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}</div></td>
-                    <td class="num">${r.count_system_qty}</td><td class="num">${r.count_qty}</td>
-                    <td><span class="pill bad">${signed(r.diff_at_count)}</span></td>
+                    <td>${productName(r)}<div class="muted" style="font-size:12px">${escapeHtml(r.consignor_name)}</div></td>
+                    <td class="num">${ledgerLink(r.count_system_qty, r.product_id, r.line_id)}</td><td class="num">${r.count_qty}</td>
+                    <td>${diffCell(r)}</td>
                     <td>${itemDetail(r)}</td>
                     <td>${itemPhotos(r)}</td>
-                    <td class="num">${r.qty_stock} → <b>${r.stock_if_approved}</b></td>
+                    <td class="num">${ledgerLink(r.qty_stock, r.product_id)} → <b>${r.stock_if_approved}</b></td>
                     <td style="white-space:nowrap">
                       ${canCertify ? `<button type="button" class="btn sm" data-item-ok="${i}">รับรอง</button>` : ''}
                       ${itemData.can_approve && !mine ? `<button type="button" class="btn secondary sm" data-item-no="${i}">ไม่รับรอง</button>` : ''}
@@ -269,8 +426,8 @@ export async function render(container, { permissions, user }) {
         container.querySelector('#btn-item-count')?.addEventListener('click', () => {
             openMobileCount({ quick: true, stockCount: null, items: [], onClose: () => loadList() });
         });
-        container.querySelectorAll('[data-item-ok]').forEach((b) => b.addEventListener('click', () => certifyItem(itemData.pending[Number(b.dataset.itemOk)], redraw)));
-        container.querySelectorAll('[data-item-no]').forEach((b) => b.addEventListener('click', () => rejectItem(itemData.pending[Number(b.dataset.itemNo)], redraw)));
+        container.querySelectorAll('[data-item-ok]').forEach((b) => b.addEventListener('click', () => certifyItem(itemData.shown[Number(b.dataset.itemOk)], redraw)));
+        container.querySelectorAll('[data-item-no]').forEach((b) => b.addEventListener('click', () => rejectItem(itemData.shown[Number(b.dataset.itemNo)], redraw)));
     }
 
     /**

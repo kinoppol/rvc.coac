@@ -164,6 +164,12 @@ class StockCountController
         $data = $from !== null && $to !== null
             ? $this->service()->itemCounts($pid > 0 ? $pid : null, 2000, $from, $to)
             : $this->service()->itemCounts($pid > 0 ? $pid : null);
+        // Cost prices are the stock page's figures: only for those who may open it.
+        if (!(new UserRepo($db))->hasPermission((string) ($user['role'] ?? ''), 'reports.view')) {
+            foreach (['pending', 'recent'] as $list) {
+                $data[$list] = array_map(fn ($r) => array_diff_key($r, ['cost_price' => 0]), $data[$list]);
+            }
+        }
         $data['reasons'] = StockCountService::DIFF_REASONS;
         $data['approval_over'] = StockCountService::ITEM_APPROVAL_OVER;
         $data['detail_min'] = StockCountService::DIFF_DETAIL_MIN;

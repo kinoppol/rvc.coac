@@ -361,6 +361,101 @@ class InventoryService
     }
 
     /**
+     * Where a stock figure comes from: the movements that led to it, newest first, in the order
+     * they were recorded (unlike the stock card, which goes by document date), each with the
+     * stock right after it. The walk goes backwards from the known figure — the stock now, or
+     * what the system held when count line $lineId was counted. An approved count along the way
+     * is a check point (the stock was set to what it left); anything the documents do not explain
+     * between there and the next movement shows as a "gap" row.
+     */
+    public function ledger(int $productId, ?int $lineId = null, int $limit = 200): ?array
+    {
+        $stmt = $this->db->prepare('SELECT id, name, qty_stock FROM products WHERE id = ?');
+        $stmt->execute([$productId]);
+        $p = $stmt->fetch();
+        if (!$p) {
+            return null;
+        }
+        $asOf = null;
+        $countDoc = null;
+        $anchor = (int) $p['qty_stock'];
+        if ($lineId !== null) {
+            $stmt = $this->db->prepare(
+                'SELECT sci.*, sc.doc_no, sc.created_at AS sc_created_at, sc.approved_at
+                 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                 WHERE sci.id = ? AND sci.product_id = ?'
+            );
+            $stmt->execute([$lineId, $productId]);
+            $line = $stmt->fetch();
+            if (!$line) {
+                return null;
+            }
+            $asOf = (string) ($line['counted_at'] ?? $line['approved_at'] ?? $line['sc_created_at']);
+            $countDoc = $line['doc_no'];
+            $anchor = (int) ($line['count_system_qty'] ?? $line['system_qty']);
+        }
+        $until = fn (string $at) => $asOf === null || $at <= $asOf;
+
+        $moves = [];
+        $move = fn (array $e, string $at, int $qty, ?int $after = null, ?string $note = null) => [
+            'at' => $at, 'kind' => $e['kind'], 'doc_no' => $e['doc_no'], 'party' => $e['party'] ?? null, 'user_name' => $e['user_name'],
+            'qty' => $qty, 'after' => $after, 'note' => $note, 'ord' => (int) ($e['ord'] ?? 2), 'rid' => (int) ($e['rid'] ?? 0),
+        ];
+        foreach ($this->stockEvents($productId) as $e) {
+            // The count being looked at took effect after the figure it was compared with.
+            if ($e['kind'] === 'count' && $lineId !== null && (int) $e['rid'] === $lineId) {
+                continue;
+            }
+            $at = (string) ($e['at'] ?? $e['date'] . ' 00:00:00');
+            if (!$until($at)) {
+                continue;
+            }
+            if ($e['kind'] === 'count') {
+                $counted = (int) $e['counted_qty'];
+                $moves[] = $move($e, $at, $counted - (int) $e['system_qty'], $counted,
+                    'นับได้ ' . $counted . ' · ในระบบตอนปรับ ' . (int) $e['system_qty']);
+            } else {
+                $moves[] = $move($e, $at, (int) $e['qty']);
+            }
+        }
+        // A cancelled document moved the stock when keyed in and moved it back when cancelled.
+        foreach ($this->cancelledEvents($productId) as $e) {
+            if ($until((string) $e['at'])) {
+                $moves[] = $move($e, (string) $e['at'], (int) $e['qty'], null, 'เอกสารนี้ถูกยกเลิกภายหลัง');
+            }
+            if ($until((string) $e['cancelled_at'])) {
+                $moves[] = $move(['user_name' => $e['cancelled_by']] + $e, (string) $e['cancelled_at'], -(int) $e['qty'], null,
+                    'ยกเลิกเอกสาร' . ($e['cancel_reason'] ? ": {$e['cancel_reason']}" : ''));
+            }
+        }
+        usort($moves, fn ($a, $b) => [$b['at'], $b['ord'], $b['rid']] <=> [$a['at'], $a['ord'], $a['rid']]);
+
+        $rows = [];
+        $balance = $anchor;
+        $extra = fn (string $kind, int $qty, int $after) => [
+            'at' => null, 'kind' => $kind, 'doc_no' => null, 'party' => null, 'user_name' => null, 'qty' => $qty, 'balance' => $after, 'note' => null,
+        ];
+        foreach ($moves as $m) {
+            if ($m['after'] !== null && $m['after'] !== $balance) {
+                $rows[] = $extra('gap', $balance - $m['after'], $balance);
+                $balance = $m['after'];
+            }
+            $qty = $m['qty'];
+            unset($m['after'], $m['ord'], $m['rid']);
+            $rows[] = $m + ['balance' => $balance];
+            $balance -= $qty;
+        }
+        if ($balance !== 0) {
+            $rows[] = $extra('opening', $balance, $balance);
+        }
+        return [
+            'product' => ['id' => (int) $p['id'], 'name' => $p['name'], 'qty_stock' => (int) $p['qty_stock']],
+            'balance' => $anchor, 'as_of' => $asOf, 'count_doc_no' => $countDoc,
+            'rows' => array_slice($rows, 0, $limit), 'more' => max(0, count($rows) - $limit),
+        ];
+    }
+
+    /**
      * Why the stock card needs adjusting right after the count at $events[$i]. The card puts a count
      * on its own document date, but the system set the stock to the counted figure when the count
      * was approved. So, against the moment of approval:

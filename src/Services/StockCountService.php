@@ -798,7 +798,7 @@ class StockCountService
             "SELECT sc.id, sc.doc_no, sc.status, sc.count_date, sc.created_at, sc.approved_at, sc.review_note, sc.cancelled_at, sc.cancel_reason,
                     sci.id AS line_id, {$edit}, sci.product_id, sci.system_qty, sci.counted_qty, sci.diff_qty, sci.counted_by, sci.counted_at,
                     sci.count_system_qty, sci.count_qty, sci.count_place, sci.count_method, sci.count_note, sci.diff_reason, sci.diff_detail,
-                    p.name, p.barcode, p.image_token, p.qty_stock, p.sale_price, p.consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name,
+                    p.name, p.barcode, p.image_token, p.qty_stock, p.sale_price, p.cost_price, p.consignor_id, COALESCE(c.name, 'สินค้าของร้าน') AS consignor_name,
                     cu.full_name AS counter_name, au.full_name AS approver_name, xu.full_name AS canceller_name
              FROM stock_counts sc
              JOIN stock_count_items sci ON sci.stock_count_id = sc.id
