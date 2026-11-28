@@ -269,8 +269,10 @@ export async function render(container, { navigate, permissions, user }) {
         const tabName = (FILTERS.find(([k]) => k === filter) || [])[1] || '';
         const html = `
           <div style="display:grid;gap:10px;margin-top:6px">
-            <label>วันที่ตรวจนับ<br><input type="date" data-cs-date value="${today}" style="width:100%"></label>
+            <label>วันที่ตรวจนับ (พิมพ์ที่หัวกระดาษทุกหน้า ค่าเริ่มต้นคือวันที่พิมพ์)<br><input type="date" data-cs-date value="${today}" style="width:100%"></label>
             <label>ตรวจนับประจำเดือน<br><input type="month" data-cs-month value="${monthOf(today)}" style="width:100%"></label>
+            <label>ชื่อผู้นับ<br><input type="text" data-cs-counter placeholder="เว้นว่าง = เขียนชื่อเองบนกระดาษ" autocomplete="off" style="width:100%"></label>
+            <label>ชื่อผู้ตรวจสอบ<br><input type="text" data-cs-checker placeholder="เว้นว่าง = เขียนชื่อเองบนกระดาษ" autocomplete="off" style="width:100%"></label>
             <div class="muted" style="font-size:12px">วันตรวจนับไม่ตายตัว (ตรงกับวันหยุดขายของร้าน ก่อนหรือหลังสิ้นเดือน) ตามที่ผู้จัดการและพนักงานตกลงกัน</div>
             <label><input type="radio" name="cs-scope" value="shown" checked> รายการที่แสดงอยู่ (${escapeHtml(tabName)}${search ? ` · ค้นหา "${escapeHtml(search)}"` : ''}) ${count(shown.length)} รายการ</label>
             <label><input type="radio" name="cs-scope" value="all"> สินค้าทั้งหมด${search ? ' ที่ค้นพบ' : ''} ${count(all.length)} รายการ</label>
@@ -288,6 +290,8 @@ export async function render(container, { navigate, permissions, user }) {
         const scopeEls = [...box.querySelectorAll('input[name="cs-scope"]')];
         const storeOnly = box.querySelector('[data-cs-store]');
         const byName = box.querySelector('[data-cs-name]');
+        const counter = box.querySelector('[data-cs-counter]');
+        const checker = box.querySelector('[data-cs-checker]');
         if (!(await ask)) return;
         const useAll = scopeEls.find((r) => r.checked)?.value === 'all';
         let list = useAll ? all : shown;
@@ -301,7 +305,8 @@ export async function render(container, { navigate, permissions, user }) {
             .filter(Boolean).join(' · ');
         printCountSheet({
             items: list.map((p) => ({ name: p.name, barcode: (p.barcode || '').trim() })),
-            countDate: date.value || '', month: month.value || '', scope,
+            countDate: date.value || today, month: month.value || '', scope,
+            counter: counter.value.trim(), checker: checker.value.trim(),
         });
     }
 
