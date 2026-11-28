@@ -656,12 +656,16 @@ export function printClosingReport(r, { weekday, status, send }) {
 }
 
 /**
- * Prints a paper stock-count sheet (ใบตรวจนับสินค้า) on A4: order no., product name with its piece
- * barcode below, a blank box for the counted quantity and one for notes. The monthly count has no
- * fixed day (it falls on a day the shop is closed, before or after month end), so the count date
- * (default: the day printed) and the month it is for are chosen when printing. The title with the
- * count date heads every page (thead) and the counter / checker sign-off ends every page (tfoot),
- * with their names when given, else blank lines. items: [{ name, barcode }].
+ * Prints a paper stock-count sheet (ใบตรวจนับสินค้า) on A4, two lists side by side to fit twice as
+ * many products on a sheet: order no., product name with its piece barcode below, a blank box for
+ * the counted quantity and one for notes. Numbers run down the left list, then the right, then on
+ * to the next page. The monthly count has no fixed day (it falls on a day the shop is closed, before
+ * or after month end), so the count date (default: the day printed) and the month it is for are
+ * chosen when printing. Every page has the title with the count date on top and the counter /
+ * checker sign-off at the bottom, with their names when given, else blank lines.
+ * Rows differ in height (long names wrap), so a script in the printed page fills each page by
+ * measuring: once at once, again when the fonts have loaded (before printHtml prints).
+ * items: [{ name, barcode }].
  */
 export function printCountSheet({ items, countDate, month, scope = '', counter = '', checker = '' }) {
     const thDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -669,9 +673,19 @@ export function printCountSheet({ items, countDate, month, scope = '', counter =
     const title = `ใบตรวจนับสินค้า${month ? ` ประจำเดือน${thMonth(month)}` : ''}`;
     const dateText = countDate ? thDate(countDate) : '........../........../..........';
     const sign = (role, name) => `<div class="who">
-        <div>ลงชื่อ ..................................................... ${role}</div>
-        <div>(${name ? escapeHtml(name) : '.....................................................'})</div>
-        <div>วันที่ ${countDate ? escapeHtml(thDate(countDate)) : '........../........../..........'}</div></div>`;
+        <div>ลงชื่อ ............................................... ${role}</div>
+        <div>(${name ? escapeHtml(name) : '...............................................'})</div>
+        <div>วันที่ ${escapeHtml(dateText)}</div></div>`;
+    const head = `<div class="head">
+        <div><h1>${escapeHtml(title)}</h1><div class="sub">ร้านค้าสหการ${scope ? ` · ${escapeHtml(scope)}` : ''} · รวม ${items.length.toLocaleString('th-TH')} รายการ</div></div>
+        <div class="meta">วันที่ตรวจนับ<br><b>${escapeHtml(dateText)}</b></div></div>`;
+    const foot = `<div class="foot"><div class="sign">${sign('ผู้นับ', counter)}${sign('ผู้ตรวจสอบ', checker)}</div>
+        <div class="printed"><span data-pageno></span><span>พิมพ์เมื่อ ${escapeHtml(fmtNow())}</span></div></div>`;
+    const list = `<table class="list"><colgroup><col style="width:8mm"><col><col style="width:15mm"><col style="width:17mm"></colgroup>
+        <thead><tr><th>ที่</th><th>ชื่อสินค้า / รหัสบาร์โค้ด</th><th>จำนวน<br>ที่นับได้</th><th>หมายเหตุ</th></tr></thead><tbody></tbody></table>`;
+    const page = `<section class="page">${head}<div class="cols">${list}${list}</div>${foot}</section>`;
+    // In the page's script: JSON with "<" escaped cannot close the script tag.
+    const data = JSON.stringify(items.map((p) => [String(p.name || ''), String(p.barcode || '')])).replace(/</g, '\\u003c');
     const html = `<!doctype html>
 <html lang="th"><head><meta charset="utf-8">
 <title>${escapeHtml(title)} ${escapeHtml(dateText)}</title>
@@ -680,56 +694,67 @@ export function printCountSheet({ items, countDate, month, scope = '', counter =
 <style>
   @font-face { font-family: 'THSarabun'; font-weight: 400; src: local('TH Sarabun New'), local('THSarabunNew'), local('TH SarabunPSK'), local('THSarabunPSK'); }
   @font-face { font-family: 'THSarabun'; font-weight: 700; src: local('TH Sarabun New Bold'), local('THSarabunNew-Bold'), local('TH SarabunPSK Bold'), local('THSarabunPSK-Bold'); }
-  @page { size: A4; margin: 10mm 12mm; }
+  @page { size: A4; margin: 10mm; }
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
-  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #111; background: #fff; font-size: 16pt; line-height: 1.15; margin: 0; padding: 4mm; }
-  @media print { body { padding: 0; } }
-  table { width: 100%; border-collapse: collapse; font-size: 15pt; }
-  thead { display: table-header-group; }
-  tfoot { display: table-footer-group; }
-  .cols th, tbody td { border: 1px solid #777; padding: 3px 6px; vertical-align: middle; }
-  .cols th { background: #eee; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  tr { page-break-inside: avoid; }
-  tbody td { height: 11mm; }
-  .c { text-align: center; white-space: nowrap; }
-  .bc { font-family: ui-monospace, Consolas, monospace; font-size: 11pt; color: #444; }
-  .page-head td { padding: 0 0 8px; border: 0; }
-  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 6px; }
-  h1 { font-size: 24pt; margin: 0; line-height: 1.1; }
-  .sub { color: #444; font-size: 15pt; }
-  .meta { text-align: right; font-size: 15pt; }
-  .meta b { font-size: 18pt; }
-  .page-foot td { padding: 14px 0 0; border: 0; }
-  .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; text-align: center; font-size: 15pt; }
-  .sign .who div + div { margin-top: 2px; }
-  .printed { margin-top: 6px; font-size: 11pt; color: #777; text-align: right; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: 'THSarabun', 'TH Sarabun New', 'TH SarabunPSK', 'Sarabun', sans-serif; color: #111; font-size: 14pt; line-height: 1.1; }
+  /* One A4 sheet less the margins (a hair short, so rounding never spills onto an extra page). */
+  .page { width: 190mm; height: 276mm; display: flex; flex-direction: column; overflow: hidden; page-break-after: always; break-after: page; }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  @media screen { body { background: #ddd; } .page { background: #fff; margin: 4mm auto; padding: 0; outline: 10mm solid #fff; } }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 4px; margin-bottom: 6px; flex: none; }
+  h1 { font-size: 20pt; margin: 0; line-height: 1.1; }
+  .sub { color: #444; font-size: 13pt; }
+  .meta { text-align: right; font-size: 13pt; line-height: 1.15; }
+  .meta b { font-size: 16pt; }
+  .cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; align-items: start; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td { border: 1px solid #777; padding: 1px 3px; vertical-align: middle; }
+  th { background: #eee; font-weight: 700; font-size: 12pt; line-height: 1; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  td { height: 8mm; font-size: 12pt; line-height: 1.1; overflow-wrap: anywhere; }
+  td:first-child { text-align: center; font-size: 12pt; }
+  .bc { font-family: ui-monospace, Consolas, monospace; font-size: 9pt; line-height: 1; color: #444; }
+  .foot { flex: none; padding-top: 8px; }
+  .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center; font-size: 13pt; line-height: 1.2; }
+  .printed { margin-top: 4px; font-size: 10pt; color: #777; display: flex; justify-content: space-between; }
 </style></head><body>
-  <table>
-    <thead>
-      <tr class="page-head"><td colspan="4"><div class="head">
-        <div><h1>${escapeHtml(title)}</h1><div class="sub">ร้านค้าสหการ${scope ? ` · ${escapeHtml(scope)}` : ''} · รวม ${items.length.toLocaleString('th-TH')} รายการ</div></div>
-        <div class="meta">วันที่ตรวจนับ<br><b>${escapeHtml(dateText)}</b></div>
-      </div></td></tr>
-      <tr class="cols">
-        <th class="c" style="width:13mm">ที่</th><th>ชื่อสินค้า / รหัสบาร์โค้ด</th>
-        <th class="c" style="width:32mm">จำนวนที่นับได้</th><th style="width:52mm">หมายเหตุ</th>
-      </tr>
-    </thead>
-    <tfoot>
-      <tr class="page-foot"><td colspan="4">
-        <div class="sign">${sign('ผู้นับ', counter)}${sign('ผู้ตรวจสอบ', checker)}</div>
-        <div class="printed">พิมพ์เมื่อ ${escapeHtml(fmtNow())}</div>
-      </td></tr>
-    </tfoot>
-    <tbody>${items.map((p, i) => `
-      <tr>
-        <td class="c">${i + 1}</td>
-        <td>${escapeHtml(p.name)}${p.barcode ? `<div class="bc">${escapeHtml(p.barcode)}</div>` : ''}</td>
-        <td></td><td></td>
-      </tr>`).join('')}
-    </tbody>
-  </table>
+<template id="page">${page}</template>
+<script>
+(function () {
+  var items = ${data};
+  function esc(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function layout() {
+    var tpl = document.getElementById('page');
+    Array.prototype.slice.call(document.querySelectorAll('.page')).forEach(function (p) { p.remove(); });
+    var i = 0, pages = [];
+    do {
+      var pg = tpl.content.firstElementChild.cloneNode(true);
+      document.body.appendChild(pg);
+      pages.push(pg);
+      var room = pg.querySelector('.cols').clientHeight;
+      var bodies = pg.querySelectorAll('tbody');
+      for (var side = 0; side < 2 && i < items.length; side++) {
+        var table = bodies[side].parentNode, placed = 0;
+        while (i < items.length) {
+          var tr = document.createElement('tr');
+          tr.innerHTML = '<td>' + (i + 1) + '</td><td>' + esc(items[i][0]) + (items[i][1] ? '<div class="bc">' + esc(items[i][1]) + '</div>' : '') + '</td><td></td><td></td>';
+          bodies[side].appendChild(tr);
+          // Always at least one row, so a name too long for a page still moves on.
+          if (table.offsetHeight > room && placed > 0) { tr.remove(); break; }
+          placed++; i++;
+        }
+      }
+      // Nothing to count in the right list: leave it out rather than print an empty header.
+      if (!bodies[1].children.length) bodies[1].parentNode.style.visibility = 'hidden';
+    } while (i < items.length);
+    pages.forEach(function (p, n) { p.querySelector('[data-pageno]').textContent = 'หน้า ' + (n + 1) + ' / ' + pages.length; });
+  }
+  layout();
+  // Measured again in the real font, before printHtml (which waits for the fonts too) prints.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
+})();
+</script>
 </body></html>`;
     printHtml(html);
 }
