@@ -192,16 +192,30 @@ class StockAdjustmentService
             $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([(int) $sa['product_id']]);
             $p = $stmt->fetch();
-            $this->moveStock($p, -(int) $sa['qty'], "ยกเลิก {$sa['doc_no']}: คงเหลือ " . sprintf('%+d', -(int) $sa['qty']) . " ชิ้น ({$reason})", $userId, $ip);
-            $this->db->prepare('UPDATE stock_adjustments SET cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ?, updated_at = NOW() WHERE id = ?')
-                ->execute([$userId, $reason, $id]);
-            $this->audit->log('stock_adjustments', $id, 'cancel', ['cancelled_at' => null], ['cancelled_at' => date('Y-m-d H:i:s'), 'cancel_reason' => $reason], $userId, $ip);
+            $this->cancelLocked($sa, $p, true, $reason, $userId, $ip);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
         return ['id' => $id, 'product_id' => (int) $sa['product_id']];
+    }
+
+    /**
+     * Cancels a locked, active correction inside the caller's transaction. $moveStock false: a
+     * later count has set the stock since, so the correction's pieces are no longer in it.
+     */
+    public function cancelLocked(array $sa, array $product, bool $moveStock, string $reason, int $userId, ?string $ip): void
+    {
+        $id = (int) $sa['id'];
+        $reason = mb_substr($reason, 0, 255);
+        if ($moveStock) {
+            $this->moveStock($product, -(int) $sa['qty'], "ยกเลิก {$sa['doc_no']}: คงเหลือ " . sprintf('%+d', -(int) $sa['qty']) . " ชิ้น ({$reason})", $userId, $ip);
+        }
+        $this->db->prepare('UPDATE stock_adjustments SET cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ?, updated_at = NOW() WHERE id = ?')
+            ->execute([$userId, $reason, $id]);
+        $this->audit->log('stock_adjustments', $id, 'cancel', ['cancelled_at' => null],
+            ['cancelled_at' => date('Y-m-d H:i:s'), 'cancel_reason' => $reason, 'stock_moved' => $moveStock], $userId, $ip);
     }
 
     private function lockActive(int $id): array

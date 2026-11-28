@@ -447,6 +447,16 @@ class InventoryService
                     "เหตุผล: {$e['reason']}" . ($e['change'] === 0 ? ' · สต๊อกไม่เปลี่ยน' : ''));
             }
         }
+        // Cancelled stock card corrections: what each did, and its pieces taken back at the cancel.
+        foreach ($this->cancelledAdjustments($productId) as $e) {
+            if ($until($e['at'])) {
+                $moves[] = $move($e, $e['at'], $e['qty'], null, 'ยกเลิกภายหลัง');
+            }
+            if ($until($e['cancelled_at'])) {
+                $moves[] = $move(['kind' => 'adjfixvoid', 'user_name' => $e['cancelled_by'], 'ord' => 5] + $e, $e['cancelled_at'], $e['change'], null,
+                    "เหตุผล: {$e['reason']}" . ($e['change'] === 0 ? ' · สต๊อกไม่เปลี่ยน' : ''));
+            }
+        }
         usort($moves, fn ($a, $b) => [$b['at'], $b['ord'], $b['rid']] <=> [$a['at'], $a['ord'], $a['rid']]);
 
         $rows = [];
@@ -472,6 +482,29 @@ class InventoryService
             'balance' => $anchor, 'as_of' => $asOf, 'count_doc_no' => $countDoc,
             'rows' => array_slice($rows, 0, $limit), 'more' => max(0, count($rows) - $limit),
         ];
+    }
+
+    /** Cancelled stock card corrections (SA-...) of a product, with whether the cancel took their pieces back. */
+    private function cancelledAdjustments(int $productId): array
+    {
+        if (!StockAdjustmentService::available($this->db)) {
+            return [];
+        }
+        $stmt = $this->db->prepare(
+            "SELECT sa.*, u.full_name AS user_name, cu.full_name AS canceller,
+                    (SELECT a.new_data FROM audit_logs a WHERE a.table_name = 'stock_adjustments' AND a.record_id = sa.id AND a.action = 'cancel' ORDER BY a.id DESC LIMIT 1) AS logged
+             FROM stock_adjustments sa LEFT JOIN users u ON u.id = sa.user_id LEFT JOIN users cu ON cu.id = sa.cancelled_by
+             WHERE sa.product_id = ? AND sa.cancelled_at IS NOT NULL"
+        );
+        $stmt->execute([$productId]);
+        return array_map(function ($r) {
+            $moved = ((array) json_decode((string) $r['logged'], true))['stock_moved'] ?? true;
+            return [
+                'kind' => 'adjfixcancelled', 'doc_no' => $r['doc_no'], 'user_name' => $r['user_name'], 'rid' => (int) $r['id'], 'ord' => 4,
+                'at' => (string) $r['created_at'], 'qty' => (int) $r['qty'], 'cancelled_at' => (string) $r['cancelled_at'],
+                'cancelled_by' => $r['canceller'], 'reason' => (string) $r['cancel_reason'], 'change' => $moved ? -(int) $r['qty'] : 0,
+            ];
+        }, $stmt->fetchAll());
     }
 
     /** Counts of a product cancelled after they had taken effect, from the log StockCountService::cancelCount keeps. */

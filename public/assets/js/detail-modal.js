@@ -109,14 +109,13 @@ export async function openDetailModal(load, navigate, opts = {}) {
         try {
             const p = (await api.post(`/stockcounts/lines/${line}/cancel`, { preview: true })).data;
             const diff = p.counted - p.system;
-            const effect = p.later ? `สต๊อกตอนนี้ไม่เปลี่ยน (${p.stock_before} ชิ้น) เพราะมีการนับสินค้านี้ครั้งหลังกว่านี้แล้ว`
-                : p.stock_after === p.stock_before ? `สต๊อกตอนนี้ไม่เปลี่ยน (${p.stock_before} ชิ้น)`
-                    : `สต๊อกตอนนี้จะเปลี่ยนจาก ${p.stock_before} เป็น ${p.stock_after} ชิ้น${p.stock_after < 0 ? ' (ติดลบ ควรตรวจนับใหม่)' : ''}`;
-            const signed = (n) => `${n > 0 ? '+' : ''}${n}`;
-            // Counts still waiting for a manager: their system figure loses the cancelled change too.
-            const waiting = (p.waiting || []).map((w) => `\nการนับ ${w.doc_no} ที่รอรับรอง: ยอดในระบบตอนนับ ${w.system_before} → ${w.system_after} ผลต่าง ${signed(w.counted - w.system_before)} → ${signed(w.counted - w.system_after)} (นับได้ ${w.counted} เท่าเดิม)`).join('');
+            // Stock card corrections of this count are cancelled together with it.
+            const fixes = (p.adjustments || []).map((a) => `\nยกเลิกเอกสารแก้การปรับยอด ${a.doc_no} ด้วย (${a.change ? `สต๊อก ${a.change > 0 ? '+' : ''}${a.change}` : 'สต๊อกไม่เปลี่ยน'})`).join('');
+            const effect = (p.stock_after === p.stock_before ? `สต๊อกตอนนี้ไม่เปลี่ยน (${p.stock_before} ชิ้น)`
+                : `สต๊อกตอนนี้จะเปลี่ยนจาก ${p.stock_before} เป็น ${p.stock_after} ชิ้น${p.stock_after < 0 ? ' (ติดลบ ควรตรวจนับใหม่)' : ''}`)
+                + (p.later ? '\nมีการนับสินค้านี้ครั้งหลังกว่านี้แล้ว ยอดของการนับนี้จึงไม่ถูกหักคืน' : '') + fixes;
             const reason = await promptDialog(
-                `${p.name}: นับได้ ${p.counted} ในระบบตอนปรับ ${p.system} (${diff > 0 ? '+' : ''}${diff})\n${effect}${waiting}${p.round ? '\nรอบตรวจนับทั้งร้าน: ยกเลิกเฉพาะสินค้านี้ สินค้าอื่นในรอบไม่เปลี่ยน' : ''}\nยกเลิกแล้วกู้คืนไม่ได้\n\nระบุเหตุผลที่ยกเลิก`,
+                `${p.name}: นับได้ ${p.counted} ในระบบตอนปรับ ${p.system} (${diff > 0 ? '+' : ''}${diff})\n${effect}${p.round ? '\nรอบตรวจนับทั้งร้าน: ยกเลิกเฉพาะสินค้านี้ สินค้าอื่นในรอบไม่เปลี่ยน' : ''}\nยกเลิกแล้วกู้คืนไม่ได้\n\nระบุเหตุผลที่ยกเลิก`,
                 { title: `ยกเลิกการนับ ${p.doc_no}?`, okText: 'ยกเลิกการนับ', cancelText: 'ไม่ยกเลิก', placeholder: 'เหตุผล (ต้องระบุ) เช่น นับผิดสินค้า กรอกจำนวนผิด', required: 'กรุณาระบุเหตุผลที่ยกเลิก', multiline: true, danger: true });
             if (reason === null) return;
             const res = (await api.post(`/stockcounts/lines/${line}/cancel`, { reason: reason.trim() })).data;

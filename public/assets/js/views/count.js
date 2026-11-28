@@ -47,7 +47,7 @@ const thCollator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' 
 const LEDGER_KIND = {
     purchase: 'ซื้อเข้า', receive: 'รับฝาก', sale: 'ขาย', pos: 'ขาย (นำเข้า POS)', return: 'คืนผู้ฝาก', count: 'ตรวจนับ', adjfix: 'แก้การปรับยอด',
     split: 'แยกสินค้า', damage: 'สินค้าเสียหาย', gap: 'ส่วนต่างที่ไม่มีเอกสารอ้างอิง', opening: 'ยอดก่อนรายการแรก (ไม่มีเอกสารอ้างอิง)',
-    countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ',
+    countcancelled: 'ตรวจนับ (ยกเลิกแล้ว)', countvoid: 'ยกเลิกการนับ', adjfixcancelled: 'แก้การปรับยอด (ยกเลิกแล้ว)', adjfixvoid: 'ยกเลิกการแก้การปรับยอด',
 };
 
 // What a count's difference is worth, at cost and at the sale price. Cost only comes to those who may see it.
@@ -158,7 +158,7 @@ export async function render(container, { permissions, user, navigate }) {
                         what: [LEDGER_KIND[r.kind] || r.kind, r.note].filter(Boolean).join(' · '),
                         who: [r.party, r.user_name].filter(Boolean).join(' · '),
                         in: r.qty > 0 ? r.qty : null, out: r.qty < 0 ? -r.qty : null, balance: r.balance,
-                        _source: r.doc_no && r.kind !== 'adjfix' ? `/inventory/document?kind=${encodeURIComponent(r.kind.startsWith('count') ? 'count' : r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
+                        _source: r.doc_no && !r.kind.startsWith('adjfix') ? `/inventory/document?kind=${encodeURIComponent(r.kind.startsWith('count') ? 'count' : r.kind)}&doc_no=${encodeURIComponent(r.doc_no)}` : null,
                         _cancel: d.can_cancel && r.kind === 'count' ? r.line_id : null,
                     })),
                 }],
@@ -355,6 +355,12 @@ export async function render(container, { permissions, user, navigate }) {
             : '<span class="pill muted" title="ลบอัตโนมัติเมื่อครบ 30 วัน">รูปถูกลบแล้ว</span>')).join('') || '<span class="muted" style="font-size:12px">ไม่มีรูป</span>'}</div>`;
     }
 
+    /** Under "after certifying": why it is not simply the number counted. */
+    function sinceCount(r) {
+        const why = r.superseded ? 'มีการนับครั้งหลังแล้ว' : r.moved_since ? `นับได้ ${r.count_qty} · หลังนับ ${signed(r.moved_since)}` : '';
+        return why ? `<div class="muted" style="font-size:11.5px;white-space:nowrap">${why}</div>` : '';
+    }
+
     /** Where/how it was counted, and why it differs. */
     function itemDetail(r) {
         return `<div style="font-size:12.5px;line-height:1.5">
@@ -397,7 +403,7 @@ export async function render(container, { permissions, user, navigate }) {
           </div>
           ${pend.length ? `
             <div class="card-pad" style="padding-top:0"><b style="color:var(--bad)">รอผู้จัดการรับรอง (${pend.length})</b>
-              <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · รับรองแล้วสต๊อกจะเปลี่ยนตามผลต่างที่นับได้ (ถ้ามีขาย/รับเข้าหลังนับ ยอดนั้นยังอยู่) · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
+              <span class="muted" style="font-size:12.5px"> — สต๊อกยังไม่เปลี่ยนจนกว่าจะรับรอง · รับรองแล้วสต๊อกจะเป็นยอดที่นับได้ บวก/ลบรายการรับเข้าและขายที่เกิดหลังเวลาที่นับ (การแก้ไข/ยกเลิกเอกสารเก่าไม่ทำให้ยอดนี้เปลี่ยน) · ผู้นับรับรองการนับของตัวเองไม่ได้</span></div>
             <div class="table-wrap"><table>
               <thead><tr>${headHtml('pending', PENDING_COLUMNS)}</tr></thead>
               <tbody>${shown.map((r, i) => {
@@ -410,7 +416,7 @@ export async function render(container, { permissions, user, navigate }) {
                     <td>${diffCell(r)}</td>
                     <td>${itemDetail(r)}</td>
                     <td>${itemPhotos(r)}</td>
-                    <td class="num">${ledgerLink(r.qty_stock, r.product_id)} → <b>${r.stock_if_approved}</b></td>
+                    <td class="num">${ledgerLink(r.qty_stock, r.product_id)} → <b>${r.stock_if_approved}</b>${sinceCount(r)}</td>
                     <td style="white-space:nowrap">
                       ${canCertify ? `<button type="button" class="btn sm" data-item-ok="${i}">รับรอง</button>` : ''}
                       ${itemData.can_approve && !mine ? `<button type="button" class="btn secondary sm" data-item-no="${i}">ไม่รับรอง</button>` : ''}
@@ -534,7 +540,7 @@ export async function render(container, { permissions, user, navigate }) {
 
     async function certifyItem(r, redraw) {
         const note = await promptDialog(
-            `${r.name}: ${r.counter_name || '-'} นับได้ ${r.count_qty} ในระบบตอนนับ ${r.count_system_qty} (${signed(r.diff_at_count)}) สาเหตุ: ${r.reason_label || '-'} — ${r.diff_detail || ''}\n\nรับรองแล้วสต๊อกจะเปลี่ยนจาก ${r.qty_stock} เป็น ${r.stock_if_approved} ชิ้น`,
+            `${r.name}: ${r.counter_name || '-'} นับได้ ${r.count_qty} ในระบบตอนนับ ${r.count_system_qty} (${signed(r.diff_at_count)}) สาเหตุ: ${r.reason_label || '-'} — ${r.diff_detail || ''}\n\n${r.superseded ? 'มีการนับ/ปรับยอดสินค้านี้หลังการนับนี้แล้ว รับรองแล้วสต๊อกไม่เปลี่ยน\n' : r.moved_since ? `หลังเวลาที่นับมีรายการรับ/จ่าย ${signed(r.moved_since)} ชิ้น (นับได้ ${r.count_qty} ${signed(r.moved_since)})\n` : ''}รับรองแล้วสต๊อกจะเปลี่ยนจาก ${r.qty_stock} เป็น ${r.stock_if_approved} ชิ้น`,
             { title: `รับรองการนับ ${r.doc_no}?`, okText: 'รับรองและปรับสต๊อก', placeholder: 'ความเห็นผู้รับรอง (ถ้ามี) เช่น ตรวจนับซ้ำแล้วตรงกัน', multiline: true }
         );
         if (note === null) return;

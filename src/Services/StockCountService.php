@@ -390,13 +390,13 @@ class StockCountService
      * round becomes "not counted" (the round's other products stay). Both are logged on the line, so
      * the stock ledger still shows what happened. $preview: only check and work out the effect.
      *
-     * A count of the product waiting for a manager does not hold it up. When the stock is taken back
-     * and that count was made after this one took effect, the system figure it was compared with
-     * held the wrong count too: it is taken out there as well (the number counted stays), so
-     * certifying it later still ends at what was physically there.
+     * A count of the product waiting for a manager does not hold it up, and is left as recorded:
+     * certifying it later sets the stock from the number counted (see certifiedStock).
+     * Stock card corrections (SA-...) of this count's adjustments are cancelled with it, taking
+     * their pieces back too unless a count approved after the correction has set the stock since.
      *
      * @return array{doc_no:string, name:string, round:bool, system:int, counted:int, stock_before:int, stock_after:int, later:bool,
-     *     waiting:array<int,array{doc_no:string, counted:int, system_before:int, system_after:int}>}
+     *     adjustments:array<int,array{doc_no:string, change:int}>}
      */
     public function cancelCount(int $lineId, string $reason, int $userId, string $role, ?string $ip, bool $preview = false): array
     {
@@ -430,13 +430,6 @@ class StockCountService
             if (!$p) {
                 throw new \RuntimeException('ไม่พบสินค้า');
             }
-            if (StockAdjustmentService::available($this->db)) {
-                $stmt = $this->db->prepare('SELECT doc_no FROM stock_adjustments WHERE product_id = ? AND stock_count_id = ? AND cancelled_at IS NULL LIMIT 1');
-                $stmt->execute([$productId, (int) $sc['id']]);
-                if ($fix = $stmt->fetchColumn()) {
-                    throw new \RuntimeException("การนับ {$sc['doc_no']} มีเอกสารแก้การปรับยอด {$fix} อ้างถึง ให้ยกเลิก {$fix} ในบัตรสินค้าก่อน");
-                }
-            }
             $at = (string) ($sc['approved_at'] ?? $sc['created_at']);
             $stmt = $this->db->prepare(
                 "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
@@ -450,23 +443,26 @@ class StockCountService
             $before = (int) $p['qty_stock'];
             $after = $later ? $before : $before - ($counted - $system);
             $round = ($sc['kind'] ?? 'round') !== 'item';
-            // Waiting counts made while the stock held this count's change (see above).
-            $waiting = [];
-            if ($after !== $before && self::itemReady($this->db)) {
-                $stmt = $this->db->prepare(
-                    "SELECT sci.id, sci.system_qty, sci.count_system_qty, sci.count_qty, sci.counted_qty, sci.count_note, sc.doc_no
-                     FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
-                     WHERE sci.product_id = ? AND sc.kind = 'item' AND sc.status = 'submitted' AND COALESCE(sci.counted_at, sc.created_at) >= ? FOR UPDATE"
+            $countAfter = $after;
+            // The stock card corrections of this count go with it.
+            $fixes = [];
+            if (StockAdjustmentService::available($this->db)) {
+                $stmt = $this->db->prepare('SELECT * FROM stock_adjustments WHERE product_id = ? AND stock_count_id = ? AND cancelled_at IS NULL ORDER BY id FOR UPDATE');
+                $stmt->execute([$productId, (int) $sc['id']]);
+                $since = $this->db->prepare(
+                    "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                     WHERE sci.product_id = ? AND sci.id <> ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sc.approved_at > ? LIMIT 1"
                 );
-                $stmt->execute([$productId, $at]);
-                foreach ($stmt->fetchAll() as $w) {
-                    $was = (int) ($w['count_system_qty'] ?? $w['system_qty']);
-                    $waiting[] = ['line_id' => (int) $w['id'], 'doc_no' => $w['doc_no'], 'counted' => (int) ($w['count_qty'] ?? $w['counted_qty']),
-                        'system_before' => $was, 'system_after' => $was + ($after - $before), 'note' => $w['count_note']];
+                foreach ($stmt->fetchAll() as $fix) {
+                    $since->execute([$productId, $lineId, $fix['created_at']]);
+                    $change = $since->fetchColumn() ? 0 : -(int) $fix['qty'];
+                    $after += $change;
+                    $fixes[] = ['row' => $fix, 'change' => $change];
                 }
             }
             $result = ['doc_no' => $sc['doc_no'], 'name' => $p['name'], 'round' => $round, 'system' => $system, 'counted' => $counted,
-                'stock_before' => $before, 'stock_after' => $after, 'later' => $later, 'waiting' => $waiting];
+                'stock_before' => $before, 'stock_after' => $after, 'later' => $later,
+                'adjustments' => array_map(fn ($f) => ['doc_no' => $f['row']['doc_no'], 'change' => $f['change']], $fixes)];
             if ($preview) {
                 $this->db->rollBack();
                 return $result;
@@ -479,25 +475,20 @@ class StockCountService
                     ->execute([$userId, $reason, (int) $sc['id']]);
                 $this->audit->log('stock_counts', (int) $sc['id'], 'cancel', ['status' => 'approved'], ['status' => 'cancelled', 'reason' => $reason], $userId, $ip);
             }
-            if ($after !== $before) {
-                $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$after, $productId]);
-                $this->audit->log('products', $productId, 'update', $p, ['qty_stock' => $after, 'stock_count' => $sc['doc_no'], 'note' => "ยกเลิกการตรวจนับ: {$reason}"], $userId, $ip);
+            if ($countAfter !== $before) {
+                $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$countAfter, $productId]);
+                $this->audit->log('products', $productId, 'update', $p, ['qty_stock' => $countAfter, 'stock_count' => $sc['doc_no'], 'note' => "ยกเลิกการตรวจนับ: {$reason}"], $userId, $ip);
             }
-            foreach ($waiting as $w) {
-                $shift = $w['system_after'] - $w['system_before'];
-                $note = "ยอดในระบบตอนนับปรับจาก {$w['system_before']} เป็น {$w['system_after']} เพราะยกเลิก {$sc['doc_no']}";
-                $this->db->prepare(
-                    'UPDATE stock_count_items SET system_qty = system_qty + ?, count_system_qty = ?, diff_qty = diff_qty - ?, count_note = ? WHERE id = ?'
-                )->execute([$shift, $w['system_after'], $shift, mb_substr($w['note'] ? "{$w['note']} · {$note}" : $note, 0, 255), $w['line_id']]);
-                $this->audit->log('stock_count_items', $w['line_id'], 'update',
-                    ['doc_no' => $w['doc_no'], 'product_id' => $productId, 'count_system_qty' => $w['system_before']],
-                    ['doc_no' => $w['doc_no'], 'product_id' => $productId, 'count_system_qty' => $w['system_after'], 'note' => $note], $userId, $ip);
+            $corrections = new StockAdjustmentService($this->db, $this->docs, $this->audit);
+            foreach ($fixes as $f) {
+                $stmt = $this->db->prepare('SELECT * FROM products WHERE id = ?');
+                $stmt->execute([$productId]);
+                $corrections->cancelLocked($f['row'], $stmt->fetch(), $f['change'] !== 0, "ยกเลิกพร้อมการตรวจนับ {$sc['doc_no']}: {$reason}", $userId, $ip);
             }
             // The stock ledger reads this to show the cancelled count and when it was taken back.
             $this->audit->log('stock_count_items', $lineId, 'cancel',
                 ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'system_qty' => $system, 'counted_qty' => $counted, 'approved_at' => $at],
-                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'reason' => $reason, 'stock_before' => $before, 'stock_after' => $after,
-                    'rebased' => array_column($waiting, 'line_id')],
+                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'reason' => $reason, 'stock_before' => $before, 'stock_after' => $countAfter],
                 $userId, $ip);
             $this->db->commit();
             return $result;
@@ -842,8 +833,7 @@ class StockCountService
             $stmt->execute([$line['product_id']]);
             $old = $stmt->fetch();
             $now = (int) $old['qty_stock'];
-            $diff = (int) $line['count_qty'] - (int) $line['count_system_qty'];
-            $after = max(0, $now + $diff);
+            $after = $this->certifiedStock((int) $line['product_id'], (int) $line['count_qty'], (string) ($line['counted_at'] ?? $sc['created_at']), $now)['stock'];
             $this->db->prepare('UPDATE stock_count_items SET system_qty = ?, counted_qty = ?, diff_qty = ? WHERE id = ?')
                 ->execute([$now, $after, $after - $now, $line['id']]);
             if ($after !== $now) {
@@ -893,6 +883,65 @@ class StockCountService
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * What certifying a waiting count sets the stock to: the number counted, plus what came in and
+     * less what went out after the moment of counting. The stock in the system now and the figure it
+     * showed at the count are not used, so a wrong purchase or count put right meanwhile cannot
+     * push the result away from what was counted. When the product was counted (or set by a payout)
+     * again after this count, that later figure stands and the stock stays as it is.
+     *
+     * @return array{stock:int, moved:int, superseded:bool}
+     */
+    private function certifiedStock(int $productId, int $counted, string $countedAt, int $now): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+             WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
+               AND COALESCE(sci.counted_at, sc.approved_at) > ? LIMIT 1"
+        );
+        $stmt->execute([$productId, $countedAt]);
+        if ($stmt->fetchColumn()) {
+            return ['stock' => $now, 'moved' => 0, 'superseded' => true];
+        }
+        $moved = $this->movedSince($productId, $countedAt);
+        return ['stock' => max(0, $counted + $moved), 'moved' => $moved, 'superseded' => false];
+    }
+
+    /**
+     * Pieces that physically came in (+) or went out (-) after a moment: sales made after it, and
+     * documents recorded after it. A purchase or damage dated before that day is a late entry of
+     * something that had already happened (the count saw it), and cancelled documents, edits of
+     * earlier ones and stock card corrections move no goods.
+     */
+    private function movedSince(int $productId, string $since): int
+    {
+        $live = fn (string $table, string $alias) => \App\Support\Db::hasColumn($this->db, $table, 'cancelled_at') ? " AND {$alias}.cancelled_at IS NULL" : '';
+        $parts = [
+            'SELECT -si.qty AS q FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = ? AND s.sale_datetime > ?',
+            "SELECT pi.units FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
+             WHERE pi.product_id = ? AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
+               AND pd.created_at > ? AND COALESCE(pd.receipt_date, DATE(pd.created_at)) >= DATE(?)",
+            'SELECT ri.qty FROM receive_items ri JOIN receive_documents rd ON rd.id = ri.receive_document_id
+             WHERE ri.product_id = ? AND rd.created_at > ?' . $live('receive_documents', 'rd'),
+            'SELECT -ri.qty FROM return_items ri JOIN return_documents rd ON rd.id = ri.return_document_id
+             WHERE ri.product_id = ? AND rd.created_at > ?' . $live('return_documents', 'rd'),
+        ];
+        $args = [$productId, $since, $productId, $since, $since, $productId, $since, $productId, $since];
+        if (ProductSplitService::available($this->db)) {
+            $parts[] = 'SELECT -sp.qty FROM product_splits sp WHERE sp.source_product_id = ? AND sp.created_at > ? AND sp.cancelled_at IS NULL';
+            $parts[] = 'SELECT spi.qty FROM product_split_items spi JOIN product_splits sp ON sp.id = spi.split_id
+                        WHERE spi.product_id = ? AND sp.created_at > ? AND sp.cancelled_at IS NULL';
+            array_push($args, $productId, $since, $productId, $since);
+        }
+        if (DamageService::available($this->db)) {
+            $parts[] = 'SELECT -dg.qty FROM damaged_goods dg WHERE dg.product_id = ? AND dg.created_at > ? AND dg.damage_date >= DATE(?) AND dg.cancelled_at IS NULL';
+            array_push($args, $productId, $since, $since);
+        }
+        $stmt = $this->db->prepare('SELECT COALESCE(SUM(q), 0) FROM (' . implode(' UNION ALL ', $parts) . ') m');
+        $stmt->execute($args);
+        return (int) $stmt->fetchColumn();
     }
 
     /**
@@ -948,8 +997,13 @@ class StockCountService
             $r['reason_label'] = $r['diff_reason'] !== null ? (self::DIFF_REASONS[$r['diff_reason']] ?? $r['diff_reason']) : null;
             // Approved: whether correcting it moves the stock now (no later count of the product).
             $r['latest'] = $r['status'] === 'approved' && $this->isLatestCount(['id' => $r['line_id'], 'product_id' => $r['product_id']], $r);
-            // Waiting: what the stock becomes if certified now.
-            $r['stock_if_approved'] = $r['status'] === 'submitted' ? max(0, (int) $r['qty_stock'] + $r['diff_at_count']) : null;
+            // Waiting: what the stock becomes if certified now, and what moved since it was counted.
+            $r['stock_if_approved'] = $r['moved_since'] = null;
+            $r['superseded'] = false;
+            if ($r['status'] === 'submitted') {
+                $c = $this->certifiedStock((int) $r['product_id'], (int) ($r['count_qty'] ?? $r['counted_qty']), (string) ($r['counted_at'] ?? $r['created_at']), (int) $r['qty_stock']);
+                [$r['stock_if_approved'], $r['moved_since'], $r['superseded']] = [$c['stock'], $c['moved'], $c['superseded']];
+            }
         }
         unset($r);
         return [
