@@ -466,10 +466,8 @@ export async function render(container, { permissions, user, navigate }) {
             <label><input type="radio" name="cs-scope" value="store"> เฉพาะสินค้าของร้าน (ไม่รวมฝากขาย) ${count(store)} รายการ</label>
             <label><input type="radio" name="cs-scope" value="consign"> เฉพาะสินค้าฝากขาย ${count(all.length - store)} รายการ</label>
             <label><input type="checkbox" data-cs-instock> เฉพาะสินค้าที่ในระบบยังมีคงเหลือ</label>
-            <label>รายการที่นับแล้วในระบบ<br><select data-cs-counted style="width:100%">
-              <option value="">ไม่ทำเครื่องหมาย (เว้นช่องว่างทุกรายการ)</option>
-              <option value="mark">ทำเครื่องหมาย ✓</option>
-              <option value="qty">ทำเครื่องหมาย ✓ และพิมพ์จำนวนที่นับได้</option></select></label>
+            <label><input type="checkbox" data-cs-stock> แสดงยอดคงเหลือในระบบ</label>
+            <label><input type="checkbox" data-cs-counted> รายการที่นับแล้วในระบบ ให้พิมพ์จำนวนที่นับได้</label>
             <label data-cs-since-wrap hidden>ถือว่านับแล้ว เมื่อนับตั้งแต่วันที่<br><input type="date" data-cs-since value="${today}" max="${today}" style="width:100%"></label>
           </div>`;
         const ask = confirmDialog('', { title: '🖨️ พิมพ์ใบตรวจนับสินค้า', okText: 'พิมพ์', html, width: 460 });
@@ -489,7 +487,8 @@ export async function render(container, { permissions, user, navigate }) {
             if (!sinceTouched) since.value = date.value < today ? date.value : today;
         });
         const countedEl = f('[data-cs-counted]');
-        countedEl.addEventListener('change', () => { f('[data-cs-since-wrap]').hidden = !countedEl.value; });
+        countedEl.addEventListener('change', () => { f('[data-cs-since-wrap]').hidden = !countedEl.checked; });
+        const stockEl = f('[data-cs-stock]');
         const scopeEls = [...box.querySelectorAll('input[name="cs-scope"]')];
         const inStock = f('[data-cs-instock]');
         const counter = f('[data-cs-counter]');
@@ -505,22 +504,22 @@ export async function render(container, { permissions, user, navigate }) {
         }
         const scope = [{ all: 'สินค้าทั้งหมด', store: 'เฉพาะสินค้าของร้าน', consign: 'เฉพาะสินค้าฝากขาย' }[scopeKey], inStock.checked ? 'ที่ยังมีคงเหลือ' : '']
             .filter(Boolean).join(' ');
-        const mark = countedEl.value;
-        const markSince = since.value || today;
+        const showCounted = countedEl.checked;
+        const countedFrom = since.value || today;
         let counted = new Map();
-        if (mark) {
+        if (showCounted) {
             try {
-                counted = await countedSince(markSince, today);
+                counted = await countedSince(countedFrom, today);
             } catch (e) {
                 await alertDialog(e.message, { tone: 'error' });
                 return;
             }
         }
         printCountSheet({
-            items: list.map((p) => ({ name: p.name, barcode: p.barcode, counted: counted.get(p.id) || null })),
+            items: list.map((p) => ({ name: p.name, barcode: p.barcode, stock: p.qty_stock, counted: counted.get(p.id) || null })),
             countDate: date.value || today, month: month.value || '', scope,
             counter: counter.value.trim(), checker: checker.value.trim(),
-            mark, markSince,
+            showStock: stockEl.checked, showCounted, countedFrom,
         });
     }
 

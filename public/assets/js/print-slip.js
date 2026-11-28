@@ -665,11 +665,11 @@ export function printClosingReport(r, { weekday, status, send }) {
  * checker sign-off at the bottom, with their names when given, else blank lines.
  * Rows differ in height (long names wrap), so a script in the printed page fills each page by
  * measuring: once at once, again when the fonts have loaded (before printHtml prints).
- * items: [{ name, barcode, counted? }]. mark: '' leaves every row blank; 'mark' ticks the rows
- * already counted in the system since markSince (counted: { qty, pending }); 'qty' also prints the
- * number counted. A count still waiting for a manager is noted as such.
+ * items: [{ name, barcode, stock, counted? }]. showStock adds a column with the stock in the system.
+ * showCounted fills in the number counted on rows already counted in the system since countedFrom
+ * (counted: { qty, pending }); a count still waiting for a manager is noted as such.
  */
-export function printCountSheet({ items, countDate, month, scope = '', counter = '', checker = '', mark = '', markSince = '' }) {
+export function printCountSheet({ items, countDate, month, scope = '', counter = '', checker = '', showStock = false, showCounted = false, countedFrom = '' }) {
     const thDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' });
     const thMonth = (ym) => new Date(`${ym}-01T00:00:00`).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
     const title = `ใบตรวจนับสินค้า${month ? ` ประจำเดือน${thMonth(month)}` : ''}`;
@@ -678,22 +678,24 @@ export function printCountSheet({ items, countDate, month, scope = '', counter =
         <div>ลงชื่อ ............................................... ${role}</div>
         <div>(${name ? escapeHtml(name) : '...............................................'})</div>
         <div>วันที่ ${escapeHtml(dateText)}</div></div>`;
-    const done = mark ? items.filter((p) => p.counted).length : 0;
-    const legend = mark ? `<div class="sub">✓ = นับแล้วในระบบ${markSince ? `ตั้งแต่ ${escapeHtml(thDate(markSince))}` : ''} ${done.toLocaleString('th-TH')} รายการ · ยังไม่ได้นับ ${(items.length - done).toLocaleString('th-TH')} รายการ</div>` : '';
+    const done = showCounted ? items.filter((p) => p.counted).length : 0;
+    const legend = showCounted ? `<div class="sub">แถวสีเทา = นับแล้วในระบบ${countedFrom ? `ตั้งแต่ ${escapeHtml(thDate(countedFrom))}` : ''} ${done.toLocaleString('th-TH')} รายการ · ยังไม่ได้นับ ${(items.length - done).toLocaleString('th-TH')} รายการ</div>` : '';
     const head = `<div class="head">
         <div><h1>${escapeHtml(title)}</h1><div class="sub">ร้านค้าสหการ${scope ? ` · ${escapeHtml(scope)}` : ''} · รวม ${items.length.toLocaleString('th-TH')} รายการ</div>${legend}</div>
         <div class="meta">วันที่ตรวจนับ<br><b>${escapeHtml(dateText)}</b></div></div>`;
     const foot = `<div class="foot"><div class="sign">${sign('ผู้นับ', counter)}${sign('ผู้ตรวจสอบ', checker)}</div>
         <div class="printed"><span data-pageno></span><span>พิมพ์เมื่อ ${escapeHtml(fmtNow())}</span></div></div>`;
-    const list = `<table class="list"><colgroup><col style="width:8mm"><col><col style="width:15mm"><col style="width:17mm"></colgroup>
-        <thead><tr><th>ที่</th><th>ชื่อสินค้า / รหัสบาร์โค้ด</th><th>จำนวน<br>ที่นับได้</th><th>หมายเหตุ</th></tr></thead><tbody></tbody></table>`;
+    // With the stock column the remark box gives up some width, so the name keeps enough.
+    const list = `<table class="list"><colgroup><col style="width:8mm"><col>${showStock ? '<col style="width:13mm">' : ''}<col style="width:15mm"><col style="width:${showStock ? 14 : 17}mm"></colgroup>
+        <thead><tr><th>ที่</th><th>ชื่อสินค้า / รหัสบาร์โค้ด</th>${showStock ? '<th>คงเหลือ<br>ในระบบ</th>' : ''}<th>จำนวน<br>ที่นับได้</th><th>หมายเหตุ</th></tr></thead><tbody></tbody></table>`;
     const page = `<section class="page">${head}<div class="cols">${list}${list}</div>${foot}</section>`;
     // In the page's script: JSON with "<" escaped cannot close the script tag.
-    // Per row: name, barcode, text of the quantity box, text of the remark box, counted.
+    // Per row: name, barcode, text of the quantity box, text of the remark box, counted, stock in the system.
     const data = JSON.stringify(items.map((p) => {
-        const c = mark ? p.counted : null;
+        const c = showCounted ? p.counted : null;
         return [String(p.name || ''), String(p.barcode || ''),
-            c ? `✓${mark === 'qty' ? ` ${Number(c.qty).toLocaleString('th-TH')}` : ''}` : '', c?.pending ? 'รอรับรอง' : '', c ? 1 : 0];
+            c ? Number(c.qty).toLocaleString('th-TH') : '', c?.pending ? 'รอรับรอง' : '', c ? 1 : 0,
+            showStock ? Number(p.stock || 0).toLocaleString('th-TH') : null];
     })).replace(/</g, '\\u003c');
     const html = `<!doctype html>
 <html lang="th"><head><meta charset="utf-8">
@@ -725,6 +727,7 @@ export function printCountSheet({ items, countDate, month, scope = '', counter =
   td:first-child { text-align: center; font-size: 12pt; }
   tr.done td { background: #ececec; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   td.qty { text-align: center; font-weight: 700; font-size: 13pt; }
+  td.stock { text-align: center; }
   td.note { font-size: 10pt; text-align: center; }
   .bc { font-family: ui-monospace, Consolas, monospace; font-size: 9pt; line-height: 1; color: #444; }
   .foot { flex: none; padding-top: 8px; }
@@ -752,6 +755,7 @@ export function printCountSheet({ items, countDate, month, scope = '', counter =
           var tr = document.createElement('tr');
           if (items[i][4]) tr.className = 'done';
           tr.innerHTML = '<td>' + (i + 1) + '</td><td>' + esc(items[i][0]) + (items[i][1] ? '<div class="bc">' + esc(items[i][1]) + '</div>' : '') + '</td>'
+            + (items[i][5] === null ? '' : '<td class="stock">' + esc(items[i][5]) + '</td>')
             + '<td class="qty">' + esc(items[i][2]) + '</td><td class="note">' + esc(items[i][3]) + '</td>';
           bodies[side].appendChild(tr);
           // Always at least one row, so a name too long for a page still moves on.
