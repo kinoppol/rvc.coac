@@ -391,7 +391,7 @@ class StockCountService
      * the stock ledger still shows what happened. $preview: only check and work out the effect.
      *
      * A count of the product waiting for a manager does not hold it up, and is left as recorded:
-     * certifying it later sets the stock from the number counted (see certifiedStock).
+     * certifying it later sets the stock to the number counted.
      * Stock card corrections (SA-...) of this count's adjustments are cancelled with it, taking
      * their pieces back too unless a count approved after the correction has set the stock since.
      *
@@ -833,7 +833,8 @@ class StockCountService
             $stmt->execute([$line['product_id']]);
             $old = $stmt->fetch();
             $now = (int) $old['qty_stock'];
-            $after = $this->certifiedStock((int) $line['product_id'], (int) $line['count_qty'], (string) ($line['counted_at'] ?? $sc['created_at']), $now)['stock'];
+            // Certified: the stock is the number counted, whatever the system holds by now.
+            $after = (int) ($line['count_qty'] ?? $line['counted_qty']);
             $this->db->prepare('UPDATE stock_count_items SET system_qty = ?, counted_qty = ?, diff_qty = ? WHERE id = ?')
                 ->execute([$now, $after, $after - $now, $line['id']]);
             if ($after !== $now) {
@@ -883,65 +884,6 @@ class StockCountService
             $this->db->rollBack();
             throw $e;
         }
-    }
-
-    /**
-     * What certifying a waiting count sets the stock to: the number counted, plus what came in and
-     * less what went out after the moment of counting. The stock in the system now and the figure it
-     * showed at the count are not used, so a wrong purchase or count put right meanwhile cannot
-     * push the result away from what was counted. When the product was counted (or set by a payout)
-     * again after this count, that later figure stands and the stock stays as it is.
-     *
-     * @return array{stock:int, moved:int, superseded:bool}
-     */
-    private function certifiedStock(int $productId, int $counted, string $countedAt, int $now): array
-    {
-        $stmt = $this->db->prepare(
-            "SELECT 1 FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
-             WHERE sci.product_id = ? AND sc.status = 'approved' AND sci.counted_qty IS NOT NULL
-               AND COALESCE(sci.counted_at, sc.approved_at) > ? LIMIT 1"
-        );
-        $stmt->execute([$productId, $countedAt]);
-        if ($stmt->fetchColumn()) {
-            return ['stock' => $now, 'moved' => 0, 'superseded' => true];
-        }
-        $moved = $this->movedSince($productId, $countedAt);
-        return ['stock' => max(0, $counted + $moved), 'moved' => $moved, 'superseded' => false];
-    }
-
-    /**
-     * Pieces that physically came in (+) or went out (-) after a moment: sales made after it, and
-     * documents recorded after it. A purchase or damage dated before that day is a late entry of
-     * something that had already happened (the count saw it), and cancelled documents, edits of
-     * earlier ones and stock card corrections move no goods.
-     */
-    private function movedSince(int $productId, string $since): int
-    {
-        $live = fn (string $table, string $alias) => \App\Support\Db::hasColumn($this->db, $table, 'cancelled_at') ? " AND {$alias}.cancelled_at IS NULL" : '';
-        $parts = [
-            'SELECT -si.qty AS q FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE si.product_id = ? AND s.sale_datetime > ?',
-            "SELECT pi.units FROM purchase_items pi JOIN purchase_documents pd ON pd.id = pi.purchase_document_id
-             WHERE pi.product_id = ? AND pi.item_type = 'stock' AND COALESCE(pd.status, 'active') = 'active'
-               AND pd.created_at > ? AND COALESCE(pd.receipt_date, DATE(pd.created_at)) >= DATE(?)",
-            'SELECT ri.qty FROM receive_items ri JOIN receive_documents rd ON rd.id = ri.receive_document_id
-             WHERE ri.product_id = ? AND rd.created_at > ?' . $live('receive_documents', 'rd'),
-            'SELECT -ri.qty FROM return_items ri JOIN return_documents rd ON rd.id = ri.return_document_id
-             WHERE ri.product_id = ? AND rd.created_at > ?' . $live('return_documents', 'rd'),
-        ];
-        $args = [$productId, $since, $productId, $since, $since, $productId, $since, $productId, $since];
-        if (ProductSplitService::available($this->db)) {
-            $parts[] = 'SELECT -sp.qty FROM product_splits sp WHERE sp.source_product_id = ? AND sp.created_at > ? AND sp.cancelled_at IS NULL';
-            $parts[] = 'SELECT spi.qty FROM product_split_items spi JOIN product_splits sp ON sp.id = spi.split_id
-                        WHERE spi.product_id = ? AND sp.created_at > ? AND sp.cancelled_at IS NULL';
-            array_push($args, $productId, $since, $productId, $since);
-        }
-        if (DamageService::available($this->db)) {
-            $parts[] = 'SELECT -dg.qty FROM damaged_goods dg WHERE dg.product_id = ? AND dg.created_at > ? AND dg.damage_date >= DATE(?) AND dg.cancelled_at IS NULL';
-            array_push($args, $productId, $since, $since);
-        }
-        $stmt = $this->db->prepare('SELECT COALESCE(SUM(q), 0) FROM (' . implode(' UNION ALL ', $parts) . ') m');
-        $stmt->execute($args);
-        return (int) $stmt->fetchColumn();
     }
 
     /**
@@ -997,13 +939,8 @@ class StockCountService
             $r['reason_label'] = $r['diff_reason'] !== null ? (self::DIFF_REASONS[$r['diff_reason']] ?? $r['diff_reason']) : null;
             // Approved: whether correcting it moves the stock now (no later count of the product).
             $r['latest'] = $r['status'] === 'approved' && $this->isLatestCount(['id' => $r['line_id'], 'product_id' => $r['product_id']], $r);
-            // Waiting: what the stock becomes if certified now, and what moved since it was counted.
-            $r['stock_if_approved'] = $r['moved_since'] = null;
-            $r['superseded'] = false;
-            if ($r['status'] === 'submitted') {
-                $c = $this->certifiedStock((int) $r['product_id'], (int) ($r['count_qty'] ?? $r['counted_qty']), (string) ($r['counted_at'] ?? $r['created_at']), (int) $r['qty_stock']);
-                [$r['stock_if_approved'], $r['moved_since'], $r['superseded']] = [$c['stock'], $c['moved'], $c['superseded']];
-            }
+            // Waiting: what the stock becomes if certified (the number counted).
+            $r['stock_if_approved'] = $r['status'] === 'submitted' ? (int) ($r['count_qty'] ?? $r['counted_qty']) : null;
         }
         unset($r);
         return [
