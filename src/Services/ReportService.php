@@ -38,7 +38,12 @@ class ReportService
         'other_invest' => 'ลงทุนเพิ่ม (อื่น ๆ)', 'profit_withdrawn' => 'เบิกเงินออกจากกำไร', 'profit_purchases' => 'ซื้อของด้วยเงินกำไร',
         'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)', 'reason' => 'สาเหตุ', 'purchase_doc_no' => 'จากใบซื้อ',
         'damage_value' => 'มูลค่าทุนที่เสียหาย', 'damage_cost' => 'สินค้าเสียหาย',
+        'stock_gain_value' => 'สินค้าเกินจากการตรวจนับ', 'stock_loss_value' => 'สินค้าสูญหายจากการตรวจนับ',
     ];
+
+    /** Approved count lines of the store's goods that differ (consigned goods are not the store's). */
+    private const COUNT_DIFFERENCES = "FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0 AND p.consignor_id IS NULL";
 
     public function __construct(private PDO $db)
     {
@@ -303,6 +308,18 @@ class ReportService
             }
         }
 
+        // What approved stock counts found missing or extra, at today's cost, on the count's date.
+        $stmt = $this->db->prepare(
+            'SELECT sc.count_date AS d, SUM(IF(sci.diff_qty > 0, sci.diff_qty * p.cost_price, 0)) AS stock_gain,
+                    SUM(IF(sci.diff_qty < 0, -sci.diff_qty * p.cost_price, 0)) AS stock_loss '
+            . self::COUNT_DIFFERENCES . ' AND sc.count_date BETWEEN ? AND ? GROUP BY sc.count_date'
+        );
+        $stmt->execute([$from, $to]);
+        foreach ($stmt->fetchAll() as $r) {
+            $add($r['d'], 'stock_gain', (float) $r['stock_gain']);
+            $add($r['d'], 'stock_loss', (float) $r['stock_loss']);
+        }
+
         $buckets = [];
         foreach (self::periods($from, $to, $group) as $key => $label) {
             $buckets[$key] = ['period' => $label];
@@ -332,7 +349,9 @@ class ReportService
                 'supply_cost' => $v('supply'),
                 'wage_cost' => $v('wages'),
                 'damage_cost' => $v('damage'),
-                'net_profit' => round($income - $v('supply') - $v('wages') - $v('damage'), 2),
+                'stock_gain_value' => $v('stock_gain'),
+                'stock_loss_value' => $v('stock_loss'),
+                'net_profit' => round($income - $v('supply') - $v('wages') - $v('damage') + $v('stock_gain') - $v('stock_loss'), 2),
             ];
         }
         return $rows;
@@ -374,18 +393,21 @@ class ReportService
             ];
         };
         $v = fn (string $k) => fn (array $s) => (float) ($s[$k] ?? 0);
-        $income = fn (array $s) => (float) ($s['consign_fee'] ?? 0) + (float) ($s['listing_fee_net'] ?? 0) + (float) ($s['store_sales'] ?? 0);
+        $income = fn (array $s) => (float) ($s['consign_fee'] ?? 0) + (float) ($s['listing_fee_net'] ?? 0) + (float) ($s['store_sales'] ?? 0)
+            + (float) ($s['stock_gain_value'] ?? 0);
         $expense = fn (array $s) => (float) ($s['store_cost'] ?? 0) + (float) ($s['supply_cost'] ?? 0) + (float) ($s['wage_cost'] ?? 0)
-            + (float) ($s['damage_cost'] ?? 0);
+            + (float) ($s['damage_cost'] ?? 0) + (float) ($s['stock_loss_value'] ?? 0);
 
         $line('รายได้', 'ค่าฝากขายสินค้า', $v('consign_fee'), 'consign_fee');
         $line('รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $v('listing_fee_net'), 'listing_fee');
         $line('รายได้', 'ยอดขายสินค้าของร้าน', $v('store_sales'), 'store_sales');
+        $line('รายได้', 'สินค้าเกินจากการตรวจนับ (ตามต้นทุน)', $v('stock_gain_value'), 'stock_gain');
         $line('รายได้', 'รวมรายได้', $income);
         $line('รายจ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $v('store_cost'), 'store_cost');
         $line('รายจ่าย', 'ค่าวัสดุใช้ในร้าน', $v('supply_cost'), 'supply');
         $line('รายจ่าย', 'ค่าแรงพนักงาน', $v('wage_cost'), 'wages');
         $line('รายจ่าย', 'สินค้าเสียหาย (ตัดสต๊อก ตามต้นทุน)', $v('damage_cost'), 'damage');
+        $line('รายจ่าย', 'สินค้าสูญหายจากการตรวจนับ (ตามต้นทุน)', $v('stock_loss_value'), 'stock_loss');
         $line('รายจ่าย', 'รวมรายจ่าย', $expense);
         $line('ผลประกอบการ', 'กำไร (ขาดทุน) สุทธิ', fn (array $s) => $income($s) - $expense($s));
         $line('ข้อมูลประกอบ', 'ยอดขายทั้งร้าน (รวมสินค้าฝากขาย)', $v('total_sales'), 'total_sales');
@@ -636,6 +658,8 @@ class ReportService
             'supply' => 'ของที่ซื้อมาใช้ในร้าน ไม่ได้ซื้อมาขาย เช่น ถุง หลอด นับตามวันที่ในใบเสร็จ',
             'wages' => 'ค่าแรงที่จ่ายให้พนักงานและผู้จัดการ นับตามวันที่จ่าย (ไม่รวมรายการที่ยกเลิก)',
             'damage' => 'มูลค่าทุนของสินค้าของร้านที่ชำรุด/ขายไม่ได้ ที่บันทึกตัดสต๊อก นับตามวันที่พบ (ไม่รวมรายการที่ยกเลิก)',
+            'stock_gain' => 'สินค้าของร้านที่นับได้มากกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก)',
+            'stock_loss' => 'สินค้าของร้านที่นับได้น้อยกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก)',
             'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
             'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
             'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
@@ -644,8 +668,8 @@ class ReportService
             'over_short_days' => 'จำนวนวันที่สรุปบัญชีแล้วพบเงินสดหรือเงินโอนขาดหรือเกิน',
             'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
             'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
-            'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน',
-            'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน + สินค้าเสียหาย',
+            'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน + สินค้าเกินจากการตรวจนับ',
+            'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน + สินค้าเสียหาย + สินค้าสูญหายจากการตรวจนับ',
             'กำไร (ขาดทุน) สุทธิ' => 'รวมรายได้ − รวมรายจ่าย',
             default => '',
         };
@@ -713,6 +737,18 @@ class ReportService
                 $section('รายการตัดสต๊อก', [['date', 'วันที่พบ', 'date'], ['doc_no', 'เลขที่', 'text'], ['product', 'สินค้า', 'text'], ['reason', 'สาเหตุ', 'text'],
                     ['supplier', 'ร้าน/ผู้ขาย', 'text'], ['qty', 'จำนวน', 'qty'], ['damage_value', 'มูลค่าทุน', 'money']], $this->damaged($from, $to)),
             ], 'inventory'],
+            'stock_gain', 'stock_loss' => [$key === 'stock_gain' ? 'สินค้าเกินจากการตรวจนับ' : 'สินค้าสูญหายจากการตรวจนับ', [
+                $section('รายการนับที่ยอดต่าง (กดเพื่อเปิดเอกสารการนับ)', [['product', 'สินค้า', 'text'], ['date', 'วันที่นับ', 'date'], ['doc_no', 'เลขที่', 'text'],
+                    ['system', 'ในระบบ', 'text'], ['counted', 'นับได้', 'text'], ['pieces', 'ต่าง (ชิ้น)', 'qty'], ['cost_price', 'ต้นทุน/ชิ้น', 'money'],
+                    ['value', 'มูลค่าทุน', 'money'], ['note', 'สาเหตุ / หมายเหตุ', 'text']],
+                    array_map(fn ($r) => $r + ['_source' => '/inventory/document?' . http_build_query(['kind' => 'count', 'doc_no' => $r['doc_no']])], $q(
+                        'SELECT p.name AS product, sc.count_date AS date, sc.doc_no, sci.system_qty AS `system`, sci.counted_qty AS counted,
+                                ABS(sci.diff_qty) AS pieces, p.cost_price, ROUND(ABS(sci.diff_qty) * p.cost_price, 2) AS value, sci.note '
+                        . self::COUNT_DIFFERENCES . ' AND sci.diff_qty ' . ($key === 'stock_gain' ? '>' : '<') . ' 0 AND sc.count_date BETWEEN ? AND ?
+                         ORDER BY value DESC, sc.count_date, sci.id',
+                        $p
+                    ))),
+            ], null],
             'total_sales', 'bills' => [$key === 'bills' ? 'บิลขาย' : 'ยอดขายทั้งร้าน', [
                 $section('แยกตามวัน', [['date', 'วันที่', 'date'], ['bills', 'บิล', 'qty'], ['sales', 'ยอดขาย', 'money']], $q(
                     'SELECT business_date AS date, COUNT(*) AS bills, SUM(total_value) AS sales FROM sales

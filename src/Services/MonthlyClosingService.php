@@ -102,10 +102,12 @@ class MonthlyClosingService
         $add('listing_fee', 'รายได้', 'ค่าทำข้อมูลสินค้า (สุทธิหลังคืน)', $p['listing_fee_net'] ?? 0);
         $add('store_sales', 'รายได้', 'ยอดขายสินค้าของร้าน', $p['store_sales'] ?? 0);
         $add('total_income', 'รายได้', 'รวมรายได้', $p['total_income'] ?? 0);
+        $add('stock_gain', 'รายได้', 'สินค้าเกินจากการตรวจนับ (ตามต้นทุน บวกเข้ากำไร)', $p['stock_gain_value'] ?? 0);
         $add('store_cost', 'ค่าใช้จ่าย', 'ต้นทุนสินค้าของร้านที่ขายไป', $p['store_cost'] ?? 0);
         $add('supply_cost', 'ค่าใช้จ่าย', 'ค่าวัสดุใช้ในร้าน', $p['supply_cost'] ?? 0);
         $add('wage_cost', 'ค่าใช้จ่าย', 'ค่าแรงพนักงาน', $p['wage_cost'] ?? 0);
         $add('damage_cost', 'ค่าใช้จ่าย', 'สินค้าเสียหาย (ตัดสต๊อก ตามต้นทุน)', $p['damage_cost'] ?? 0);
+        $add('stock_loss', 'ค่าใช้จ่าย', 'สินค้าสูญหายจากการตรวจนับ (ตามต้นทุน)', $p['stock_loss_value'] ?? 0);
 
         // ---- Losses and mistakes ----
         // Stock counts approved this month, store goods at today's cost: short (lost) and over (found).
@@ -157,8 +159,10 @@ class MonthlyClosingService
         // ---- Result ----
         $net = (float) ($p['net_profit'] ?? 0);
         $add('net_profit', 'ผลประกอบการ', 'กำไร (ขาดทุน) ตามงบกำไรขาดทุน', $net);
-        $add('net_after_loss', 'ผลประกอบการ', 'กำไร (ขาดทุน) หลังหักสินค้าหายจากนับและเงินขาด', $net - ($lossTotal - (float) ($p['damage_cost'] ?? 0)),
-            'money', 'สินค้าเสียหายหักไว้แล้วในงบกำไรขาดทุน');
+        // Damage and the count differences are in the profit statement already.
+        $inProfit = (float) ($p['damage_cost'] ?? 0) + (float) ($count['short_value'] ?? 0) - (float) ($count['over_value'] ?? 0);
+        $add('net_after_loss', 'ผลประกอบการ', 'กำไร (ขาดทุน) หลังคิดการแก้การปรับยอดและเงินขาด/เกิน', $net - ($lossTotal - $inProfit),
+            'money', 'สินค้าเสียหายและสินค้าหาย/เกินจากการตรวจนับคิดไว้แล้วในงบกำไรขาดทุน');
 
         // ---- Store goods carried forward (consigned goods are not the store's capital) ----
         $prevEnd = (new \DateTimeImmutable($from))->modify('-1 day')->format('Y-m-d');

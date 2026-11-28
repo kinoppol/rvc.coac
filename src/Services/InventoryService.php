@@ -1514,6 +1514,12 @@ class InventoryService
         $damage = \App\Services\DamageService::available($this->db)
             ? (float) $this->db->query('SELECT COALESCE(SUM(qty * unit_cost), 0) FROM damaged_goods WHERE cancelled_at IS NULL')->fetchColumn()
             : 0.0;
+        // Missing / extra goods found by approved counts, as the profit statement counts them.
+        $counted = $this->db->query(
+            "SELECT COALESCE(SUM(sci.diff_qty * p.cost_price), 0) FROM stock_count_items sci
+             JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND p.consignor_id IS NULL"
+        )->fetchColumn();
         return [
             'items' => (int) $stock['items'],
             'out_of_stock' => (int) $stock['out_of_stock'],
@@ -1530,7 +1536,8 @@ class InventoryService
             'wage_cost' => $wages = (new WageService($this->db, new AuditLogger($this->db), new DocumentNumberService($this->db)))->total(),
             // Profit after expenses bought for use in the business (bags, straws, ...).
             'damage_cost' => round($damage, 2),
-            'net_profit' => round($grossProfit - (float) $bought['supply_cost'] - $wages - $damage, 2),
+            'count_difference' => round((float) $counted, 2), // + extra goods, − missing
+            'net_profit' => round($grossProfit - (float) $bought['supply_cost'] - $wages - $damage + (float) $counted, 2),
         ];
     }
 }
