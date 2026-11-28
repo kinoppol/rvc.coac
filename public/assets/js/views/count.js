@@ -1,8 +1,9 @@
 import { api } from '../api.js';
-import { money, escapeHtml, fmtDateTime, todayISO } from '../util.js';
+import { money, count, escapeHtml, fmtDateTime, todayISO } from '../util.js';
 import { openMobileCount } from './count-mobile.js';
 import { attachmentUrl } from '../images.js';
-import { promptDialog } from '../dialog.js';
+import { alertDialog, confirmDialog, promptDialog } from '../dialog.js';
+import { printCountSheet } from '../print-slip.js';
 
 const dayShift = (ymd, n) => { const x = new Date(`${ymd}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 // The count report's days.
@@ -229,7 +230,10 @@ export async function render(container, { permissions, user }) {
           <div class="card-pad" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div><b>นับสินค้าเป็นรายการ (ไม่ต้องเปิดรอบ)</b>
               <div class="muted" style="font-size:13px">สแกน/ค้นหาสินค้าแล้วนับทีละรายการ ถ่ายรูป ระบุที่นับ · ยอดต่างจากระบบต้องเลือกสาเหตุและอธิบายรายละเอียด · ต่างไม่เกิน ${over} ชิ้นปรับสต๊อกทันที <b>ต่างเกิน ${over} ชิ้นต้องให้ผู้จัดการรับรองก่อนจึงมีผล</b></div></div>
-            ${noRound && canCreate ? '<button type="button" class="btn" id="btn-item-count" style="font-size:15px;padding:12px 18px">🔢 นับรายการ</button>' : ''}
+            <div class="actions-row">
+              ${canCreate ? '<button type="button" class="btn secondary" id="btn-count-sheet" style="font-size:15px;padding:12px 18px" title="พิมพ์ใบตรวจนับสินค้าสำหรับนับด้วยกระดาษ: ลำดับ ชื่อสินค้า/บาร์โค้ด ช่องจำนวนที่นับได้ และหมายเหตุ กำหนดวันที่ตรวจนับ เดือนที่นับ และชื่อผู้นับ/ผู้ตรวจสอบได้ก่อนพิมพ์">🖨️ พิมพ์ใบตรวจนับ</button>' : ''}
+              ${noRound && canCreate ? '<button type="button" class="btn" id="btn-item-count" style="font-size:15px;padding:12px 18px">🔢 นับรายการ</button>' : ''}
+            </div>
           </div>
           ${pend.length ? `
             <div class="card-pad" style="padding-top:0"><b style="color:var(--bad)">รอผู้จัดการรับรอง (${pend.length})</b>
@@ -261,11 +265,76 @@ export async function render(container, { permissions, user }) {
 
     function bindItems(history) {
         const redraw = () => draw(history);
+        container.querySelector('#btn-count-sheet')?.addEventListener('click', () => openCountSheet());
         container.querySelector('#btn-item-count')?.addEventListener('click', () => {
             openMobileCount({ quick: true, stockCount: null, items: [], onClose: () => loadList() });
         });
         container.querySelectorAll('[data-item-ok]').forEach((b) => b.addEventListener('click', () => certifyItem(itemData.pending[Number(b.dataset.itemOk)], redraw)));
         container.querySelectorAll('[data-item-no]').forEach((b) => b.addEventListener('click', () => rejectItem(itemData.pending[Number(b.dataset.itemNo)], redraw)));
+    }
+
+    /**
+     * Paper count sheet (ใบตรวจนับ): the monthly count has no fixed day (a day the shop is closed,
+     * agreed by the manager and staff, before or after month end), so the count date (default: the
+     * day printed), the month it is for and who counts / checks are set here before printing.
+     */
+    async function openCountSheet() {
+        let all;
+        try {
+            all = (await api.get('/stockcounts/sheet')).data;
+        } catch (e) {
+            await alertDialog(e.message, { tone: 'error' });
+            return;
+        }
+        const today = todayISO();
+        const thColl = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
+        // Counted in the first half of a month = most likely last month's count.
+        const monthOf = (iso) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            return new Date(Date.UTC(y, d <= 15 ? m - 2 : m - 1, 1)).toISOString().slice(0, 7);
+        };
+        const store = all.filter((p) => !p.consigned).length;
+        const html = `
+          <div style="display:grid;gap:10px;margin-top:6px">
+            <label>วันที่ตรวจนับ (พิมพ์ที่หัวกระดาษทุกหน้า ค่าเริ่มต้นคือวันที่พิมพ์)<br><input type="date" data-cs-date value="${today}" style="width:100%"></label>
+            <label>ตรวจนับประจำเดือน<br><input type="month" data-cs-month value="${monthOf(today)}" style="width:100%"></label>
+            <label>ชื่อผู้นับ<br><input type="text" data-cs-counter placeholder="เว้นว่าง = เขียนชื่อเองบนกระดาษ" autocomplete="off" style="width:100%"></label>
+            <label>ชื่อผู้ตรวจสอบ<br><input type="text" data-cs-checker placeholder="เว้นว่าง = เขียนชื่อเองบนกระดาษ" autocomplete="off" style="width:100%"></label>
+            <div class="muted" style="font-size:12px">วันตรวจนับไม่ตายตัว (ตรงกับวันหยุดขายของร้าน ก่อนหรือหลังสิ้นเดือน) ตามที่ผู้จัดการและพนักงานตกลงกัน</div>
+            <label><input type="radio" name="cs-scope" value="all" checked> สินค้าทั้งหมด ${count(all.length)} รายการ</label>
+            <label><input type="radio" name="cs-scope" value="store"> เฉพาะสินค้าของร้าน (ไม่รวมฝากขาย) ${count(store)} รายการ</label>
+            <label><input type="radio" name="cs-scope" value="consign"> เฉพาะสินค้าฝากขาย ${count(all.length - store)} รายการ</label>
+            <label><input type="checkbox" data-cs-instock> เฉพาะสินค้าที่ในระบบยังมีคงเหลือ</label>
+          </div>`;
+        const ask = confirmDialog('', { title: '🖨️ พิมพ์ใบตรวจนับสินค้า', okText: 'พิมพ์', html, width: 460 });
+        // The dialog is on screen now; its fields keep their values after it closes.
+        const box = [...document.querySelectorAll('.app-dialog')].pop();
+        const f = (sel) => box.querySelector(sel);
+        const date = f('[data-cs-date]');
+        const month = f('[data-cs-month]');
+        let monthTouched = false;
+        month.addEventListener('input', () => { monthTouched = true; });
+        date.addEventListener('input', () => { if (!monthTouched && date.value) month.value = monthOf(date.value); });
+        const scopeEls = [...box.querySelectorAll('input[name="cs-scope"]')];
+        const inStock = f('[data-cs-instock]');
+        const counter = f('[data-cs-counter]');
+        const checker = f('[data-cs-checker]');
+        if (!(await ask)) return;
+        const scopeKey = scopeEls.find((r) => r.checked)?.value || 'all';
+        let list = scopeKey === 'store' ? all.filter((p) => !p.consigned) : scopeKey === 'consign' ? all.filter((p) => p.consigned) : all;
+        if (inStock.checked) list = list.filter((p) => p.qty_stock > 0);
+        list = [...list].sort((a, b) => thColl.compare(a.name || '', b.name || ''));
+        if (!list.length) {
+            await alertDialog('ไม่มีสินค้าที่จะพิมพ์');
+            return;
+        }
+        const scope = [{ all: 'สินค้าทั้งหมด', store: 'เฉพาะสินค้าของร้าน', consign: 'เฉพาะสินค้าฝากขาย' }[scopeKey], inStock.checked ? 'ที่ยังมีคงเหลือ' : '']
+            .filter(Boolean).join(' ');
+        printCountSheet({
+            items: list.map((p) => ({ name: p.name, barcode: p.barcode })),
+            countDate: date.value || today, month: month.value || '', scope,
+            counter: counter.value.trim(), checker: checker.value.trim(),
+        });
     }
 
     async function certifyItem(r, redraw) {

@@ -124,6 +124,27 @@ class StockCountController
     }
 
     /**
+     * GET /stockcounts/sheet — the products for a paper count sheet (ใบตรวจนับ): name, piece barcode,
+     * owner and stock only (no costs), store and consigned goods alike. Discontinued goods with no
+     * stock left are not counted.
+     */
+    public function sheet(Request $request, Response $response): Response
+    {
+        $rows = (new \App\Services\InventoryService(Db::connection()))->products('', true);
+        $out = [];
+        foreach ($rows as $r) {
+            if (!empty($r['discontinued_at']) && (int) $r['qty_stock'] === 0) {
+                continue;
+            }
+            $out[] = [
+                'id' => (int) $r['id'], 'name' => (string) $r['name'], 'barcode' => trim((string) ($r['barcode'] ?? '')),
+                'consigned' => $r['consignor_id'] !== null, 'qty_stock' => (int) $r['qty_stock'],
+            ];
+        }
+        return $this->json($response, ['data' => $out]);
+    }
+
+    /**
      * GET /stockcounts/items[?product_id=] — item counts waiting for a manager and the latest ones,
      * with all that was recorded about them, plus the reasons to choose from and the threshold.
      */

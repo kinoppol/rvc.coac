@@ -219,6 +219,8 @@ $app->group('/api/device/v1', function ($group) {
     // 10 pieces off waits for a manager. Same as on the web.
     $group->post('/products/{id:[0-9]+}/quick-count', [StockCountController::class, 'quickCount'])
         ->add(new RoleGuard('stockcount.create'));
+    $group->get('/stockcounts/sheet', [StockCountController::class, 'sheet'])
+        ->add(new RoleGuard('stockcount.create'));
     $group->get('/stockcounts/items', [StockCountController::class, 'itemCounts'])
         ->add(new RoleGuard('stockcount.create'));
     $group->post('/stockcounts/items/{id:[0-9]+}/approve', [StockCountController::class, 'approveItem'])
