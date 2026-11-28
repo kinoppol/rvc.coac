@@ -463,6 +463,11 @@ export async function render(container, { permissions, user, navigate }) {
             <label><input type="radio" name="cs-scope" value="store"> เฉพาะสินค้าของร้าน (ไม่รวมฝากขาย) ${count(store)} รายการ</label>
             <label><input type="radio" name="cs-scope" value="consign"> เฉพาะสินค้าฝากขาย ${count(all.length - store)} รายการ</label>
             <label><input type="checkbox" data-cs-instock> เฉพาะสินค้าที่ในระบบยังมีคงเหลือ</label>
+            <label>รายการที่นับแล้วในระบบ<br><select data-cs-counted style="width:100%">
+              <option value="">ไม่ทำเครื่องหมาย (เว้นช่องว่างทุกรายการ)</option>
+              <option value="mark">ทำเครื่องหมาย ✓</option>
+              <option value="qty">ทำเครื่องหมาย ✓ และพิมพ์จำนวนที่นับได้</option></select></label>
+            <label data-cs-since-wrap hidden>ถือว่านับแล้ว เมื่อนับตั้งแต่วันที่<br><input type="date" data-cs-since value="${today}" max="${today}" style="width:100%"></label>
           </div>`;
         const ask = confirmDialog('', { title: '🖨️ พิมพ์ใบตรวจนับสินค้า', okText: 'พิมพ์', html, width: 460 });
         // The dialog is on screen now; its fields keep their values after it closes.
@@ -472,7 +477,16 @@ export async function render(container, { permissions, user, navigate }) {
         const month = f('[data-cs-month]');
         let monthTouched = false;
         month.addEventListener('input', () => { monthTouched = true; });
-        date.addEventListener('input', () => { if (!monthTouched && date.value) month.value = monthOf(date.value); });
+        const since = f('[data-cs-since]');
+        let sinceTouched = false;
+        since.addEventListener('input', () => { sinceTouched = true; });
+        date.addEventListener('input', () => {
+            if (!date.value) return;
+            if (!monthTouched) month.value = monthOf(date.value);
+            if (!sinceTouched) since.value = date.value < today ? date.value : today;
+        });
+        const countedEl = f('[data-cs-counted]');
+        countedEl.addEventListener('change', () => { f('[data-cs-since-wrap]').hidden = !countedEl.value; });
         const scopeEls = [...box.querySelectorAll('input[name="cs-scope"]')];
         const inStock = f('[data-cs-instock]');
         const counter = f('[data-cs-counter]');
@@ -488,11 +502,32 @@ export async function render(container, { permissions, user, navigate }) {
         }
         const scope = [{ all: 'สินค้าทั้งหมด', store: 'เฉพาะสินค้าของร้าน', consign: 'เฉพาะสินค้าฝากขาย' }[scopeKey], inStock.checked ? 'ที่ยังมีคงเหลือ' : '']
             .filter(Boolean).join(' ');
+        const mark = countedEl.value;
+        const markSince = since.value || today;
+        let counted = new Map();
+        if (mark) {
+            try {
+                counted = await countedSince(markSince, today);
+            } catch (e) {
+                await alertDialog(e.message, { tone: 'error' });
+                return;
+            }
+        }
         printCountSheet({
-            items: list.map((p) => ({ name: p.name, barcode: p.barcode })),
+            items: list.map((p) => ({ name: p.name, barcode: p.barcode, counted: counted.get(p.id) || null })),
             countDate: date.value || today, month: month.value || '', scope,
             counter: counter.value.trim(), checker: checker.value.trim(),
+            mark, markSince,
         });
+    }
+
+    /** Each product's latest count made in these days (turned down / withdrawn ones left out): product id => { qty, pending }. */
+    async function countedSince(from, to) {
+        const d = (await api.get(`/stockcounts/items?from=${from}&to=${to}`)).data;
+        const rows = d.ready ? [...d.pending, ...d.recent].filter((r) => r.status !== 'cancelled') : [];
+        // Oldest first, so the latest count of a product is the one kept.
+        rows.sort((a, b) => String(a.counted_at || a.created_at).localeCompare(String(b.counted_at || b.created_at)) || Number(a.id) - Number(b.id));
+        return new Map(rows.map((r) => [Number(r.product_id), { qty: Number(r.count_qty ?? r.counted_qty), pending: r.status === 'submitted' }]));
     }
 
     async function certifyItem(r, redraw) {
