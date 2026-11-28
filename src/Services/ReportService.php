@@ -38,12 +38,19 @@ class ReportService
         'other_invest' => 'ลงทุนเพิ่ม (อื่น ๆ)', 'profit_withdrawn' => 'เบิกเงินออกจากกำไร', 'profit_purchases' => 'ซื้อของด้วยเงินกำไร',
         'retained_profit' => 'กำไรสะสมคงเหลือ (หลังเบิก)', 'reason' => 'สาเหตุ', 'purchase_doc_no' => 'จากใบซื้อ',
         'damage_value' => 'มูลค่าทุนที่เสียหาย', 'damage_cost' => 'สินค้าเสียหาย',
-        'stock_gain_value' => 'สินค้าเกินจากการตรวจนับ', 'stock_loss_value' => 'สินค้าสูญหายจากการตรวจนับ',
+        'stock_gain_value' => 'สินค้าเกินจากการตรวจนับ', 'stock_loss_value' => 'สินค้าสูญหายจากการตรวจนับ', 'old_stock_value' => 'ทุนจากสินค้าเก่าของร้าน',
     ];
 
-    /** Approved count lines of the store's goods that differ (consigned goods are not the store's). */
-    private const COUNT_DIFFERENCES = "FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
-             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0 AND p.consignor_id IS NULL";
+    /**
+     * Approved count lines of the store's goods that differ (consigned goods are not the store's),
+     * less old stock coming into the books (that is capital, see OldStockService).
+     */
+    private function countDifferences(): string
+    {
+        return "FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND sci.diff_qty <> 0 AND p.consignor_id IS NULL"
+            . OldStockService::notCapital($this->db);
+    }
 
     public function __construct(private PDO $db)
     {
@@ -312,7 +319,7 @@ class ReportService
         $stmt = $this->db->prepare(
             'SELECT sc.count_date AS d, SUM(IF(sci.diff_qty > 0, sci.diff_qty * p.cost_price, 0)) AS stock_gain,
                     SUM(IF(sci.diff_qty < 0, -sci.diff_qty * p.cost_price, 0)) AS stock_loss '
-            . self::COUNT_DIFFERENCES . ' AND sc.count_date BETWEEN ? AND ? GROUP BY sc.count_date'
+            . $this->countDifferences() . ' AND sc.count_date BETWEEN ? AND ? GROUP BY sc.count_date'
         );
         $stmt->execute([$from, $to]);
         foreach ($stmt->fetchAll() as $r) {
@@ -486,6 +493,10 @@ class ReportService
         } catch (\PDOException $e) {
             // migration 0035 not run yet
         }
+        // Goods the store had before using the system, brought into the books.
+        foreach ((new OldStockService($this->db, new AuditLogger($this->db)))->capital($from, $to) as $r) {
+            $days[$r['date']]['old_stock'] = ($days[$r['date']]['old_stock'] ?? 0) + $r['value'];
+        }
         return $days;
     }
 
@@ -504,7 +515,8 @@ class ReportService
         } catch (\PDOException $e) {
             // migration 0035 not run yet
         }
-        return $first;
+        $old = (new OldStockService($this->db, new AuditLogger($this->db)))->capital();
+        return $old && $old[0]['date'] < $first ? $old[0]['date'] : $first;
     }
 
     /**
@@ -521,7 +533,7 @@ class ReportService
         $retained = 0.0;
         if ($first <= $before) {
             foreach ($this->capitalFlows($first, $before) as $f) {
-                $capital += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) - ($f['withdraw'] ?? 0);
+                $capital += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) + ($f['old_stock'] ?? 0) - ($f['withdraw'] ?? 0);
                 $retained -= $f['withdraw'] ?? 0;
             }
             foreach ($this->profit($first, $before, 'month') as $p) {
@@ -530,7 +542,7 @@ class ReportService
         }
         $buckets = [];
         foreach (self::periods($from, $to, 'month') as $key => $label) {
-            $buckets[$key] = ['period' => $label, 'cap_purchase' => 0.0, 'invest' => 0.0, 'withdraw' => 0.0, 'profit_purchase' => 0.0,
+            $buckets[$key] = ['period' => $label, 'cap_purchase' => 0.0, 'invest' => 0.0, 'old_stock' => 0.0, 'withdraw' => 0.0, 'profit_purchase' => 0.0,
                 // the days of this month inside the report range: what capitalSource() lists
                 '_from' => max("{$key}-01", $from), '_to' => min((new \DateTimeImmutable("{$key}-01"))->format('Y-m-t'), $to)];
         }
@@ -541,16 +553,17 @@ class ReportService
         }
         $profit = array_column($this->profit($from, $to, 'month'), 'net_profit');
         $rows = [[
-            'period' => 'ยอดยกมา', 'capital_purchases' => null, 'other_invest' => null, 'profit_withdrawn' => null,
+            'period' => 'ยอดยกมา', 'capital_purchases' => null, 'other_invest' => null, 'old_stock_value' => null, 'profit_withdrawn' => null,
             'capital_balance' => round($capital, 2), 'net_profit' => null, 'profit_purchases' => null, 'retained_profit' => round($retained, 2),
         ]];
         foreach (array_values($buckets) as $i => $b) {
-            $capital += $b['cap_purchase'] + $b['invest'] - $b['withdraw'];
+            $capital += $b['cap_purchase'] + $b['invest'] + $b['old_stock'] - $b['withdraw'];
             $retained += ($profit[$i] ?? 0) - $b['withdraw'];
             $rows[] = [
                 'period' => $b['period'],
                 'capital_purchases' => round($b['cap_purchase'], 2),
                 'other_invest' => round($b['invest'], 2),
+                'old_stock_value' => round($b['old_stock'], 2),
                 'profit_withdrawn' => round($b['withdraw'], 2),
                 'capital_balance' => round($capital, 2),
                 'net_profit' => round($profit[$i] ?? 0, 2),
@@ -564,7 +577,7 @@ class ReportService
     }
 
     /** Figures of รายงานงบลงทุน that open the records they add up (capitalSource). */
-    public const CAPITAL_DRILL = ['capital_purchases', 'other_invest', 'profit_withdrawn', 'net_profit', 'profit_purchases'];
+    public const CAPITAL_DRILL = ['capital_purchases', 'other_invest', 'old_stock_value', 'profit_withdrawn', 'net_profit', 'profit_purchases'];
 
     /**
      * Net profit as one table with income and expenses in their own columns (its รวม row
@@ -636,6 +649,9 @@ class ReportService
             'capital_purchases' => ['ซื้อของด้วยเงินลงทุน', 'ใบซื้อที่ระบุว่าซื้อด้วยเงินลงทุน (ยอดสุทธิตามใบเสร็จ) นับเพิ่มในงบลงทุน', [$section('ใบซื้อ', $purchaseCols, $purchases('capital'))], 'purchase'],
             'profit_purchases' => ['ซื้อของด้วยเงินกำไร', 'ใบซื้อที่ระบุว่าซื้อด้วยเงินกำไรของกิจการ ไม่นับเพิ่มในงบลงทุน', [$section('ใบซื้อ', $purchaseCols, $purchases('profit'))], 'purchase'],
             'other_invest' => ['ลงทุนเพิ่ม (อื่น ๆ)', 'เงินลงทุนที่ไม่ได้ผ่านใบซื้อ', [$section('รายการลงทุนเพิ่ม', $entryCols, $entries('invest'))], 'capital'],
+            'old_stock_value' => ['ทุนจากสินค้าเก่าของร้าน', 'สินค้าที่ระบุว่าเป็นสินค้าเก่า (ซื้อไว้ก่อนใช้ระบบ) คิดต้นทุนจากการตรวจนับครั้งแรกและยอดตั้งต้นตอนสร้างสินค้า นับเพิ่มในงบลงทุน',
+                [$section('รายการ', [['product', 'สินค้า', 'text'], ['date', 'วันที่', 'date'], ['source', 'มาจาก', 'text'], ['doc_no', 'เลขที่', 'text'], ['qty', 'ชิ้น', 'qty'], ['cost_price', 'ต้นทุน/ชิ้น', 'money'], ['value', 'มูลค่าทุน', 'money']],
+                    (new OldStockService($this->db, new AuditLogger($this->db)))->capital($from, $to))], 'inventory'],
             'profit_withdrawn' => ['เบิกเงินออกจากกำไร', 'เงินที่เบิกออกจากกำไร หักออกจากงบลงทุนคงเหลือ', [$section('รายการเบิก', $entryCols, $entries('withdraw'))], 'capital'],
             'net_profit' => ['กำไรสุทธิ', 'รวมรายได้ − รวมรายจ่าย (เหมือนรายงานผลประกอบการ)', $this->profitSections($from, $to), null],
             default => throw new \RuntimeException('ไม่พบที่มาของตัวเลขนี้'),
@@ -658,15 +674,15 @@ class ReportService
             'supply' => 'ของที่ซื้อมาใช้ในร้าน ไม่ได้ซื้อมาขาย เช่น ถุง หลอด นับตามวันที่ในใบเสร็จ',
             'wages' => 'ค่าแรงที่จ่ายให้พนักงานและผู้จัดการ นับตามวันที่จ่าย (ไม่รวมรายการที่ยกเลิก)',
             'damage' => 'มูลค่าทุนของสินค้าของร้านที่ชำรุด/ขายไม่ได้ ที่บันทึกตัดสต๊อก นับตามวันที่พบ (ไม่รวมรายการที่ยกเลิก)',
-            'stock_gain' => 'สินค้าของร้านที่นับได้มากกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก)',
-            'stock_loss' => 'สินค้าของร้านที่นับได้น้อยกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก)',
+            'stock_gain' => 'สินค้าของร้านที่นับได้มากกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก และการนับครั้งแรกของสินค้าเก่าของร้านซึ่งนับเป็นทุน)',
+            'stock_loss' => 'สินค้าของร้านที่นับได้น้อยกว่ายอดในระบบ คิดที่ต้นทุนปัจจุบัน นับตามวันที่นับ เฉพาะการนับที่มีผลแล้ว (ไม่รวมที่รอรับรองหรือยกเลิก และการนับครั้งแรกของสินค้าเก่าของร้านซึ่งนับเป็นทุน)',
             'total_sales' => 'ยอดขายทุกบิลทั้งสินค้าของร้านและสินค้าฝากขาย',
             'consign_sales' => 'ยอดขายสินค้าฝากขาย ส่วนนี้เป็นเงินของผู้ฝาก ร้านได้เฉพาะค่าฝากขาย จึงไม่นับเป็นรายได้',
             'bills' => 'จำนวนบิลขายทั้งหมดในช่วงนี้',
             'over_short' => 'เงินสดที่นับได้ตอนปิดร้านเทียบกับที่ควรมี (เงินทอนตั้งต้น + ขายเงินสด − ซื้อสินค้าด้วยเงินในลิ้นชัก) รวมทุกวันที่สรุปบัญชีแล้ว ไม่นับในกำไร',
             'over_short_transfer' => 'ยอดเงินโอนที่ธนาคารแจ้งเทียบกับยอดขายที่ชำระด้วยการโอน / QR-Code / บัตร รวมทุกวันที่สรุปบัญชีแล้ว ไม่นับในกำไร',
             'over_short_days' => 'จำนวนวันที่สรุปบัญชีแล้วพบเงินสดหรือเงินโอนขาดหรือเกิน',
-            'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
+            'capital' => 'งบลงทุน = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นที่ระบุว่าซื้อด้วยเงินกำไร) + เงินลงทุนอื่น + ต้นทุนสินค้าเก่าของร้าน − เงินที่เบิกออกจากกำไร ไม่ใช่รายได้ จึงไม่นับในกำไร',
             'กำไรต่อเงินลงทุน (%)' =>'กำไร (ขาดทุน) สุทธิของช่วงนี้ เทียบเป็นร้อยละของเงินลงทุน ณ สิ้นช่วง',
             'รวมรายได้' => 'ค่าฝากขาย + ค่าทำข้อมูลสุทธิ + ยอดขายสินค้าของร้าน + สินค้าเกินจากการตรวจนับ',
             'รวมรายจ่าย' => 'ต้นทุนสินค้าของร้านที่ขายไป + ค่าวัสดุใช้ในร้าน + ค่าแรงพนักงาน + สินค้าเสียหาย + สินค้าสูญหายจากการตรวจนับ',
@@ -744,7 +760,7 @@ class ReportService
                     array_map(fn ($r) => $r + ['_source' => '/inventory/document?' . http_build_query(['kind' => 'count', 'doc_no' => $r['doc_no']])], $q(
                         'SELECT p.name AS product, sc.count_date AS date, sc.doc_no, sci.system_qty AS `system`, sci.counted_qty AS counted,
                                 ABS(sci.diff_qty) AS pieces, p.cost_price, ROUND(ABS(sci.diff_qty) * p.cost_price, 2) AS value, sci.note '
-                        . self::COUNT_DIFFERENCES . ' AND sci.diff_qty ' . ($key === 'stock_gain' ? '>' : '<') . ' 0 AND sc.count_date BETWEEN ? AND ?
+                        . $this->countDifferences() . ' AND sci.diff_qty ' . ($key === 'stock_gain' ? '>' : '<') . ' 0 AND sc.count_date BETWEEN ? AND ?
                          ORDER BY value DESC, sc.count_date, sci.id',
                         $p
                     ))),
@@ -757,7 +773,7 @@ class ReportService
                 )),
             ], 'drawer'],
             'capital' => ['งบลงทุนในกิจการ', [
-                $section('สรุปรายเดือน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['period', 'เดือน', 'text'], ['capital_purchases', 'ซื้อของด้วยเงินลงทุน', 'money'], ['other_invest', 'ลงทุนอื่น', 'money'], ['profit_withdrawn', 'เบิกออกจากกำไร', 'money'], ['capital_balance', 'งบลงทุนคงเหลือ', 'money']],
+                $section('สรุปรายเดือน (ตั้งแต่เริ่มต้นถึงสิ้นช่วง)', [['period', 'เดือน', 'text'], ['capital_purchases', 'ซื้อของด้วยเงินลงทุน', 'money'], ['other_invest', 'ลงทุนอื่น', 'money'], ['old_stock_value', 'สินค้าเก่า', 'money'], ['profit_withdrawn', 'เบิกออกจากกำไร', 'money'], ['capital_balance', 'งบลงทุนคงเหลือ', 'money']],
                     array_slice($this->capital($this->firstDay(), $to), 1)),
             ], 'capital'],
             'over_short', 'over_short_transfer', 'over_short_days' => ['เงินขาด / เกิน จากการสรุปบัญชีรายวัน', [

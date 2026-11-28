@@ -44,8 +44,34 @@ class InventoryController
             'data' => $rows,
             // Normal / promotion prices can be set (migration 0070).
             'promo_ready' => Db::hasColumn($db, 'products', 'on_promo'),
+            'old_stock_ready' => \App\Services\OldStockService::ready($db), // migration 0092
             'low_stock_threshold' => (new SettingsService($db))->lowStockThreshold(),
         ]);
+    }
+
+    /**
+     * POST /inventory/{id}/old-stock {old, cost?} or /inventory/old-stock {ids, old} — admin /
+     * manager says which products are goods the store had before using the system.
+     */
+    public function oldStock(Request $request, Response $response, array $args): Response
+    {
+        $user = $request->getAttribute('user');
+        if (!in_array($user['role'] ?? '', ['admin', 'manager'], true)) {
+            return $this->error($response, 'เฉพาะผู้ดูแลระบบและผู้จัดการเท่านั้นที่ระบุสินค้าเก่าได้', 403);
+        }
+        $body = (array) $request->getParsedBody();
+        $db = Db::connection();
+        $service = new \App\Services\OldStockService($db, new AuditLogger($db));
+        $ip = $request->getServerParams()['REMOTE_ADDR'] ?? null;
+        try {
+            $cost = isset($body['cost']) && $body['cost'] !== '' ? (float) $body['cost'] : null;
+            $data = isset($args['id'])
+                ? $service->set((int) $args['id'], !empty($body['old']), $cost, (int) $user['id'], $ip)
+                : $service->setMany((array) ($body['ids'] ?? []), !empty($body['old']), (int) $user['id'], $ip);
+        } catch (\RuntimeException $e) {
+            return $this->error($response, $e->getMessage(), 422);
+        }
+        return $this->json($response, ['data' => $data]);
     }
 
     /** GET /inventory/{id}/counts — every count of one product (dates, numbers, who, why). */
@@ -186,6 +212,7 @@ class InventoryController
             return $this->error($response, 'ไม่พบสินค้า', 404);
         }
         $data['photo_backups'] = (new ProductRepo($db, new AuditLogger($db)))->photoBackups((int) $args['id']);
+        $data['old_stock_ready'] = $data['old_stock_ready'] && in_array($request->getAttribute('user')['role'] ?? '', ['admin', 'manager'], true);
         // May correct the card's "ปรับยอด" rows: same right as approving a stock count (migration 0076).
         $user = $request->getAttribute('user');
         $data['adjust_ready'] = \App\Services\StockAdjustmentService::available($db);

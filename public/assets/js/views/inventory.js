@@ -47,6 +47,7 @@ const FILTERS = [
     ['low', 'ใกล้หมด', null],
     ['out', 'สินค้าหมด (เหลือต่ำกว่า 1)', (p) => Number(p.qty_stock) < 1],
     ['discontinued', 'เลิกจำหน่าย', (p) => !!p.discontinued_at],
+    ['oldstock', 'สินค้าเก่าของร้าน', (p) => !!Number(p.old_stock)],
     // Still on sale (or still holding stock) and not counted within COUNT_DUE_DAYS days, or never.
     ['countdue', `ยังไม่ได้นับเกิน ${COUNT_DUE_DAYS} วัน`, (p) => (!p.discontinued_at || Number(p.qty_stock) !== 0)
         && (daysSinceCount(p) === null || daysSinceCount(p) > COUNT_DUE_DAYS)],
@@ -55,6 +56,7 @@ const FILTERS = [
     ['dup', 'สินค้าซ้ำซ้อน', null],
 ];
 const FILTER_TIPS = {
+    oldstock: 'สินค้าที่ร้านซื้อไว้ก่อนใช้ระบบ ต้นทุนนับเป็นทุนของร้าน ไม่เป็นกำไร — ติ๊กเลือกสินค้าในตารางแล้วกด "ระบุเป็นสินค้าเก่า" หรือระบุจากหน้ารายละเอียดสินค้า',
     discontinued: 'สินค้าที่ตั้งเลิกจำหน่ายแล้ว ไม่แสดงในรายการหน้าขาย (POS) แต่สแกนบาร์โค้ดที่ตรงยังดูราคาและหยิบลงตะกร้าได้ ไม่แสดงในแท็บอื่นเมื่อไม่มีคงเหลือ',
     nobarcode: 'สินค้าที่ยังไม่ได้เก็บบาร์โค้ดชิ้น (ตัวสินค้ามีบาร์โค้ดแต่ยังไม่ได้บันทึก) — ถ้าสินค้าไม่มีบาร์โค้ดจริง กด "ไม่มีบาร์โค้ด" ในคอลัมน์บาร์โค้ดชิ้น',
     barcodeless: 'สินค้าที่ทำเครื่องหมายว่าไม่มีบาร์โค้ดจริง (ทำเอง ขายแยกชิ้น ฯลฯ) ไม่ต้องเก็บบาร์โค้ด',
@@ -287,6 +289,7 @@ export async function render(container, { navigate, permissions, user }) {
               ${canMerge ? `<button type="button" class="btn secondary" id="dup-check" title="หาสินค้าชื่อเดียวกันหรือสะกดต่างกันเล็กน้อยของเจ้าของเดียวกัน แล้วรวมเป็นรายการเดียว">ตรวจสอบสินค้าซ้ำซ้อน (${count(dupGroupList().length)})</button>` : ''}
               ${canMerge ? `<button type="button" class="btn secondary" id="group-picked" ${pickedStore().length > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าของร้านที่หน้าตาคล้ายกัน ไม่มีบาร์โค้ด และต้นทุนเท่ากัน 2 รายการขึ้นไป แล้วรวมเป็นสินค้ารายการเดียวหน้า POS (ขายและนับเป็นกลุ่ม ตัดยอดสลับแต่ละรายการ)">จัดกลุ่มขายหน้า POS (${pickedStore().length})</button>
                 <button type="button" class="btn secondary" id="sale-groups" title="ดู แก้ไข หรือยกเลิกกลุ่มขายหน้า POS">กลุ่มขายหน้า POS</button>` : ''}
+              ${canMerge && res.old_stock_ready ? `<button type="button" class="btn secondary" id="old-picked" ${pickedStore().length ? '' : 'disabled'} title="ติ๊กเลือกสินค้าของร้านที่ซื้อไว้ก่อนใช้ระบบ แล้วระบุเป็นสินค้าเก่า (ใช้ต้นทุนปัจจุบันของแต่ละสินค้า) ในแท็บสินค้าเก่าปุ่มนี้ใช้ยกเลิกการระบุ">${filter === 'oldstock' ? 'ยกเลิกสินค้าเก่า' : 'ระบุเป็นสินค้าเก่า'} (${pickedStore().length})</button>` : ''}
               ${canMerge ? `<button type="button" class="btn secondary" id="merge-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าที่เป็นสินค้าเดียวกันในตาราง 2 รายการขึ้นไป แล้วรวมเป็นรายการเดียว (เจ้าของเดียวกัน)">รวมรายการที่เลือก (${picked.size})</button>` : ''}
               ${canEdit ? `<button type="button" class="btn secondary" id="compare-picked" ${picked.size > 1 ? '' : 'disabled'} title="ติ๊กเลือกสินค้าในตาราง 2–${COMPARE_MAX} รายการ แล้วดูกราฟแนวโน้มการขายรายวันเทียบกัน">เปรียบเทียบแนวโน้มการขาย (${picked.size})</button>` : ''}
               ${permissions.includes('reports.view') ? '<button type="button" class="btn secondary" id="damage-report" title="สถิติสินค้าเสียหายที่ตัดสต๊อก แยกตามสินค้า สาเหตุ ร้านที่ซื้อ และรายเดือน">รายงานสินค้าเสียหาย</button>' : ''}
@@ -391,6 +394,11 @@ export async function render(container, { navigate, permissions, user }) {
                 poBtn.textContent = `สร้างใบรายการสั่งซื้อ (${storePicks})`;
                 poBtn.disabled = !storePicks;
             }
+            const oldBtn = container.querySelector('#old-picked');
+            if (oldBtn) {
+                oldBtn.textContent = `${filter === 'oldstock' ? 'ยกเลิกสินค้าเก่า' : 'ระบุเป็นสินค้าเก่า'} (${storePicks})`;
+                oldBtn.disabled = !storePicks;
+            }
             if (groupBtn) {
                 groupBtn.textContent = `จัดกลุ่มขายหน้า POS (${storePicks})`;
                 groupBtn.disabled = storePicks < 2;
@@ -423,6 +431,7 @@ export async function render(container, { navigate, permissions, user }) {
         });
         syncPick();
         mergeBtn?.addEventListener('click', mergePicked);
+        container.querySelector('#old-picked')?.addEventListener('click', markOldPicked);
         groupBtn?.addEventListener('click', groupPicked);
         container.querySelector('#sale-groups')?.addEventListener('click', openSaleGroups);
         container.querySelectorAll('[data-sale-group]').forEach((b) => b.addEventListener('click', openSaleGroups));
@@ -904,6 +913,23 @@ export async function render(container, { navigate, permissions, user }) {
         reload();
     }
 
+    /** The ticked store goods become old stock (in that tab: stop being it), at the cost each has now. */
+    async function markOldPicked() {
+        const ids = pickedStore();
+        const old = filter !== 'oldstock';
+        const ok = await confirmDialog(old
+            ? `สินค้า ${count(ids.length)} รายการจะเป็นสินค้าเก่าของร้าน ใช้ต้นทุนปัจจุบันของแต่ละสินค้า: ยอดจากการตรวจนับครั้งแรกและยอดตั้งต้นนับเป็นทุนของร้าน ไม่เป็นรายได้ และเติมต้นทุนให้ยอดขายที่ต้นทุนเป็น 0`
+            : `สินค้า ${count(ids.length)} รายการจะไม่เป็นสินค้าเก่าอีก ยอดจากการตรวจนับครั้งแรกกลับไปคิดเป็นสินค้าเกิน/สูญหาย`,
+        { title: old ? 'ระบุเป็นสินค้าเก่าของร้าน?' : 'ยกเลิกสินค้าเก่า?', okText: 'ยืนยัน' });
+        if (!ok) return;
+        try {
+            const r = (await api.post('/inventory/old-stock', { ids, old })).data;
+            picked.clear();
+            await load();
+            alertDialog(`บันทึกแล้ว ${count(r.done)} รายการ${r.skipped.length ? `\nยังไม่ทราบต้นทุน (ระบุทีละรายการจากหน้ารายละเอียดสินค้า): ${r.skipped.join(', ')}` : ''}`, { title: old ? 'ระบุสินค้าเก่าแล้ว' : 'ยกเลิกสินค้าเก่าแล้ว' });
+        } catch (e) { alertDialog(e.message, { tone: 'error' }); }
+    }
+
     async function mergePicked() {
         const group = res.data.filter((p) => picked.has(Number(p.id))).sort((a, b) => Number(a.id) - Number(b.id));
         if (group.length < 2) {
@@ -1148,7 +1174,7 @@ export async function render(container, { navigate, permissions, user }) {
         const pick = canEdit ? `<td class="pick-col">${p.consignor_id == null || canMerge
             ? `<input type="checkbox" data-pick="${p.id}" ${picked.has(Number(p.id)) ? 'checked' : ''} aria-label="เลือก ${escapeHtml(p.name)}">` : ''}</td>` : '';
         return `<tr data-row="${p.id}">${pick}
-          <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>
+          <td><button type="button" class="prod-link" data-product="${p.id}" title="ดูรายละเอียดและความเคลื่อนไหวสต๊อก">${escapeHtml(p.name)}</button>${Number(p.old_stock) ? ' <span class="pill ok" style="font-size:11px" title="ซื้อไว้ก่อนใช้ระบบ ต้นทุนนับเป็นทุนของร้าน">สินค้าเก่า</span>' : ''}
             ${barcodeLine(p)}${p.consignor_id != null ? `<div class="muted" style="font-size:12px">ฝากขาย: ${escapeHtml(p.consignor_name)}</div>` : ''}
             ${p.sale_group_id ? `<div style="margin-top:3px"><button type="button" class="pill ok" data-sale-group="${p.sale_group_id}" style="font-size:11.5px;border:0;cursor:pointer" title="ขายและนับเป็นกลุ่มหน้า POS — กดเพื่อจัดการกลุ่ม">▦ กลุ่มขาย: ${escapeHtml(p.sale_group_name || '')}</button></div>` : ''}
             ${(p.held_barcodes || []).map((h) => `<div style="margin-top:4px;white-space:nowrap" title="${escapeHtml(h.note || '')}">

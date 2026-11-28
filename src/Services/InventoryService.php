@@ -38,7 +38,9 @@ class InventoryService
         $saleGroup = SaleGroupService::ready($this->db)
             ? 'p.sale_group_id, (SELECT sg.name FROM sale_groups sg WHERE sg.id = p.sale_group_id) AS sale_group_name'
             : 'NULL AS sale_group_id, NULL AS sale_group_name';
-        $sql = "SELECT p.id, p.name, p.barcode, {$saleGroup}, {$noBarcode} AS no_barcode, {$lowLine} AS low_stock_at, {$discontinued} AS discontinued_at, {$discReason}, p.image_token, p.consignor_id, c.name AS consignor_name,
+        // Marked as goods the store had before using the system (migration 0092).
+        $oldStock = OldStockService::ready($this->db) ? 'p.old_stock, p.old_stock_cost' : '0 AS old_stock, NULL AS old_stock_cost';
+        $sql = "SELECT p.id, p.name, p.barcode, {$oldStock}, {$saleGroup}, {$noBarcode} AS no_barcode, {$lowLine} AS low_stock_at, {$discontinued} AS discontinued_at, {$discReason}, p.image_token, p.consignor_id, c.name AS consignor_name,
                        (SELECT a.created_at FROM attachments a WHERE a.token = p.image_token) AS image_at,
                        p.qty_received, p.qty_sold, p.qty_returned, p.qty_stock,
                        p.cost_price, p.sale_price, {$promo},
@@ -353,8 +355,11 @@ class InventoryService
                 'qty_returned' => (int) $p['qty_returned'], 'qty_stock' => (int) $p['qty_stock'],
                 'mfg_date' => $p['mfg_date'] ?? null, 'expiry_date' => $p['expiry_date'] ?? null,
                 'created_at' => $p['created_at'], 'last_sale' => $p['last_sale'], 'pack_barcodes' => $packs,
+                'old_stock' => (int) ($p['old_stock'] ?? 0), 'old_stock_cost' => $p['old_stock_cost'] ?? null,
             ],
             'totals' => $totals,
+            'old_stock_ready' => OldStockService::ready($this->db) && $p['consignor_id'] === null,
+            'old_stock_capital' => (new OldStockService($this->db, new AuditLogger($this->db)))->capital(null, null, $productId),
             'movements' => $rows,
             'price_changes' => $this->priceChanges($productId),
             'purchase_prices' => $p['consignor_id'] === null ? $this->purchasePrices($productId) : [],
@@ -1518,7 +1523,7 @@ class InventoryService
         $counted = $this->db->query(
             "SELECT COALESCE(SUM(sci.diff_qty * p.cost_price), 0) FROM stock_count_items sci
              JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
-             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND p.consignor_id IS NULL"
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND p.consignor_id IS NULL" . OldStockService::notCapital($this->db)
         )->fetchColumn();
         return [
             'items' => (int) $stock['items'],

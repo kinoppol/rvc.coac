@@ -117,7 +117,7 @@ class MonthlyClosingService
                     COALESCE(SUM(IF(sci.diff_qty > 0, sci.diff_qty, 0)), 0) AS over_qty,
                     COALESCE(SUM(IF(sci.diff_qty > 0, sci.diff_qty * p.cost_price, 0)), 0) AS over_value
              FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id JOIN products p ON p.id = sci.product_id
-             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND p.consignor_id IS NULL AND sc.count_date BETWEEN ? AND ?",
+             WHERE sc.status = 'approved' AND sci.counted_qty IS NOT NULL AND p.consignor_id IS NULL AND sc.count_date BETWEEN ? AND ?" . OldStockService::notCapital($this->db),
             [$from, $to]
         );
         $add('count_short', 'ความสูญเสียและข้อผิดพลาด', 'สินค้าหายจากการตรวจนับ (ตามต้นทุน)', $count['short_value'] ?? 0, 'money', ((int) ($count['short_qty'] ?? 0)) . ' ชิ้น');

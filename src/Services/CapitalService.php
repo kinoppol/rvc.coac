@@ -92,6 +92,7 @@ class CapitalService
             'opening' => (float) $months[0]['capital_balance'],
             'capital_purchases' => $sum('capital_purchases'),
             'other_invest' => $sum('other_invest'),
+            'old_stock_value' => $sum('old_stock_value'),
             'profit_withdrawn' => $sum('profit_withdrawn'),
             'net_profit' => $sum('net_profit'),
             'closing' => (float) $last['capital_balance'],
@@ -110,7 +111,7 @@ class CapitalService
         $first = min($report->firstDay(), $date);
         $total = 0.0;
         foreach ($report->capitalFlows($first, $date) as $f) {
-            $total += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) - ($f['withdraw'] ?? 0);
+            $total += ($f['cap_purchase'] ?? 0) + ($f['invest'] ?? 0) + ($f['old_stock'] ?? 0) - ($f['withdraw'] ?? 0);
         }
         return round($total, 2);
     }

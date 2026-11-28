@@ -26,7 +26,7 @@ export async function render(container, { navigate } = {}) {
         const d = data;
         container.innerHTML = `
         <div class="hint"><div class="dot">i</div><div>
-          <b>งบลงทุน</b> = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นใบซื้อที่ระบุว่า "ซื้อด้วยเงินกำไรของกิจการ") + เงินลงทุนอื่น − เงินที่เบิกออกจากกำไร ·
+          <b>งบลงทุน</b> = เงินซื้อของเข้ากิจการทุกรายการ (ยกเว้นใบซื้อที่ระบุว่า "ซื้อด้วยเงินกำไรของกิจการ") + เงินลงทุนอื่น + ต้นทุนสินค้าเก่าของร้าน − เงินที่เบิกออกจากกำไร ·
           ใบซื้อนับเข้างบลงทุนให้อัตโนมัติ หน้านี้ใช้บันทึก<b>การเบิกเงินออกจากกำไร</b> และเงินลงทุนอื่นที่ไม่ใช่การซื้อของ
         </div></div>
         <div class="actions-row" style="justify-content:flex-end">
@@ -35,7 +35,7 @@ export async function render(container, { navigate } = {}) {
         <div class="kpi-grid">
           <div class="kpi"><div class="lbl">งบลงทุนยกมา</div><div class="val">฿ ${money(d.opening)}</div><div class="sub">ก่อน ${escapeHtml(fmtDate(d.from))}</div></div>
           <div class="kpi"><div class="lbl">ซื้อของด้วยเงินลงทุน (ช่วงนี้)</div><div class="val">฿ ${money(d.capital_purchases)}</div>
-            <div class="sub">ลงทุนอื่น ฿ ${money(d.other_invest)}</div></div>
+            <div class="sub">ลงทุนอื่น ฿ ${money(d.other_invest)}${Number(d.old_stock_value) ? ` · สินค้าเก่าของร้าน ฿ ${money(d.old_stock_value)}` : ''}</div></div>
           <div class="kpi"><div class="lbl">เบิกเงินออกจากกำไร (ช่วงนี้)</div><div class="val">฿ ${money(d.profit_withdrawn)}</div>
             <div class="sub">กำไรสุทธิช่วงนี้ ฿ ${money(d.net_profit)}</div></div>
           <div class="kpi"><div class="lbl">งบลงทุนคงเหลือ</div><div class="val">฿ ${money(d.closing)}</div>
@@ -45,11 +45,11 @@ export async function render(container, { navigate } = {}) {
         <section class="card">
           <div class="card-head"><h2>สรุปรายเดือน: งบลงทุนและกำไรสุทธิ</h2></div>
           <div class="table-wrap"><table>
-            <thead><tr><th>เดือน</th><th class="num">ซื้อของด้วยเงินลงทุน</th><th class="num">ลงทุนอื่น</th><th class="num">เบิกออกจากกำไร</th>
+            <thead><tr><th>เดือน</th><th class="num">ซื้อของด้วยเงินลงทุน</th><th class="num">ลงทุนอื่น</th><th class="num">สินค้าเก่า</th><th class="num">เบิกออกจากกำไร</th>
               <th class="num">งบลงทุนคงเหลือ</th><th class="num">กำไรสุทธิ</th><th class="num">ซื้อของด้วยเงินกำไร</th><th class="num">กำไรสะสมคงเหลือ (หลังเบิก)</th></tr></thead>
             <tbody>${d.months.map((m, i) => `<tr style="${i === 0 ? 'color:var(--muted)' : ''}">
               <td>${escapeHtml(m.period)}</td>
-              ${['capital_purchases', 'other_invest', 'profit_withdrawn'].map((k) => `<td class="num">${figure(m, i, k)}</td>`).join('')}
+              ${['capital_purchases', 'other_invest', 'old_stock_value', 'profit_withdrawn'].map((k) => `<td class="num">${figure(m, i, k)}</td>`).join('')}
               <td class="num" style="font-weight:600">${money(m.capital_balance)}</td>
               <td class="num" style="${Number(m.net_profit) < 0 ? 'color:var(--bad)' : ''}">${figure(m, i, 'net_profit')}</td>
               <td class="num">${figure(m, i, 'profit_purchases')}</td>

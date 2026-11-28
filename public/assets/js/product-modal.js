@@ -580,6 +580,41 @@ export async function openProductModal(productId, navigate, opts = {}) {
         ro.observe(box.querySelector('.modal'));
     }
 
+    /** Admin / manager: goods the store had before using the system — their cost is capital, not profit. */
+    function oldStockHtml() {
+        const old = !!Number(p.old_stock);
+        if (!d.old_stock_ready && !old) return '';
+        const list = d.old_stock_capital || [];
+        const total = list.reduce((s, r) => s + Number(r.value), 0);
+        return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+          <div style="flex:1;min-width:240px;font-size:13px">${old
+              ? `<span class="pill ok">สินค้าเก่าของร้าน</span> ต้นทุน ฿${money(p.old_stock_cost)}/ชิ้น · นับเป็นทุนของร้าน <b>฿${money(total)}</b>
+                 <div class="muted" style="font-size:12px">${list.length ? list.map((r) => `${escapeHtml(r.source)}${r.doc_no ? ` ${escapeHtml(r.doc_no)}` : ''} ${r.qty > 0 ? '+' : ''}${count(r.qty)} ชิ้น (${escapeHtml(fmtDate(r.date))})`).join(' · ') : 'ยังไม่มียอดที่นับเป็นทุน (จะคิดเมื่อมีการตรวจนับครั้งแรก)'}</div>`
+              : 'สินค้านี้ซื้อไว้ก่อนใช้ระบบหรือไม่? <div class="muted" style="font-size:12px">ระบุเป็นสินค้าเก่าของร้าน: ยอดจากการตรวจนับครั้งแรกและยอดตั้งต้นนับเป็นทุนของร้าน ไม่เป็นรายได้</div>'}</div>
+          ${d.old_stock_ready ? `<button type="button" class="btn secondary sm" data-old-stock>${old ? 'ยกเลิกสินค้าเก่า' : 'ระบุเป็นสินค้าเก่าของร้าน'}</button>` : ''}</div>`;
+    }
+
+    async function toggleOldStock() {
+        const old = !Number(p.old_stock);
+        let cost = '';
+        if (old) {
+            const typed = await promptDialog(
+                `${p.name}: ต้นทุนต่อชิ้นของสินค้าเก่า (บาท)\nใช้คิดมูลค่าทุนของร้าน และเติมต้นทุนให้ยอดขายที่ต้นทุนเป็น 0${Number(p.cost_price) > 0 ? '' : '\nสินค้านี้ยังไม่ทราบต้นทุน ต้องระบุ'}`,
+                { title: 'ระบุเป็นสินค้าเก่าของร้าน', okText: 'บันทึก', value: Number(p.cost_price) > 0 ? String(Number(p.cost_price)) : '', required: 'กรุณาระบุต้นทุน/ชิ้น' });
+            if (typed === null) return;
+            cost = typed.trim();
+            if (!(Number(cost) > 0)) { alertDialog('ต้นทุน/ชิ้นต้องเป็นตัวเลขมากกว่า 0', { tone: 'error' }); return; }
+        }
+        try {
+            const res = (await api.post(`/inventory/${p.id}/old-stock`, { old, cost })).data;
+            if (res.sales_costed) alertDialog(`เติมต้นทุนให้ยอดขายเดิม ${count(res.sales_costed)} รายการแล้ว`, { title: 'บันทึกแล้ว' });
+            opts.onChange?.();
+            await refresh();
+        } catch (e) {
+            alertDialog(e.message, { tone: 'error' });
+        }
+    }
+
     /** Older photos kept at a merge of duplicates / when a new photo was taken; any can be put back. */
     function photoBackupsHtml() {
         const list = d.photo_backups || [];
@@ -722,6 +757,7 @@ export async function openProductModal(productId, navigate, opts = {}) {
               </div>
             </div>
             ${soldOutHtml()}
+            ${oldStockHtml()}
             ${photoBackupsHtml()}
             ${supplierPricesHtml()}
             ${summaryHtml()}
@@ -769,6 +805,7 @@ export async function openProductModal(productId, navigate, opts = {}) {
         box.querySelectorAll('[data-adj-edit]').forEach((b) => b.addEventListener('click', () => editFix(d.movements[+b.dataset.adjEdit])));
         box.querySelectorAll('[data-adj-cancel]').forEach((b) => b.addEventListener('click', () => cancelFix(d.movements[+b.dataset.adjCancel])));
         box.querySelector('[data-sold-out]')?.addEventListener('click', markSoldOut);
+        box.querySelector('[data-old-stock]')?.addEventListener('click', toggleOldStock);
         box.querySelectorAll('[data-restore-photo]').forEach((b) => b.addEventListener('click', async () => {
             b.disabled = true;
             try {
