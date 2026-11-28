@@ -282,6 +282,7 @@ export async function render(container, { permissions, user }) {
         let all;
         try {
             all = (await api.get('/stockcounts/sheet')).data;
+            if (!Array.isArray(all)) throw new Error('โหลดรายการสินค้าสำหรับใบตรวจนับไม่ได้ (เซิร์ฟเวอร์อาจยังไม่ได้อัปเดต)');
         } catch (e) {
             await alertDialog(e.message, { tone: 'error' });
             return;
