@@ -390,7 +390,13 @@ class StockCountService
      * round becomes "not counted" (the round's other products stay). Both are logged on the line, so
      * the stock ledger still shows what happened. $preview: only check and work out the effect.
      *
-     * @return array{doc_no:string, name:string, round:bool, system:int, counted:int, stock_before:int, stock_after:int, later:bool}
+     * A count of the product waiting for a manager does not hold it up. When the stock is taken back
+     * and that count was made after this one took effect, the system figure it was compared with
+     * held the wrong count too: it is taken out there as well (the number counted stays), so
+     * certifying it later still ends at what was physically there.
+     *
+     * @return array{doc_no:string, name:string, round:bool, system:int, counted:int, stock_before:int, stock_after:int, later:bool,
+     *     waiting:array<int,array{doc_no:string, counted:int, system_before:int, system_after:int}>}
      */
     public function cancelCount(int $lineId, string $reason, int $userId, string $role, ?string $ip, bool $preview = false): array
     {
@@ -424,15 +430,6 @@ class StockCountService
             if (!$p) {
                 throw new \RuntimeException('ไม่พบสินค้า');
             }
-            // A waiting count was compared with a stock that still holds this count's change.
-            $stmt = $this->db->prepare(
-                "SELECT sc.doc_no FROM stock_counts sc JOIN stock_count_items sci ON sci.stock_count_id = sc.id
-                 WHERE sci.product_id = ? AND sc.status = 'submitted' AND sci.counted_qty IS NOT NULL LIMIT 1"
-            );
-            $stmt->execute([$productId]);
-            if ($waiting = $stmt->fetchColumn()) {
-                throw new \RuntimeException("\"{$p['name']}\" มีการนับ {$waiting} รอผู้จัดการรับรองอยู่ ให้รับรอง ไม่รับรอง หรือถอนการนับนั้นก่อน แล้วจึงยกเลิก {$sc['doc_no']}");
-            }
             if (StockAdjustmentService::available($this->db)) {
                 $stmt = $this->db->prepare('SELECT doc_no FROM stock_adjustments WHERE product_id = ? AND stock_count_id = ? AND cancelled_at IS NULL LIMIT 1');
                 $stmt->execute([$productId, (int) $sc['id']]);
@@ -453,8 +450,23 @@ class StockCountService
             $before = (int) $p['qty_stock'];
             $after = $later ? $before : $before - ($counted - $system);
             $round = ($sc['kind'] ?? 'round') !== 'item';
+            // Waiting counts made while the stock held this count's change (see above).
+            $waiting = [];
+            if ($after !== $before && self::itemReady($this->db)) {
+                $stmt = $this->db->prepare(
+                    "SELECT sci.id, sci.system_qty, sci.count_system_qty, sci.count_qty, sci.counted_qty, sci.count_note, sc.doc_no
+                     FROM stock_count_items sci JOIN stock_counts sc ON sc.id = sci.stock_count_id
+                     WHERE sci.product_id = ? AND sc.kind = 'item' AND sc.status = 'submitted' AND COALESCE(sci.counted_at, sc.created_at) >= ? FOR UPDATE"
+                );
+                $stmt->execute([$productId, $at]);
+                foreach ($stmt->fetchAll() as $w) {
+                    $was = (int) ($w['count_system_qty'] ?? $w['system_qty']);
+                    $waiting[] = ['line_id' => (int) $w['id'], 'doc_no' => $w['doc_no'], 'counted' => (int) ($w['count_qty'] ?? $w['counted_qty']),
+                        'system_before' => $was, 'system_after' => $was + ($after - $before), 'note' => $w['count_note']];
+                }
+            }
             $result = ['doc_no' => $sc['doc_no'], 'name' => $p['name'], 'round' => $round, 'system' => $system, 'counted' => $counted,
-                'stock_before' => $before, 'stock_after' => $after, 'later' => $later];
+                'stock_before' => $before, 'stock_after' => $after, 'later' => $later, 'waiting' => $waiting];
             if ($preview) {
                 $this->db->rollBack();
                 return $result;
@@ -471,10 +483,21 @@ class StockCountService
                 $this->db->prepare('UPDATE products SET qty_stock = ?, updated_at = NOW() WHERE id = ?')->execute([$after, $productId]);
                 $this->audit->log('products', $productId, 'update', $p, ['qty_stock' => $after, 'stock_count' => $sc['doc_no'], 'note' => "ยกเลิกการตรวจนับ: {$reason}"], $userId, $ip);
             }
+            foreach ($waiting as $w) {
+                $shift = $w['system_after'] - $w['system_before'];
+                $note = "ยอดในระบบตอนนับปรับจาก {$w['system_before']} เป็น {$w['system_after']} เพราะยกเลิก {$sc['doc_no']}";
+                $this->db->prepare(
+                    'UPDATE stock_count_items SET system_qty = system_qty + ?, count_system_qty = ?, diff_qty = diff_qty - ?, count_note = ? WHERE id = ?'
+                )->execute([$shift, $w['system_after'], $shift, mb_substr($w['note'] ? "{$w['note']} · {$note}" : $note, 0, 255), $w['line_id']]);
+                $this->audit->log('stock_count_items', $w['line_id'], 'update',
+                    ['doc_no' => $w['doc_no'], 'product_id' => $productId, 'count_system_qty' => $w['system_before']],
+                    ['doc_no' => $w['doc_no'], 'product_id' => $productId, 'count_system_qty' => $w['system_after'], 'note' => $note], $userId, $ip);
+            }
             // The stock ledger reads this to show the cancelled count and when it was taken back.
             $this->audit->log('stock_count_items', $lineId, 'cancel',
                 ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'system_qty' => $system, 'counted_qty' => $counted, 'approved_at' => $at],
-                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'reason' => $reason, 'stock_before' => $before, 'stock_after' => $after],
+                ['doc_no' => $sc['doc_no'], 'product_id' => $productId, 'reason' => $reason, 'stock_before' => $before, 'stock_after' => $after,
+                    'rebased' => array_column($waiting, 'line_id')],
                 $userId, $ip);
             $this->db->commit();
             return $result;

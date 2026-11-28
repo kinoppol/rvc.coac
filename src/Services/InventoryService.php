@@ -431,6 +431,13 @@ class InventoryService
         }
         // Cancelled counts: what each did when it took effect, and the stock taken back at the cancel.
         foreach ($this->cancelledCounts($productId) as $e) {
+            // The count looked at had its system figure corrected for this cancel: listed, but it moved nothing there.
+            if ($lineId !== null && in_array($lineId, $e['rebased'], true)) {
+                if ($until($e['at'])) {
+                    $moves[] = $move($e, $e['at'], 0, null, "นับได้ {$e['counted']} · ยกเลิกแล้ว หักออกจากยอดในระบบของการนับนี้");
+                }
+                continue;
+            }
             if ($until($e['at'])) {
                 $moves[] = $move($e, $e['at'], $e['counted'] - $e['system'], $e['counted'],
                     "นับได้ {$e['counted']} · ในระบบตอนปรับ {$e['system']} · ยกเลิกภายหลัง");
@@ -488,6 +495,7 @@ class InventoryService
                 'at' => (string) ($old['approved_at'] ?? $r['created_at']), 'cancelled_at' => (string) $r['created_at'], 'cancelled_by' => $r['canceller'],
                 'system' => (int) ($old['system_qty'] ?? 0), 'counted' => (int) ($old['counted_qty'] ?? 0), 'reason' => (string) ($new['reason'] ?? ''),
                 'change' => (int) ($new['stock_after'] ?? 0) - (int) ($new['stock_before'] ?? 0),
+                'rebased' => array_map('intval', (array) ($new['rebased'] ?? [])),
             ];
         }
         return $out;
